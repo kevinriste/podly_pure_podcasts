@@ -112,7 +112,7 @@ def cleanup_processed_post_action(params: Dict[str, Any]) -> Dict[str, Any]:
     if not post_id:
         raise ValueError("post_id is required")
 
-    post = db.session.get(Post, int(str(post_id)))
+    post = db.session.get(Post, int(post_id))
     if not post:
         raise ValueError(f"Post {post_id} not found")
 
@@ -134,7 +134,7 @@ def cleanup_processed_post_files_only_action(params: Dict[str, Any]) -> Dict[str
     post_id = params.get("post_id")
     if not post_id:
         raise ValueError("post_id is required")
-    post = db.session.get(Post, int(str(post_id)))
+    post = db.session.get(Post, int(post_id))
     if not post:
         raise ValueError(f"Post {post_id} not found")
 
