@@ -82,6 +82,7 @@ export interface UseConfigStateReturn {
   // Status
   llmStatus: ConnectionStatus;
   whisperStatus: ConnectionStatus;
+  oneshotStatus: ConnectionStatus;
   hasEdits: boolean;
   localWhisperAvailable: boolean | null;
   isSaving: boolean;
@@ -148,6 +149,11 @@ export function useConfigState(): UseConfigStateReturn {
     error: '',
   });
   const [whisperStatus, setWhisperStatus] = useState<ConnectionStatus>({
+    status: 'loading',
+    message: '',
+    error: '',
+  });
+  const [oneshotStatus, setOneshotStatus] = useState<ConnectionStatus>({
     status: 'loading',
     message: '',
     error: '',
@@ -261,10 +267,12 @@ export function useConfigState(): UseConfigStateReturn {
     if (!pending) return;
     setLlmStatus({ status: 'loading', message: '', error: '' });
     setWhisperStatus({ status: 'loading', message: '', error: '' });
+    setOneshotStatus({ status: 'loading', message: '', error: '' });
 
-    const [llmResult, whisperResult] = await Promise.allSettled([
+    const [llmResult, whisperResult, oneshotResult] = await Promise.allSettled([
       configApi.testLLM({ llm: pending.llm as LLMConfig }),
       configApi.testWhisper({ whisper: pending.whisper as WhisperConfig }),
+      configApi.testOneShot({ llm: pending.llm as LLMConfig }),
     ]);
 
     if (llmResult.status === 'fulfilled') {
@@ -308,6 +316,28 @@ export function useConfigState(): UseConfigStateReturn {
         status: 'error',
         message: '',
         error: getProbeErrorMessage(whisperResult.reason, 'Whisper test failed'),
+      });
+    }
+
+    if (oneshotResult.status === 'fulfilled') {
+      if (oneshotResult.value?.ok) {
+        setOneshotStatus({
+          status: 'ok',
+          message: oneshotResult.value.message || 'One-shot connection OK',
+          error: '',
+        });
+      } else {
+        setOneshotStatus({
+          status: 'error',
+          message: '',
+          error: oneshotResult.value?.error || 'One-shot test failed',
+        });
+      }
+    } else {
+      setOneshotStatus({
+        status: 'error',
+        message: '',
+        error: getProbeErrorMessage(oneshotResult.reason, 'One-shot test failed'),
       });
     }
   };
@@ -512,6 +542,7 @@ export function useConfigState(): UseConfigStateReturn {
       toast.success('Groq key verified and saved. Defaults applied.');
       setLlmStatus({ status: 'ok', message: 'LLM connection OK', error: '' });
       setWhisperStatus({ status: 'ok', message: 'Whisper connection OK', error: '' });
+      setOneshotStatus({ status: 'loading', message: '', error: '' });
     },
   });
 
@@ -544,6 +575,7 @@ export function useConfigState(): UseConfigStateReturn {
     // Status
     llmStatus,
     whisperStatus,
+    oneshotStatus,
     hasEdits,
     localWhisperAvailable,
     isSaving: saveMutation.isPending,
