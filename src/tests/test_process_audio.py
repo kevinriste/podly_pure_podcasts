@@ -119,13 +119,13 @@ def test_split_audio() -> None:
             assert split.name in expected
             duration_ms, filesize = expected[split.name]
             actual_duration = get_audio_duration_ms(str(split))
-            assert (
-                actual_duration is not None
-            ), f"Failed to get audio duration for {split}"
+            assert actual_duration is not None, (
+                f"Failed to get audio duration for {split}"
+            )
             assert abs(actual_duration - duration_ms) <= 100, (
                 f"Duration mismatch for {split}. Expected {duration_ms}ms, got {actual_duration}ms, "
                 f"difference: {abs(actual_duration - duration_ms)}ms"
             )
-            assert (
-                abs(filesize - split.stat().st_size) <= 500
-            ), f"filesize <> 500 bytes for {split}. found {split.stat().st_size}, expected {filesize}"  # pylint: disable=line-too-long
+            assert abs(filesize - split.stat().st_size) <= 500, (
+                f"filesize <> 500 bytes for {split}. found {split.stat().st_size}, expected {filesize}"
+            )  # pylint: disable=line-too-long

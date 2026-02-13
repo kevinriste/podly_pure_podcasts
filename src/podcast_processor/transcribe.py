@@ -21,7 +21,6 @@ class Segment(BaseModel):
 
 
 class Transcriber(ABC):
-
     @property
     @abstractmethod
     def model_name(self) -> str:
@@ -49,7 +48,6 @@ class LocalTranscriptSegment(BaseModel):
 
 
 class TestWhisperTranscriber(Transcriber):
-
     def __init__(self, logger: logging.Logger):
         self.logger = logger
 
@@ -66,7 +64,6 @@ class TestWhisperTranscriber(Transcriber):
 
 
 class LocalWhisperTranscriber(Transcriber):
-
     def __init__(self, logger: logging.Logger, whisper_model: str):
         self.logger = logger
         self.whisper_model = whisper_model
@@ -114,7 +111,6 @@ class LocalWhisperTranscriber(Transcriber):
 
 
 class OpenAIWhisperTranscriber(Transcriber):
-
     def __init__(self, logger: logging.Logger, config: RemoteWhisperConfig):
         self.logger = logger
         self.config = config
@@ -224,7 +220,6 @@ class GroqTranscriptionSegment(BaseModel):
 
 
 class GroqWhisperTranscriber(Transcriber):
-
     def __init__(self, logger: logging.Logger, config: GroqWhisperConfig):
         self.logger = logger
         self.config = config
