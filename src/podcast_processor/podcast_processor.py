@@ -21,6 +21,7 @@ from podcast_processor.chapter_ad_detector import (
 )
 from podcast_processor.chapter_filter import parse_filter_strings
 from podcast_processor.chapter_writer import write_adjusted_chapters
+from podcast_processor.oneshot_classifier import OneShotAdClassifier
 from podcast_processor.podcast_downloader import PodcastDownloader, sanitize_title
 from podcast_processor.processing_status_manager import ProcessingStatusManager
 from podcast_processor.prompt import (
@@ -159,12 +160,31 @@ class PodcastProcessor:
         cached_feed_title = post.feed.title
         cached_job_id = job.id
         cached_current_step = job.current_step
-        cached_ad_detection_strategy = getattr(
-            post.feed, "ad_detection_strategy", "llm"
-        )
+        # Get ad detection strategy: user's oneshot setting takes precedence,
+        # otherwise fall back to feed's strategy (for chapter mode)
+        cached_user_strategy = None
+        cached_user_oneshot_model = None
+        if job.billing_user:
+            cached_user_strategy = getattr(
+                job.billing_user, "ad_detection_strategy", None
+            )
+            cached_user_oneshot_model = getattr(job.billing_user, "oneshot_model", None)
+
+        cached_feed_strategy = getattr(post.feed, "ad_detection_strategy", "llm")
         cached_chapter_filter_strings = getattr(
             post.feed, "chapter_filter_strings", None
         )
+
+        # Determine effective strategy:
+        # - Feed's "chapter" setting always wins (it's a feed-level capability)
+        # - User's "oneshot" setting wins over feed's "llm"
+        # - Default to "llm" (chunked)
+        if cached_feed_strategy == "chapter":
+            cached_ad_detection_strategy = "chapter"
+        elif cached_user_strategy == "oneshot":
+            cached_ad_detection_strategy = "oneshot"
+        else:
+            cached_ad_detection_strategy = "llm"
 
         try:
             self.logger.debug(
@@ -244,6 +264,7 @@ class PodcastProcessor:
                     cancel_callback,
                     cached_ad_detection_strategy,
                     cached_chapter_filter_strings,
+                    cached_user_oneshot_model,
                 )
 
                 self.logger.info(f"Processing podcast: {post} complete")
@@ -346,6 +367,7 @@ class PodcastProcessor:
         cancel_callback: Optional[Callable[[], bool]] = None,
         ad_detection_strategy: str = "llm",
         chapter_filter_strings: Optional[str] = None,
+        oneshot_model_override: Optional[str] = None,
     ) -> None:
         """
         Perform the main processing steps based on the ad detection strategy.
@@ -355,12 +377,17 @@ class PodcastProcessor:
             job: The ProcessingJob for tracking
             processed_audio_path: Path where the processed audio will be saved
             cancel_callback: Optional callback to check for cancellation
-            ad_detection_strategy: "llm" or "chapter"
+            ad_detection_strategy: "llm", "oneshot", or "chapter"
             chapter_filter_strings: Comma-separated filter strings for chapter strategy
+            oneshot_model_override: Optional model override for oneshot strategy
         """
         if ad_detection_strategy == "chapter":
             self._perform_chapter_based_processing(
                 post, job, processed_audio_path, cancel_callback, chapter_filter_strings
+            )
+        elif ad_detection_strategy == "oneshot":
+            self._perform_oneshot_processing(
+                post, job, processed_audio_path, cancel_callback, oneshot_model_override
             )
         else:
             self._perform_llm_based_processing(
@@ -387,6 +414,79 @@ class PodcastProcessor:
         # Step 3: Classify ad segments
         self._classify_ad_segments(post, job, transcript_segments)
         self._raise_if_cancelled(job, 3, cancel_callback)
+
+        # Step 4: Process audio (remove ad segments)
+        self.status_manager.update_job_status(
+            job, "running", 4, "Processing audio", 90.0
+        )
+        self.audio_processor.process_audio(post, processed_audio_path)
+
+        self._finalize_processing(post, job, processed_audio_path)
+
+    def _perform_oneshot_processing(
+        self,
+        post: Post,
+        job: ProcessingJob,
+        processed_audio_path: str,
+        cancel_callback: Optional[Callable[[], bool]] = None,
+        model_override: Optional[str] = None,
+    ) -> None:
+        """
+        Perform one-shot LLM ad detection: transcription, single LLM call, audio processing.
+
+        This strategy uses a single (or few) LLM call(s) with a large-context model to
+        process the entire transcript at once, skipping cue detection, neighbor expansion,
+        and boundary refinement.
+
+        Args:
+            post: The Post object to process
+            job: The ProcessingJob for tracking
+            processed_audio_path: Path where the processed audio will be saved
+            cancel_callback: Optional callback to check for cancellation
+            model_override: Optional model to use instead of config default
+        """
+        # Step 2: Transcribe audio (reuses existing transcript if available)
+        self.status_manager.update_job_status(
+            job, "running", 2, "Transcribing audio", 50.0
+        )
+        transcript_segments = self.transcription_manager.transcribe(post)
+        self._raise_if_cancelled(job, 2, cancel_callback)
+
+        if not transcript_segments:
+            raise ProcessorException(
+                "No transcript segments available for classification"
+            )
+
+        # Step 3: One-shot classification
+        self.status_manager.update_job_status(
+            job, "running", 3, "Classifying ads (one-shot)", 70.0
+        )
+
+        oneshot_classifier = OneShotAdClassifier(
+            config=self.config,
+            logger=self.logger,
+            db_session=self.db_session,
+        )
+
+        ad_segments = oneshot_classifier.classify(
+            transcript_segments=transcript_segments,
+            post=post,
+            model_override=model_override,
+        )
+        self._raise_if_cancelled(job, 3, cancel_callback)
+
+        # Create identification records for UI/database visibility
+        if ad_segments:
+            model_call = oneshot_classifier.get_model_call_for_post(
+                post, model_override or self.config.oneshot.model
+            )
+            if model_call:
+                oneshot_classifier.create_identifications(
+                    ad_segments=ad_segments,
+                    transcript_segments=transcript_segments,
+                    model_call=model_call,
+                    min_confidence=self.config.output.min_confidence,
+                )
 
         # Step 4: Process audio (remove ad segments)
         self.status_manager.update_job_status(
