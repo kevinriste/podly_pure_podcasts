@@ -7,7 +7,13 @@ from typing import Any
 
 import pytest
 
-from shared.config import Config, OutputConfig, ProcessingConfig
+from shared.config import (
+    Config,
+    OutputConfig,
+    ProcessingConfig,
+    get_effective_oneshot_api_key,
+    get_effective_oneshot_model,
+)
 
 app_module = importlib.import_module("app.__init__")
 
@@ -140,3 +146,86 @@ class TestEnvKeyValidation:
         monkeypatch.delenv("GROQ_API_KEY", raising=False)
 
         app_module._validate_env_key_conflicts()
+
+
+class TestOneShotConfigResolution:
+    def test_get_effective_oneshot_model_prefers_env(self, monkeypatch: Any) -> None:
+        monkeypatch.setenv("ONESHOT_MODEL", " env-model ")
+        config = Config(
+            llm_api_key="test-key",
+            oneshot_model="db-model",
+            output=OutputConfig(
+                fade_ms=3000,
+                min_ad_segement_separation_seconds=60,
+                min_ad_segment_length_seconds=14,
+                min_confidence=0.8,
+            ),
+            processing=ProcessingConfig(num_segments_to_input_to_prompt=30),
+        )
+
+        assert get_effective_oneshot_model(config) == "env-model"
+
+    def test_get_effective_oneshot_model_falls_back_to_db(
+        self, monkeypatch: Any
+    ) -> None:
+        monkeypatch.delenv("ONESHOT_MODEL", raising=False)
+        monkeypatch.delenv("LLM_ONESHOT_MODEL", raising=False)
+        config = Config(
+            llm_api_key="test-key",
+            oneshot_model=" db-model ",
+            output=OutputConfig(
+                fade_ms=3000,
+                min_ad_segement_separation_seconds=60,
+                min_ad_segment_length_seconds=14,
+                min_confidence=0.8,
+            ),
+            processing=ProcessingConfig(num_segments_to_input_to_prompt=30),
+        )
+
+        assert get_effective_oneshot_model(config) == "db-model"
+
+    def test_get_effective_oneshot_model_raises_if_missing(
+        self, monkeypatch: Any
+    ) -> None:
+        monkeypatch.delenv("ONESHOT_MODEL", raising=False)
+        monkeypatch.delenv("LLM_ONESHOT_MODEL", raising=False)
+        config = Config(
+            llm_api_key="test-key",
+            oneshot_model=None,
+            output=OutputConfig(
+                fade_ms=3000,
+                min_ad_segement_separation_seconds=60,
+                min_ad_segment_length_seconds=14,
+                min_confidence=0.8,
+            ),
+            processing=ProcessingConfig(num_segments_to_input_to_prompt=30),
+        )
+
+        with pytest.raises(ValueError, match="One-shot model is not configured"):
+            get_effective_oneshot_model(config)
+
+    def test_get_effective_oneshot_api_key_precedence(self, monkeypatch: Any) -> None:
+        config = Config(
+            llm_api_key="db-key",
+            output=OutputConfig(
+                fade_ms=3000,
+                min_ad_segement_separation_seconds=60,
+                min_ad_segment_length_seconds=14,
+                min_confidence=0.8,
+            ),
+            processing=ProcessingConfig(num_segments_to_input_to_prompt=30),
+        )
+
+        monkeypatch.setenv("ONESHOT_API_KEY", " oneshot-env ")
+        monkeypatch.setenv("LLM_API_KEY", "llm-env")
+        assert get_effective_oneshot_api_key(config) == "oneshot-env"
+
+        monkeypatch.delenv("ONESHOT_API_KEY", raising=False)
+        assert get_effective_oneshot_api_key(config) == "llm-env"
+
+        monkeypatch.delenv("LLM_API_KEY", raising=False)
+        assert (
+            get_effective_oneshot_api_key(config, db_llm_api_key=" db-override ")
+            == "db-override"
+        )
+        assert get_effective_oneshot_api_key(config) == "db-key"

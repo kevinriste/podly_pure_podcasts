@@ -520,6 +520,69 @@ def test_cleanup_preserves_post_with_newer_file_timestamp(app, tmp_path) -> None
         assert recent_post_after.processed_audio_path is not None
 
 
+def test_cleanup_preserves_most_recent_when_file_timestamps_tie(app, tmp_path) -> None:
+    """When file mtimes tie, preserve the post with the newer completion timestamp."""
+    with app.app_context():
+        feed = _create_feed()
+
+        old_post = _create_post(feed, "tie-old", "https://example.com/tie-old.mp3")
+        recent_post = _create_post(
+            feed, "tie-recent", "https://example.com/tie-recent.mp3"
+        )
+
+        old_processed = tmp_path / "tie_old_processed.mp3"
+        old_processed.write_text("audio")
+        recent_processed = tmp_path / "tie_recent_processed.mp3"
+        recent_processed.write_text("audio")
+
+        tied_ts = datetime.utcnow().timestamp()
+        os.utime(old_processed, (tied_ts, tied_ts))
+        os.utime(recent_processed, (tied_ts, tied_ts))
+
+        old_post.processed_audio_path = str(old_processed)
+        recent_post.processed_audio_path = str(recent_processed)
+
+        old_completed = datetime.utcnow() - timedelta(days=12)
+        recent_completed = datetime.utcnow() - timedelta(days=8)
+        db.session.add(
+            ProcessingJob(
+                id="job-tie-old",
+                post_guid=old_post.guid,
+                status="completed",
+                current_step=4,
+                total_steps=4,
+                progress_percentage=100.0,
+                created_at=old_completed,
+                started_at=old_completed,
+                completed_at=old_completed,
+            )
+        )
+        db.session.add(
+            ProcessingJob(
+                id="job-tie-recent",
+                post_guid=recent_post.guid,
+                status="completed",
+                current_step=4,
+                total_steps=4,
+                progress_percentage=100.0,
+                created_at=recent_completed,
+                started_at=recent_completed,
+                completed_at=recent_completed,
+            )
+        )
+        db.session.commit()
+
+        removed = cleanup_processed_posts(retention_days=5)
+        assert removed == 1
+
+        old_after = Post.query.filter_by(guid="tie-old").first()
+        recent_after = Post.query.filter_by(guid="tie-recent").first()
+        assert old_after is not None
+        assert old_after.processed_audio_path is None
+        assert recent_after is not None
+        assert recent_after.processed_audio_path is not None
+
+
 def test_cleanup_skips_local_file_deletes_when_writer_cleanup_fails(
     app, tmp_path
 ) -> None:
