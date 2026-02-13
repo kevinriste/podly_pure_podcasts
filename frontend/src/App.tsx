@@ -3,6 +3,7 @@ import { Toaster } from 'react-hot-toast';
 import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation } from 'react-router-dom';
 import { AudioPlayerProvider } from './contexts/AudioPlayerContext';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { TimestampModeProvider } from './contexts/TimestampModeContext';
 import { useQuery } from '@tanstack/react-query';
 import { useState, useEffect, useRef } from 'react';
 import HomePage from './pages/HomePage';
@@ -12,6 +13,7 @@ import LoginPage from './pages/LoginPage';
 import LandingPage from './pages/LandingPage';
 import BillingPage from './pages/BillingPage';
 import AudioPlayer from './components/AudioPlayer';
+import TimestampModeToggle from './components/TimestampModeToggle';
 import { billingApi } from './services/api';
 import { DiagnosticsProvider, useDiagnostics } from './contexts/DiagnosticsContext';
 import DiagnosticsModal from './components/DiagnosticsModal';
@@ -132,6 +134,7 @@ function AppShell() {
                   Config
                 </Link>
               )}
+              <TimestampModeToggle />
               <button
                 type="button"
                 onClick={() => openDiagnostics()}
@@ -238,6 +241,9 @@ function AppShell() {
                         Config
                       </Link>
                     )}
+                    <div className="px-4 py-2">
+                      <TimestampModeToggle className="w-full justify-center" />
+                    </div>
                     <button
                       type="button"
                       onClick={() => {
@@ -297,9 +303,11 @@ function App() {
       <AuthProvider>
         <AudioPlayerProvider>
           <DiagnosticsProvider>
-            <Router>
-              <AppShell />
-            </Router>
+            <TimestampModeProvider>
+              <Router>
+                <AppShell />
+              </Router>
+            </TimestampModeProvider>
           </DiagnosticsProvider>
         </AudioPlayerProvider>
       </AuthProvider>
