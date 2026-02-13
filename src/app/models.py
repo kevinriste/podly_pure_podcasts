@@ -170,6 +170,13 @@ class User(db.Model):  # type: ignore[name-defined, misc]
     # Admin override for feed allowance (if set, overrides plan-based allowance)
     manual_feed_allowance = db.Column(db.Integer, nullable=True)
 
+    # Ad detection strategy: "llm" (default chunked), "oneshot" (large context), or "chapter"
+    ad_detection_strategy = db.Column(
+        db.String(20), nullable=False, default=DEFAULTS.AD_DETECTION_DEFAULT_STRATEGY
+    )
+    # Model override for oneshot strategy (None = use global default)
+    oneshot_model = db.Column(db.String(100), nullable=True)
+
     user_feeds = db.relationship(
         "UserFeed",
         back_populates="user",

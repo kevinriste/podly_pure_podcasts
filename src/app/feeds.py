@@ -158,10 +158,8 @@ def refresh_feed(feed: Feed) -> None:
                 and p.release_date.date() < oldest_post.release_date.date()
             ):
                 p.whitelisted = False
-                logger.debug(
-                    f"skipping post from archive due to \
-number_of_episodes_to_whitelist_from_archive_of_new_feed setting: {entry.title}"
-                )
+                logger.debug(f"skipping post from archive due to \
+number_of_episodes_to_whitelist_from_archive_of_new_feed setting: {entry.title}")
             else:
                 p.whitelisted = _should_auto_whitelist_new_posts(feed, p)
 
