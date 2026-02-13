@@ -1,8 +1,6 @@
 import { useState } from 'react';
-import { toast } from 'react-hot-toast';
-import { configApi } from '../../../services/api';
 import { useConfigContext } from '../ConfigContext';
-import { Section, Field, ConnectionStatusCard, TestButton } from '../shared';
+import { Section, Field, ConnectionStatusCard } from '../shared';
 import type { WhisperConfig, LLMConfig } from '../../../types';
 
 export default function DefaultTab() {
@@ -11,6 +9,7 @@ export default function DefaultTab() {
     updatePending,
     llmStatus,
     whisperStatus,
+    oneshotStatus,
     probeConnections,
     getEnvHint,
     getWhisperApiKey,
@@ -59,30 +58,10 @@ export default function DefaultTab() {
       ? pending?.whisper?.api_key_preview || ''
       : pending?.llm?.llm_api_key_preview || '';
 
-  const handleTestOneShot = () => {
-    toast.promise(configApi.testOneShot({ llm: pending.llm as LLMConfig }), {
-      loading: 'Testing One-shot connection...',
-      success: (res: { ok: boolean; message?: string }) =>
-        res?.message || 'One-shot connection OK',
-      error: (err: unknown) => {
-        const e = err as {
-          response?: { data?: { error?: string; message?: string } };
-          message?: string;
-        };
-        return (
-          e?.response?.data?.error ||
-          e?.response?.data?.message ||
-          e?.message ||
-          'One-shot connection failed'
-        );
-      },
-    });
-  };
-
   return (
     <div className="space-y-6">
       <Section title="Connection Status">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <ConnectionStatusCard
             title="LLM"
             status={llmStatus.status}
@@ -97,14 +76,14 @@ export default function DefaultTab() {
             error={whisperStatus.error}
             onRetry={() => void probeConnections()}
           />
+          <ConnectionStatusCard
+            title="One-shot"
+            status={oneshotStatus.status}
+            message={oneshotStatus.message}
+            error={oneshotStatus.error}
+            onRetry={() => void probeConnections()}
+          />
         </div>
-      </Section>
-
-      <Section title="One-shot Test">
-        <p className="text-sm text-gray-700">
-          Validates one-shot model connectivity using one-shot API key precedence.
-        </p>
-        <TestButton onClick={handleTestOneShot} label="Test One-shot" className="justify-start" />
       </Section>
 
       <Section title="Quick Setup">
