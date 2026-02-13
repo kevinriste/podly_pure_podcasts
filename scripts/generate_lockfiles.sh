@@ -1,28 +1,29 @@
 #!/bin/bash
 set -e
+set -u
+set -o pipefail
 
-# Generate lock file for the regular Pipfile
-echo "Locking Pipfile..."
-pipenv lock
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 
-# Temporarily move Pipfiles to lock Pipfile.lite
-echo "Preparing to lock Pipfile.lite..."
-mv Pipfile Pipfile.tmp
-mv Pipfile.lite Pipfile
+cd "$REPO_ROOT"
 
-# Generate lock file for Pipfile.lite
-echo "Locking Pipfile.lite..."
-pipenv lock
+# Generate lock file for the full project
+echo "Locking pyproject.toml..."
+uv lock
 
-# Rename the new lock file to Pipfile.lite.lock
-echo "Renaming lockfile for lite version..."
-mv Pipfile.lock Pipfile.lite.lock
+# Generate lock file for the lite project in a temp directory
+echo "Locking pyproject.lite.toml..."
+tmp_dir=$(mktemp -d)
+cleanup() {
+  rm -rf "$tmp_dir"
+}
+trap cleanup EXIT
 
-# Restore original Pipfile names
-echo "Restoring original Pipfile names..."
-mv Pipfile Pipfile.lite
-mv Pipfile.tmp Pipfile
+cp pyproject.lite.toml "$tmp_dir/pyproject.toml"
+(cd "$tmp_dir" && uv lock)
+cp "$tmp_dir/uv.lock" "$REPO_ROOT/uv.lite.lock"
 
 echo "Lockfiles generated successfully!"
-echo "- Pipfile.lock"
-echo "- Pipfile.lite.lock"
+echo "- uv.lock"
+echo "- uv.lite.lock"

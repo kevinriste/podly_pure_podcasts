@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "podly-pure-podcasts"
+name = "podly-pure-podcasts-lite"
 version = "0.0.0"
-description = "Ad-block for podcasts. Create an ad-free RSS feed."
+description = "Ad-block for podcasts. Create an ad-free RSS feed. Lite build."
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 dependencies = [
@@ -27,12 +27,11 @@ dependencies = [
     "waitress",
     "validators",
     "beartype",
-    "openai-whisper",
     "flask-sqlalchemy",
     "flask-migrate",
     "Flask-APScheduler",
     "ffmpeg-python",
-    "litellm",
+    "litellm>=1.59.8,<1.75.0",
     "bleach",
     "types-bleach",
     "groq",
@@ -40,7 +39,6 @@ dependencies = [
     "pytest-cov",
     "flask-cors",
     "bcrypt",
-    "httpx-aiohttp",
     "stripe",
     "mutagen",
 ]
@@ -62,38 +60,3 @@ dev = [
     "requests",
     "types-flask-cors",
 ]
-
-[tool.pylint]
-init-hook = 'import sys; sys.path.append("./src")'
-
-disable = [
-    "logging-fstring-interpolation",
-    "missing-class-docstring",
-    "missing-function-docstring",
-    "missing-module-docstring",
-    "too-few-public-methods",
-    "too-many-arguments",
-    "too-many-locals",
-    "unspecified-encoding",
-    "line-too-long",
-    "too-many-return-statements"
-]
-
-[tool.mypy]
-warn_unused_ignores = true
-strict = true
-mypy_path = "src"
-
-[tool.pytest.ini_options]
-pythonpath = ["src", "."]
-norecursedirs = ["scripts", "scripts/*", ".worktrees", ".worktrees/*"]
-testpaths = []  # No test paths - tests converted to standalone scripts
-
-[tool.ruff]
-line-length = 88
-target-version = "py311"
-
-[tool.isort]
-profile = "black"
-line_length = 88
-float_to_top = true

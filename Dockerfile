@@ -19,6 +19,7 @@ RUN set -e && \
 
 # Backend stage
 FROM ${BASE_IMAGE} AS backend
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # Environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -79,21 +80,12 @@ RUN if [ -f /etc/debian_version ]; then \
     fi ; \
     fi
 
-# Copy all Pipfiles/lock files
-COPY Pipfile Pipfile.lock Pipfile.lite Pipfile.lite.lock ./
+# Copy dependency manifests and lock files
+COPY pyproject.toml pyproject.lite.toml uv.lock uv.lite.lock ./
 
 # Remove problematic distutils-installed packages that may conflict
 RUN if [ -f /etc/debian_version ]; then \
     apt-get remove -y python3-blinker 2>/dev/null || true; \
-    fi
-
-# Install pipenv and dependencies
-RUN if command -v pip >/dev/null 2>&1; then \
-    pip install --no-cache-dir pipenv; \
-    elif command -v pip3 >/dev/null 2>&1; then \
-    pip3 install --no-cache-dir pipenv; \
-    else \
-    python3 -m pip install --no-cache-dir pipenv; \
     fi
 
 # Set pip timeout and retries for better reliability
@@ -102,20 +94,16 @@ ENV PIP_RETRIES=3
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 ENV PIP_NO_CACHE_DIR=1
 
-# Set pipenv configuration for better CI reliability
-ENV PIPENV_VENV_IN_PROJECT=1
-ENV PIPENV_TIMEOUT=1200
-
 # Install dependencies conditionally based on LITE_BUILD
 RUN set -e && \
     if [ "${LITE_BUILD}" = "true" ]; then \
     echo "Installing lite dependencies (without Whisper)"; \
-    echo "Using lite Pipfile:" && \
-    PIPENV_PIPFILE=Pipfile.lite pipenv install --deploy --system; \
+    echo "Using lite pyproject:" && \
+    uv pip install --system -r pyproject.lite.toml; \
     else \
     echo "Installing full dependencies (including Whisper)"; \
-    echo "Using full Pipfile:" && \
-    PIPENV_PIPFILE=Pipfile pipenv install --deploy --system; \
+    echo "Using full pyproject:" && \
+    uv pip install --system -r pyproject.toml; \
     fi
 
 # Install PyTorch with CUDA support if using NVIDIA image (skip if LITE_BUILD)
