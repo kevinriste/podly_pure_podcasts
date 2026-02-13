@@ -1,0 +1,573 @@
+"""One-shot LLM ad classifier for podcast transcripts.
+
+This classifier uses a single (or few) LLM call(s) to process an entire
+podcast transcript at once, leveraging large-context models like GPT-5-mini.
+
+Unlike the chunked AdClassifier, this approach:
+- Sends the full transcript (or 2-hour chunks) in one call
+- Skips cue detection, neighbor expansion, and boundary refinement
+- Uses structured outputs when supported by the model
+- Returns precise start/end timestamps directly from the LLM
+"""
+
+import json
+import logging
+from typing import Any, Dict, List, Optional, Set
+
+import litellm
+from pydantic import ValidationError
+
+from app.models import ModelCall, Post, TranscriptSegment
+from app.writer.client import writer_client
+from podcast_processor.oneshot_output import OneShotAdSegment, OneShotResponse
+from shared.config import Config
+from shared.llm_utils import (
+    model_supports_structured_outputs,
+    model_uses_max_completion_tokens,
+)
+
+# System prompt for one-shot ad detection
+ONESHOT_SYSTEM_PROMPT = """You are identifying advertisements in a podcast transcript.
+
+Include:
+- Sponsored ad reads from external companies
+- "Brought to you by" segments
+- Network promos / house ads
+
+Exclude:
+- Host talking about their own projects (books, courses, Patreon)
+- Educational content that happens to mention products
+- Genuine recommendations in conversation
+
+For each ad, provide start_time, end_time (in seconds), and confidence (0.0-1.0).
+You may split a single ad into multiple segments if confidence varies across its duration.
+
+Return a JSON object with an "ad_segments" array. Each segment should have:
+- start_time: float (seconds)
+- end_time: float (seconds)
+- confidence: float (0.0-1.0)
+- ad_type: string (optional: "sponsor", "house_ad", "transition")
+- reason: string (optional: brief explanation)"""
+
+# User prompt template
+ONESHOT_USER_PROMPT_TEMPLATE = """Podcast: "{title}"
+Description: {description}
+Duration: {duration:.1f} seconds
+
+{position_note}
+
+TRANSCRIPT:
+{transcript}
+
+Identify all advertisement segments with timestamps. Return JSON with an "ad_segments" array."""
+
+
+class OneShotClassifyException(Exception):
+    """Exception raised during one-shot classification."""
+
+
+class OneShotAdClassifier:
+    """Single-call LLM classifier for ad detection in podcast transcripts."""
+
+    def __init__(
+        self,
+        config: Config,
+        logger: Optional[logging.Logger] = None,
+        db_session: Optional[Any] = None,
+    ):
+        self.config = config
+        self.logger = logger or logging.getLogger("global_logger")
+        self.db_session = db_session
+
+    def classify(
+        self,
+        transcript_segments: List[TranscriptSegment],
+        post: Post,
+        model_override: Optional[str] = None,
+    ) -> List[OneShotAdSegment]:
+        """
+        Classify ads in transcript using one-shot LLM approach.
+
+        Args:
+            transcript_segments: List of transcript segments to classify
+            post: Post containing the podcast to classify
+            model_override: Optional model to use instead of config default
+
+        Returns:
+            List of detected ad segments with timestamps and confidence
+        """
+        if not transcript_segments:
+            self.logger.info(f"No transcript segments for post {post.id}. Skipping.")
+            return []
+
+        model = model_override or self.config.oneshot.model
+        self.logger.info(
+            f"Starting one-shot classification for post {post.id} with "
+            f"{len(transcript_segments)} segments using model {model}"
+        )
+
+        # Split into chunks if needed (for very long episodes)
+        chunks = self._maybe_chunk_transcript(transcript_segments)
+        self.logger.info(f"Processing {len(chunks)} chunk(s) for post {post.id}")
+
+        all_segments: List[OneShotAdSegment] = []
+        total_duration = transcript_segments[-1].end_time
+
+        for i, chunk in enumerate(chunks):
+            chunk_segments = self._process_chunk(
+                chunk=chunk,
+                chunk_index=i,
+                total_chunks=len(chunks),
+                post=post,
+                model=model,
+                total_duration=total_duration,
+            )
+            all_segments.extend(chunk_segments)
+
+        # Deduplicate overlapping segments from chunk boundaries
+        if len(chunks) > 1:
+            all_segments = self._deduplicate_segments(all_segments)
+
+        self.logger.info(
+            f"One-shot classification complete for post {post.id}: "
+            f"found {len(all_segments)} ad segments"
+        )
+
+        return all_segments
+
+    def _maybe_chunk_transcript(
+        self,
+        segments: List[TranscriptSegment],
+    ) -> List[List[TranscriptSegment]]:
+        """
+        Split transcript into chunks for very long episodes.
+
+        Uses 2-hour chunks with 15-minute overlap to ensure ads at boundaries
+        are not missed.
+
+        Args:
+            segments: All transcript segments
+
+        Returns:
+            List of segment chunks (usually just one for most episodes)
+        """
+        if not segments:
+            return [[]]
+
+        max_duration = self.config.oneshot.max_chunk_duration_seconds
+        overlap = self.config.oneshot.chunk_overlap_seconds
+
+        total_duration = segments[-1].end_time - segments[0].start_time
+
+        # Single chunk for most episodes
+        if total_duration <= max_duration:
+            return [segments]
+
+        # Multi-chunk with overlap for very long episodes
+        chunks: List[List[TranscriptSegment]] = []
+        chunk_start_time = segments[0].start_time
+
+        while chunk_start_time < segments[-1].end_time:
+            chunk_end_time = chunk_start_time + max_duration
+
+            # Find segments in this time range
+            chunk_segments = [
+                s
+                for s in segments
+                if s.start_time >= chunk_start_time and s.start_time < chunk_end_time
+            ]
+
+            if chunk_segments:
+                chunks.append(chunk_segments)
+
+            # Advance by (chunk_size - overlap)
+            chunk_start_time += max_duration - overlap
+
+        self.logger.info(
+            f"Split {total_duration:.0f}s transcript into {len(chunks)} chunks "
+            f"(max {max_duration}s each, {overlap}s overlap)"
+        )
+
+        return chunks
+
+    def _process_chunk(
+        self,
+        chunk: List[TranscriptSegment],
+        chunk_index: int,
+        total_chunks: int,
+        post: Post,
+        model: str,
+        total_duration: float,
+    ) -> List[OneShotAdSegment]:
+        """Process a single chunk of transcript segments."""
+        if not chunk:
+            return []
+
+        # Build transcript text
+        transcript_text = self._build_transcript_text(chunk)
+
+        # Build position note for context
+        if total_chunks == 1:
+            position_note = ""
+        else:
+            chunk_start = chunk[0].start_time
+            chunk_end = chunk[-1].end_time
+            position_note = (
+                f"[This is chunk {chunk_index + 1} of {total_chunks}, "
+                f"covering {chunk_start:.0f}s to {chunk_end:.0f}s of {total_duration:.0f}s total]"
+            )
+
+        # Build user prompt
+        user_prompt = ONESHOT_USER_PROMPT_TEMPLATE.format(
+            title=post.title or "Unknown",
+            description=post.description or "No description available",
+            duration=total_duration,
+            position_note=position_note,
+            transcript=transcript_text,
+        )
+
+        # Create model call record
+        model_call = self._create_model_call(
+            post=post,
+            chunk=chunk,
+            user_prompt=user_prompt,
+            model=model,
+        )
+
+        # Call LLM
+        try:
+            response = self._call_llm(
+                system_prompt=ONESHOT_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
+                model=model,
+                model_call=model_call,
+            )
+
+            # Parse response
+            ad_segments = self._parse_response(response, model_call)
+
+            # Update model call status
+            self._update_model_call_success(model_call, response)
+
+            return ad_segments
+
+        except Exception as e:
+            self.logger.error(
+                f"One-shot LLM call failed for post {post.id} chunk {chunk_index}: {e}",
+                exc_info=True,
+            )
+            self._update_model_call_failed(model_call, str(e))
+            raise OneShotClassifyException(
+                f"LLM call failed for chunk {chunk_index}"
+            ) from e
+
+    def _build_transcript_text(self, segments: List[TranscriptSegment]) -> str:
+        """Build plain transcript text with timestamps."""
+        lines = []
+        for seg in segments:
+            lines.append(f"[{seg.start_time:.1f}] {seg.text}")
+        return "\n".join(lines)
+
+    def _create_model_call(
+        self,
+        post: Post,
+        chunk: List[TranscriptSegment],
+        user_prompt: str,
+        model: str,
+    ) -> ModelCall:
+        """Create a ModelCall record for tracking."""
+        first_seq = chunk[0].sequence_num if chunk else 0
+        last_seq = chunk[-1].sequence_num if chunk else 0
+
+        result = writer_client.action(
+            "upsert_model_call",
+            {
+                "post_id": post.id,
+                "model_name": f"oneshot:{model}",
+                "first_segment_sequence_num": first_seq,
+                "last_segment_sequence_num": last_seq,
+                "prompt": user_prompt,
+            },
+            wait=True,
+        )
+
+        if not result or not result.success:
+            raise RuntimeError(getattr(result, "error", "Failed to create ModelCall"))
+
+        model_call_id = (result.data or {}).get("model_call_id")
+        if model_call_id is None:
+            raise RuntimeError("Writer did not return model_call_id")
+
+        if self.db_session:
+            model_call = self.db_session.get(ModelCall, int(model_call_id))
+        else:
+            from app.extensions import db
+
+            model_call = db.session.get(ModelCall, int(model_call_id))
+
+        if model_call is None:
+            raise RuntimeError(f"ModelCall {model_call_id} not found after creation")
+
+        return model_call  # type: ignore[return-value]
+
+    def _call_llm(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        model: str,
+        model_call: ModelCall,
+    ) -> str:
+        """Make the LLM call with structured outputs or JSON mode fallback."""
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        completion_args: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "timeout": self.config.oneshot.timeout_sec,
+        }
+
+        # Add API key if configured
+        if self.config.llm_api_key:
+            completion_args["api_key"] = self.config.llm_api_key
+        if self.config.openai_base_url:
+            completion_args["base_url"] = self.config.openai_base_url
+
+        # Handle max tokens parameter based on model
+        if model_uses_max_completion_tokens(model):
+            completion_args["max_completion_tokens"] = self.config.openai_max_tokens
+        else:
+            completion_args["max_tokens"] = self.config.openai_max_tokens
+
+        # Use structured outputs if supported, otherwise JSON mode
+        if model_supports_structured_outputs(model):
+            self.logger.info(f"Using structured outputs for model {model}")
+            completion_args["response_format"] = OneShotResponse
+        else:
+            self.logger.info(f"Using JSON mode fallback for model {model}")
+            completion_args["response_format"] = {"type": "json_object"}
+
+        self.logger.info(
+            f"Calling LLM for ModelCall {model_call.id} "
+            f"(post {model_call.post_id}, segments {model_call.first_segment_sequence_num}-{model_call.last_segment_sequence_num})"
+        )
+
+        response = litellm.completion(**completion_args)
+
+        content = response.choices[0].message.content
+        if content is None:
+            raise OneShotClassifyException("LLM returned empty response")
+
+        return str(content)
+
+    def _parse_response(
+        self,
+        response: str,
+        model_call: ModelCall,
+    ) -> List[OneShotAdSegment]:
+        """Parse LLM response into ad segments."""
+        try:
+            # Try parsing as OneShotResponse directly
+            parsed = OneShotResponse.model_validate_json(response)
+            return parsed.ad_segments
+        except ValidationError:
+            pass
+
+        # Try parsing as raw JSON and extracting ad_segments
+        try:
+            data = json.loads(response)
+            if isinstance(data, dict) and "ad_segments" in data:
+                segments = []
+                for seg_data in data["ad_segments"]:
+                    try:
+                        seg = OneShotAdSegment.model_validate(seg_data)
+                        segments.append(seg)
+                    except ValidationError as e:
+                        self.logger.warning(
+                            f"Skipping invalid segment in response: {e}"
+                        )
+                return segments
+        except json.JSONDecodeError:
+            pass
+
+        self.logger.error(
+            f"Failed to parse LLM response for ModelCall {model_call.id}: {response[:200]}..."
+        )
+        raise OneShotClassifyException("Failed to parse LLM response as JSON")
+
+    def _update_model_call_success(self, model_call: ModelCall, response: str) -> None:
+        """Update model call record with success status."""
+        result = writer_client.update(
+            "ModelCall",
+            model_call.id,
+            {
+                "response": response,
+                "status": "success",
+                "error_message": None,
+            },
+            wait=True,
+        )
+        if not result or not result.success:
+            self.logger.warning(
+                f"Failed to update ModelCall {model_call.id} status to success"
+            )
+
+    def _update_model_call_failed(self, model_call: ModelCall, error: str) -> None:
+        """Update model call record with failure status."""
+        result = writer_client.update(
+            "ModelCall",
+            model_call.id,
+            {
+                "status": "failed_permanent",
+                "error_message": error,
+            },
+            wait=True,
+        )
+        if not result or not result.success:
+            self.logger.warning(
+                f"Failed to update ModelCall {model_call.id} status to failed"
+            )
+
+    def _deduplicate_segments(
+        self,
+        segments: List[OneShotAdSegment],
+    ) -> List[OneShotAdSegment]:
+        """
+        Deduplicate overlapping ad segments from chunk boundaries.
+
+        When chunks overlap, the same ad might be detected twice. This merges
+        overlapping detections, keeping the higher confidence score.
+        """
+        if not segments:
+            return []
+
+        # Sort by start time
+        sorted_segments = sorted(segments, key=lambda s: s.start_time)
+
+        merged: List[OneShotAdSegment] = []
+        for seg in sorted_segments:
+            if not merged:
+                merged.append(seg)
+                continue
+
+            last = merged[-1]
+            # Check for overlap (segments overlap if one starts before the other ends)
+            if seg.start_time < last.end_time:
+                # Merge: extend end time and keep higher confidence
+                merged[-1] = OneShotAdSegment(
+                    start_time=last.start_time,
+                    end_time=max(last.end_time, seg.end_time),
+                    confidence=max(last.confidence, seg.confidence),
+                    ad_type=last.ad_type or seg.ad_type,
+                    reason=last.reason or seg.reason,
+                )
+            else:
+                merged.append(seg)
+
+        if len(merged) < len(segments):
+            self.logger.info(
+                f"Deduplicated {len(segments)} segments down to {len(merged)}"
+            )
+
+        return merged
+
+    def create_identifications(
+        self,
+        ad_segments: List[OneShotAdSegment],
+        transcript_segments: List[TranscriptSegment],
+        model_call: ModelCall,
+        min_confidence: float,
+    ) -> int:
+        """
+        Create Identification records from detected ad segments.
+
+        Maps ad segment timestamps back to transcript segments and creates
+        Identification records via the writer service.
+
+        Args:
+            ad_segments: Detected ad segments from LLM
+            transcript_segments: Original transcript segments
+            model_call: ModelCall record for linking
+            min_confidence: Minimum confidence threshold
+
+        Returns:
+            Number of identifications created
+        """
+        if not ad_segments:
+            return 0
+
+        # Build segment lookup by time
+        to_insert: List[Dict[str, Any]] = []
+        matched_segment_ids: Set[int] = set()
+
+        for ad_seg in ad_segments:
+            if ad_seg.confidence < min_confidence:
+                self.logger.debug(
+                    f"Skipping ad segment {ad_seg.start_time:.1f}-{ad_seg.end_time:.1f} "
+                    f"(confidence {ad_seg.confidence:.2f} < {min_confidence})"
+                )
+                continue
+
+            # Find all transcript segments that overlap with this ad
+            for ts in transcript_segments:
+                # Check for overlap
+                if ts.start_time < ad_seg.end_time and ts.end_time > ad_seg.start_time:
+                    if ts.id in matched_segment_ids:
+                        continue
+                    matched_segment_ids.add(ts.id)
+
+                    to_insert.append(
+                        {
+                            "transcript_segment_id": ts.id,
+                            "model_call_id": model_call.id,
+                            "label": "ad",
+                            "confidence": ad_seg.confidence,
+                        }
+                    )
+
+        if not to_insert:
+            return 0
+
+        result = writer_client.action(
+            "insert_identifications",
+            {"identifications": to_insert},
+            wait=True,
+        )
+
+        if not result or not result.success:
+            raise RuntimeError(
+                getattr(result, "error", "Failed to insert identifications")
+            )
+
+        inserted = int((result.data or {}).get("inserted") or 0)
+        self.logger.info(
+            f"Created {inserted} identifications from {len(ad_segments)} ad segments"
+        )
+
+        return inserted
+
+    def get_model_call_for_post(
+        self,
+        post: Post,
+        model: str,
+    ) -> Optional[ModelCall]:
+        """Get the most recent successful oneshot model call for a post."""
+        if self.db_session:
+            query = self.db_session.query(ModelCall)
+        else:
+            from app.extensions import db
+
+            query = db.session.query(ModelCall)
+
+        result: Optional[ModelCall] = (
+            query.filter_by(
+                post_id=post.id,
+                model_name=f"oneshot:{model}",
+                status="success",
+            )
+            .order_by(ModelCall.timestamp.desc())
+            .first()
+        )
+        return result
