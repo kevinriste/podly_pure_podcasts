@@ -182,12 +182,15 @@ class TranscriptionManager:
             segments_payload = [
                 {
                     "sequence_num": i,
-                    "start_time": round(seg.start, 1),
-                    "end_time": round(seg.end, 1),
+                    "start_time": float(seg.start),
+                    "end_time": float(seg.end),
                     "text": seg.text,
                 }
                 for i, seg in enumerate(pydantic_segments or [])
             ]
+            raw_response_body = getattr(
+                self.transcriber, "last_raw_response_body", None
+            )
 
             write_res = writer_client.action(
                 "replace_transcription",
@@ -195,6 +198,7 @@ class TranscriptionManager:
                     "post_id": post.id,
                     "segments": segments_payload,
                     "model_call_id": current_whisper_call.id,
+                    "model_call_response": raw_response_body,
                 },
                 wait=True,
             )
