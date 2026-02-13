@@ -30,12 +30,11 @@ class Feed(db.Model):  # type: ignore[name-defined, misc]
     author = db.Column(db.Text)
     rss_url = db.Column(db.Text, unique=True, nullable=False)
     image_url = db.Column(db.Text)
-    # Ad detection strategy: "llm" (default) or "chapter".
+    # Ad detection strategy: "inherit" = use user default,
+    # "llm" / "oneshot" = explicit feed override, "chapter" = chapter-based detection.
     # Note: "chapter" strategy requires CBR audio encoding for accurate chapter marker
     # seeking. "llm" uses VBR for smaller files.
-    ad_detection_strategy = db.Column(
-        db.String(20), nullable=False, default=DEFAULTS.AD_DETECTION_DEFAULT_STRATEGY
-    )
+    ad_detection_strategy = db.Column(db.String(20), nullable=False, default="inherit")
     # Per-feed filter strings override (comma-separated), null = use global defaults
     chapter_filter_strings = db.Column(db.Text, nullable=True)
     auto_whitelist_new_episodes_override = db.Column(db.Boolean, nullable=True)

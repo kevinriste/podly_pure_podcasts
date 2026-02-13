@@ -160,31 +160,28 @@ class PodcastProcessor:
         cached_feed_title = post.feed.title
         cached_job_id = job.id
         cached_current_step = job.current_step
-        # Get ad detection strategy: user's oneshot setting takes precedence,
-        # otherwise fall back to feed's strategy (for chapter mode)
-        cached_user_strategy = None
+        # Get ad detection strategy: feed explicit override takes precedence,
+        # then fall back to user's default strategy
+        cached_user_strategy = "llm"
         cached_user_oneshot_model = None
         if job.billing_user:
-            cached_user_strategy = getattr(
-                job.billing_user, "ad_detection_strategy", None
+            cached_user_strategy = (
+                getattr(job.billing_user, "ad_detection_strategy", None) or "llm"
             )
             cached_user_oneshot_model = getattr(job.billing_user, "oneshot_model", None)
 
-        cached_feed_strategy = getattr(post.feed, "ad_detection_strategy", "llm")
+        cached_feed_strategy = getattr(post.feed, "ad_detection_strategy", "inherit")
         cached_chapter_filter_strings = getattr(
             post.feed, "chapter_filter_strings", None
         )
 
         # Determine effective strategy:
-        # - Feed's "chapter" setting always wins (it's a feed-level capability)
-        # - User's "oneshot" setting wins over feed's "llm"
-        # - Default to "llm" (chunked)
-        if cached_feed_strategy == "chapter":
-            cached_ad_detection_strategy = "chapter"
-        elif cached_user_strategy == "oneshot":
-            cached_ad_detection_strategy = "oneshot"
+        # - Feed explicit value ("chapter", "oneshot", "llm") wins
+        # - "inherit" → use user default
+        if cached_feed_strategy != "inherit":
+            cached_ad_detection_strategy = cached_feed_strategy
         else:
-            cached_ad_detection_strategy = "llm"
+            cached_ad_detection_strategy = cached_user_strategy
 
         try:
             self.logger.debug(
