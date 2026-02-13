@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from app.models import ModelCall, Post, TranscriptSegment
+from app.models import ModelCall, TranscriptSegment
 from podcast_processor.oneshot_classifier import OneShotAdClassifier
 from podcast_processor.oneshot_output import OneShotAdSegment
 from shared.test_utils import create_standard_test_config
@@ -17,6 +17,25 @@ def _make_segment(
         start_time=start,
         end_time=end,
         text=text,
+    )
+
+
+def test_build_transcript_text_outputs_csv_without_rounding() -> None:
+    config = create_standard_test_config()
+    classifier = OneShotAdClassifier(config=config)
+    segments = [
+        _make_segment(1, 0, 10.04, 12.31, "alpha"),
+        _make_segment(2, 1, 12.86, 15.003, "beta"),
+        _make_segment(3, 2, 15.003, 18.77, "gamma"),
+    ]
+
+    rendered = classifier._build_transcript_text(segments)
+
+    assert rendered == (
+        "start_time,end_time,text\n"
+        "10.04,12.31,alpha\n"
+        "12.86,15.003,beta\n"
+        "15.003,18.77,gamma"
     )
 
 

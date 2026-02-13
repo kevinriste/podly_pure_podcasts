@@ -10,9 +10,11 @@ Unlike the chunked AdClassifier, this approach:
 - Returns precise start/end timestamps directly from the LLM
 """
 
+import csv
 import json
 import logging
 import time
+from io import StringIO
 from typing import Any, Dict, List, Optional
 
 import litellm
@@ -56,6 +58,15 @@ When in doubt at a boundary, err toward an appropriate confidence ad segment rat
 
 Broadly: it's perfectly fine to provide segments that don't seem like ads, just provide them with appropriately lower confidence. The goal is to capture the full extent of the ad, including transition moments, rather than missing parts of it entirely. I will make a decision on my end about which confidence level items to keep.
 
+TRANSCRIPT PROVENANCE (important context):
+- The transcript comes from a Whisper-style ASR model (local Whisper, OpenAI Whisper API, or Groq Whisper API).
+- ASR returns segment-level timestamps and text (`start`, `end`, `text`).
+- For long files, audio may be split into chunks for transcription, then each chunk's timestamps are offset back to absolute episode time before segments are merged.
+- Segments are stored in the database and may be reused from a prior successful transcription run.
+- The CSV you receive is built directly from stored transcript segments, in sequence order, with columns `start_time,end_time,text`.
+- `start_time` and `end_time` are the segment boundaries from the stored transcription (float seconds), not sentence boundaries.
+- A single sentence can span multiple rows, and brief pauses/disfluencies can produce tiny gaps or abrupt row transitions.
+
   Return a JSON object with an "ad_segments" array. Each segment should have:
   - start_time: float (seconds)
   - end_time: float (seconds)
@@ -68,7 +79,7 @@ Description: {description}
 Duration: {duration:.1f} seconds
 {position_note}
 
-TRANSCRIPT:
+TRANSCRIPT CSV (columns: start_time,end_time,text):
 {transcript}
 
 Find all ad segments and a few adjacent transition segments on each side of the ad, if possible. 
@@ -287,11 +298,15 @@ class OneShotAdClassifier:
             ) from e
 
     def _build_transcript_text(self, segments: List[TranscriptSegment]) -> str:
-        """Build plain transcript text with timestamps."""
-        lines = []
+        """Build transcript CSV using segment-provided time boundaries."""
+        output = StringIO(newline="")
+        writer = csv.writer(output, lineterminator="\n")
+        writer.writerow(["start_time", "end_time", "text"])
+
         for seg in segments:
-            lines.append(f"[{seg.start_time:.1f}] {seg.text}")
-        return "\n".join(lines)
+            writer.writerow([float(seg.start_time), float(seg.end_time), seg.text])
+
+        return output.getvalue().rstrip("\n")
 
     def _create_model_call(
         self,
