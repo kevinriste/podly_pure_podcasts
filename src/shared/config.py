@@ -69,6 +69,27 @@ class LocalWhisperConfig(BaseModel):
     model: str = DEFAULTS.WHISPER_LOCAL_MODEL
 
 
+class OneShotConfig(BaseModel):
+    """Configuration for one-shot LLM ad detection strategy."""
+
+    model: str = Field(
+        default=DEFAULTS.ONESHOT_DEFAULT_MODEL,
+        description="LLM model to use for one-shot detection (must support large context)",
+    )
+    max_chunk_duration_seconds: int = Field(
+        default=DEFAULTS.ONESHOT_MAX_CHUNK_DURATION_SECONDS,
+        description="Maximum duration per chunk in seconds (episodes longer than this are split)",
+    )
+    chunk_overlap_seconds: int = Field(
+        default=DEFAULTS.ONESHOT_CHUNK_OVERLAP_SECONDS,
+        description="Overlap between chunks in seconds to avoid missing ads at boundaries",
+    )
+    timeout_sec: int = Field(
+        default=DEFAULTS.ONESHOT_TIMEOUT_SEC,
+        description="Timeout for LLM calls in seconds",
+    )
+
+
 class Config(BaseModel):
     llm_api_key: Optional[str] = Field(default=None)
     llm_model: str = Field(default=DEFAULTS.LLM_DEFAULT_MODEL)
@@ -149,6 +170,10 @@ class Config(BaseModel):
     enable_public_landing_page: bool = DEFAULTS.APP_ENABLE_PUBLIC_LANDING_PAGE
     user_limit_total: int | None = DEFAULTS.APP_USER_LIMIT_TOTAL
     autoprocess_on_download: bool = DEFAULTS.APP_AUTOPROCESS_ON_DOWNLOAD
+    oneshot: OneShotConfig = Field(
+        default_factory=OneShotConfig,
+        description="Configuration for one-shot LLM ad detection strategy",
+    )
 
     def redacted(self) -> Config:
         return self.model_copy(
