@@ -21,7 +21,11 @@ from pydantic import ValidationError
 from app.models import ModelCall, Post, TranscriptSegment
 from app.writer.client import writer_client
 from podcast_processor.oneshot_output import OneShotAdSegment, OneShotResponse
-from shared.config import Config, get_effective_oneshot_model
+from shared.config import (
+    Config,
+    get_effective_oneshot_api_key,
+    get_effective_oneshot_model,
+)
 from shared.llm_utils import (
     model_supports_structured_outputs,
     model_uses_max_completion_tokens,
@@ -339,9 +343,10 @@ class OneShotAdClassifier:
             "timeout": self.config.openai_timeout,
         }
 
-        # Add API key if configured
-        if self.config.llm_api_key:
-            completion_args["api_key"] = self.config.llm_api_key
+        # One-shot calls can use a dedicated ONESHOT_API_KEY override.
+        oneshot_api_key = get_effective_oneshot_api_key(self.config)
+        if oneshot_api_key:
+            completion_args["api_key"] = oneshot_api_key
         if self.config.openai_base_url:
             completion_args["base_url"] = self.config.openai_base_url
 

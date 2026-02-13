@@ -13,6 +13,7 @@ from app.config_store import read_combined, to_pydantic_config
 from app.processor import ProcessorSingleton
 from app.runtime_config import config as runtime_config
 from app.writer.client import writer_client
+from shared.config import get_effective_oneshot_api_key
 from shared.llm_utils import model_uses_max_completion_tokens
 
 logger = logging.getLogger("global_logger")
@@ -485,6 +486,87 @@ def api_test_llm() -> flask.Response:
         else int(getattr(runtime_config, "openai_timeout", 30))
     )
 
+    return _run_llm_probe(
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+        timeout=timeout,
+        success_message="LLM connection OK",
+        log_label="LLM connection test",
+    )
+
+
+@config_bp.route("/api/config/test-oneshot", methods=["POST"])
+def api_test_oneshot() -> flask.Response:
+    _, error_response = require_admin()
+    if error_response:
+        return error_response
+
+    payload: Dict[str, Any] = request.get_json(silent=True) or {}
+    llm: Dict[str, Any] = dict(payload.get("llm", {}))
+
+    db_llm_api_key: str | None = None
+    try:
+        db_config = read_combined()
+        db_llm = db_config.get("llm", {})
+        if isinstance(db_llm, dict):
+            candidate = db_llm.get("llm_api_key")
+            if isinstance(candidate, str) and candidate.strip():
+                db_llm_api_key = candidate
+    except Exception as e:  # pylint: disable=broad-except
+        logger.warning("Failed to read DB llm_api_key for one-shot test fallback: %s", e)
+        runtime_key = getattr(runtime_config, "llm_api_key", None)
+        if isinstance(runtime_key, str) and runtime_key.strip():
+            db_llm_api_key = runtime_key
+
+    api_key = get_effective_oneshot_api_key(db_llm_api_key=db_llm_api_key)
+    model_val = llm.get("oneshot_model")
+    model_raw = (
+        model_val
+        if isinstance(model_val, str)
+        else getattr(runtime_config, "oneshot_model", None)
+    )
+    model = model_raw.strip() if isinstance(model_raw, str) else ""
+    base_url: str | None = llm.get("openai_base_url") or getattr(
+        runtime_config, "openai_base_url", None
+    )
+    timeout_val = llm.get("openai_timeout")
+    timeout: int = (
+        int(timeout_val)
+        if timeout_val is not None
+        else int(getattr(runtime_config, "openai_timeout", 30))
+    )
+
+    if not model:
+        return flask.make_response(
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "Missing oneshot_model. Configure One-shot Model first.",
+                }
+            ),
+            400,
+        )
+
+    return _run_llm_probe(
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+        timeout=timeout,
+        success_message="One-shot connection OK",
+        log_label="One-shot connection test",
+    )
+
+
+def _run_llm_probe(
+    *,
+    api_key: str | None,
+    model: str,
+    base_url: str | None,
+    timeout: int,
+    success_message: str,
+    log_label: str,
+) -> flask.Response:
     if not api_key:
         return flask.make_response(
             jsonify({"ok": False, "error": "Missing llm_api_key"}), 400
@@ -508,23 +590,26 @@ def api_test_llm() -> flask.Response:
             "timeout": timeout,
         }
 
+        # Keep probe lightweight but high enough to avoid false failures on
+        # providers/models that cannot complete within a 1-token budget.
+        probe_max_tokens = 16
         if model_uses_max_completion_tokens(model):
-            completion_kwargs["max_completion_tokens"] = 1
+            completion_kwargs["max_completion_tokens"] = probe_max_tokens
         else:
-            completion_kwargs["max_tokens"] = 1
+            completion_kwargs["max_tokens"] = probe_max_tokens
 
         _ = litellm.completion(**completion_kwargs)
 
         return flask.jsonify(
             {
                 "ok": True,
-                "message": "LLM connection OK",
+                "message": success_message,
                 "model": model,
                 "base_url": base_url,
             }
         )
     except Exception as e:  # noqa: BLE001
-        logger.error(f"LLM connection test failed: {e}")
+        logger.error("%s failed: %s", log_label, e)
         return flask.make_response(jsonify({"ok": False, "error": str(e)}), 400)
 
 

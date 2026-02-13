@@ -62,14 +62,13 @@ def _get_most_recent_posts_per_feed(post_guids: Sequence[str]) -> set[str]:
 def _get_post_timestamp(
     post: Post, latest_completed: dict[str, datetime | None]
 ) -> datetime | None:
-    """Get a post timestamp for recency comparison.
-
-    Prefer job completion time when present; fall back to processed file mtime.
-    """
+    """Get the most recent timestamp for a post (file or job completion)."""
+    file_timestamp = _get_processed_file_timestamp(post)
     job_timestamp = latest_completed.get(post.guid)
-    if job_timestamp:
-        return job_timestamp
-    return _get_processed_file_timestamp(post)
+
+    if file_timestamp and job_timestamp:
+        return max(file_timestamp, job_timestamp)
+    return file_timestamp or job_timestamp
 
 
 def _build_cleanup_query(
@@ -158,19 +157,15 @@ def cleanup_processed_posts(retention_days: int | None) -> int:
             if not _processed_timestamp_before_cutoff(post, cutoff, latest_completed):
                 continue
 
-            removed_posts += 1
-            logger.info(
-                "Cleanup removing post '%s' (guid=%s) completed before %s",
-                post.title,
-                post.guid,
-                cutoff.isoformat(),
-            )
-            _remove_associated_files(post)
             try:
-                writer_client.action(
+                result = writer_client.action(
                     "cleanup_processed_post_files_only", {"post_id": post.id}, wait=True
                 )
-            except Exception as exc:
+                if not result or not result.success:
+                    raise RuntimeError(
+                        getattr(result, "error", "Writer action returned failure")
+                    )
+            except Exception as exc:  # noqa: BLE001
                 logger.error(
                     "Cleanup failed for post %s (guid=%s): %s",
                     post.id,
@@ -178,6 +173,15 @@ def cleanup_processed_posts(retention_days: int | None) -> int:
                     exc,
                     exc_info=True,
                 )
+                continue
+
+            removed_posts += 1
+            logger.info(
+                "Cleanup removed post '%s' (guid=%s) completed before %s",
+                post.title,
+                post.guid,
+                cutoff.isoformat(),
+            )
 
         logger.info(
             "Cleanup job removed %s posts",
@@ -222,6 +226,7 @@ def _remove_associated_files(post: Post) -> None:
             logger.info("Cleanup deleted file: %s", file_path)
         except OSError as exc:
             logger.warning("Cleanup unable to delete %s: %s", file_path, exc)
+
 
 
 def _load_latest_completed_map(

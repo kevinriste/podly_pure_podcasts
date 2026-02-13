@@ -210,3 +210,30 @@ def get_effective_oneshot_model(config: Config) -> str:
         "One-shot model is not configured. Set ONESHOT_MODEL (or LLM_ONESHOT_MODEL) "
         "or configure llm.oneshot_model in settings."
     )
+
+
+def get_effective_oneshot_api_key(
+    config: Config | None = None, *, db_llm_api_key: Optional[str] = None
+) -> Optional[str]:
+    """Resolve one-shot API key with one-shot-specific precedence.
+
+    Order:
+    1) ONESHOT_API_KEY
+    2) LLM_API_KEY
+    3) DB llm_api_key value (or config.llm_api_key fallback)
+    """
+    env_oneshot_key = os.environ.get("ONESHOT_API_KEY")
+    if isinstance(env_oneshot_key, str) and env_oneshot_key.strip():
+        return env_oneshot_key.strip()
+
+    env_llm_key = os.environ.get("LLM_API_KEY")
+    if isinstance(env_llm_key, str) and env_llm_key.strip():
+        return env_llm_key.strip()
+
+    fallback_key = db_llm_api_key
+    if fallback_key is None and config is not None:
+        fallback_key = config.llm_api_key
+
+    if isinstance(fallback_key, str) and fallback_key.strip():
+        return fallback_key.strip()
+    return None

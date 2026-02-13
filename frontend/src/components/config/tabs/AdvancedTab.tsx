@@ -2,6 +2,7 @@ import { useConfigContext, type AdvancedSubtab } from '../ConfigContext';
 import {
   LLMSection,
   WhisperSection,
+  OneShotSection,
   ProcessingSection,
   OutputSection,
   AppSection,
@@ -10,6 +11,7 @@ import {
 const SUBTABS: { id: AdvancedSubtab; label: string }[] = [
   { id: 'llm', label: 'LLM' },
   { id: 'whisper', label: 'Whisper' },
+  { id: 'oneshot', label: 'One-shot' },
   { id: 'processing', label: 'Processing' },
   { id: 'output', label: 'Output' },
   { id: 'app', label: 'App' },
@@ -41,6 +43,7 @@ export default function AdvancedTab() {
       <div>
         {activeSubtab === 'llm' && <LLMSection />}
         {activeSubtab === 'whisper' && <WhisperSection />}
+        {activeSubtab === 'oneshot' && <OneShotSection />}
         {activeSubtab === 'processing' && <ProcessingSection />}
         {activeSubtab === 'output' && <OutputSection />}
         {activeSubtab === 'app' && <AppSection />}

@@ -50,6 +50,22 @@ const valuesDiffer = (a: unknown, b: unknown): boolean => {
   return true;
 };
 
+const getProbeErrorMessage = (
+  err: unknown,
+  fallback: string
+): string => {
+  const e = err as {
+    response?: { data?: { error?: string; message?: string } };
+    message?: string;
+  };
+  return (
+    e?.response?.data?.error ||
+    e?.response?.data?.message ||
+    e?.message ||
+    fallback
+  );
+};
+
 export interface ConnectionStatus {
   status: 'loading' | 'ok' | 'error';
   message: string;
@@ -246,51 +262,53 @@ export function useConfigState(): UseConfigStateReturn {
     setLlmStatus({ status: 'loading', message: '', error: '' });
     setWhisperStatus({ status: 'loading', message: '', error: '' });
 
-    try {
-      const [llmRes, whisperRes] = await Promise.all([
-        configApi.testLLM({ llm: pending.llm as LLMConfig }),
-        configApi.testWhisper({ whisper: pending.whisper as WhisperConfig }),
-      ]);
+    const [llmResult, whisperResult] = await Promise.allSettled([
+      configApi.testLLM({ llm: pending.llm as LLMConfig }),
+      configApi.testWhisper({ whisper: pending.whisper as WhisperConfig }),
+    ]);
 
-      if (llmRes?.ok) {
+    if (llmResult.status === 'fulfilled') {
+      if (llmResult.value?.ok) {
         setLlmStatus({
           status: 'ok',
-          message: llmRes.message || 'LLM connection OK',
+          message: llmResult.value.message || 'LLM connection OK',
           error: '',
         });
       } else {
         setLlmStatus({
           status: 'error',
           message: '',
-          error: llmRes?.error || 'LLM connection failed',
+          error: llmResult.value?.error || 'LLM connection failed',
         });
       }
+    } else {
+      setLlmStatus({
+        status: 'error',
+        message: '',
+        error: getProbeErrorMessage(llmResult.reason, 'LLM connection failed'),
+      });
+    }
 
-      if (whisperRes?.ok) {
+    if (whisperResult.status === 'fulfilled') {
+      if (whisperResult.value?.ok) {
         setWhisperStatus({
           status: 'ok',
-          message: whisperRes.message || 'Whisper connection OK',
+          message: whisperResult.value.message || 'Whisper connection OK',
           error: '',
         });
       } else {
         setWhisperStatus({
           status: 'error',
           message: '',
-          error: whisperRes?.error || 'Whisper test failed',
+          error: whisperResult.value?.error || 'Whisper test failed',
         });
       }
-    } catch (err: unknown) {
-      const e = err as {
-        response?: { data?: { error?: string; message?: string } };
-        message?: string;
-      };
-      const msg =
-        e?.response?.data?.error ||
-        e?.response?.data?.message ||
-        e?.message ||
-        'Connection test failed';
-      setLlmStatus({ status: 'error', message: '', error: msg });
-      setWhisperStatus({ status: 'error', message: '', error: msg });
+    } else {
+      setWhisperStatus({
+        status: 'error',
+        message: '',
+        error: getProbeErrorMessage(whisperResult.reason, 'Whisper test failed'),
+      });
     }
   };
 
