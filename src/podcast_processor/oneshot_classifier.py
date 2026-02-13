@@ -34,45 +34,30 @@ from shared.llm_utils import (
 # System prompt for one-shot ad detection
 ONESHOT_SYSTEM_PROMPT = """You are identifying advertisements in a podcast transcript.
 
-Include:
-- Sponsored ad reads from external companies
-- "Brought to you by" segments
-- Network promos / house ads
+Your job: find the ad segments and mark how confident you are that each segment is 100% an ad (not show content).
 
-Exclude:
-- Host talking about their own projects (books, courses, Patreon)
-- Educational content that happens to mention products
-- Genuine recommendations in conversation
+confidence = probability this segment is entirely an advertisement
+- 0.9+ → unmistakably an ad (sponsor pitch, offer code, CTA)
+- 0.5-0.9 → probably an ad but could be borderline
+- below 0.5 → more likely a transition or ambiguous
 
-For each ad, provide start_time, end_time (in seconds), and confidence (0.0-1.0).
-You may split a single ad into multiple segments if confidence varies across its duration.
-Strongly prefer boundary-aware segmentation at ad transitions: when confidence changes near the beginning/end of an ad, split those edge regions into separate segments with appropriately lower confidence instead of forcing one uniform segment.
-Do not force artificial splits if confidence is consistently high throughout a continuous ad.
+Use your judgment on what counts as an ad. Typical examples include sponsor reads, "brought to you by" segments, and network/house promos. Host self-promotion (their own books, Patreon, courses) and genuine conversational product mentions are generally not ads, but use your best judgment on edge cases.
 
-Boundary confidence guidance:
-- Core sponsor pitch / explicit CTA / offer code: typically high confidence (about 0.80-0.99).
-- Entry/exit transition lines (thanks sponsor, partial CTA fragments, hand-off back to hosts): often medium or low confidence (about 0.40-0.79).
-- If transcript flow clearly returns to normal show conversation, stop ad segments before that content.
-- If uncertain at a boundary, prefer a short low-confidence transition segment rather than extending a high-confidence ad segment into likely content.
+When confidence shifts within an ad — especially at the transitions in and out — split those portions into separate segments with appropriate confidence rather than forcing one uniform block. The beginnings and endings of ads are where you should be most granular. If the middle of an ad is clearly an ad throughout, keep it as one segment.
 
-Return a JSON object with an "ad_segments" array. Each segment should have:
-- start_time: float (seconds)
-- end_time: float (seconds)
-- confidence: float (0.0-1.0)
-- ad_type: string (optional: "sponsor", "house_ad", "transition")
-- reason: string (optional: brief explanation)"""
+Return JSON: {"ad_segments": [{"start_time": float, "end_time": float, "confidence": float, "label": string, "reason": string}]}
 
-# User prompt template
+label and reason are short free-text fields — use whatever descriptions feel most accurate."""
+
 ONESHOT_USER_PROMPT_TEMPLATE = """Podcast: "{title}"
 Description: {description}
 Duration: {duration:.1f} seconds
-
 {position_note}
 
 TRANSCRIPT:
 {transcript}
 
-Identify all advertisement segments with timestamps. Strongly prefer transition-aware segmentation with confidence gradients near ad boundaries (separate lower-confidence edge segments where appropriate). Return JSON with an "ad_segments" array."""
+Find all ad segments. Split transitions where your confidence shifts. Return JSON."""
 
 
 class OneShotClassifyException(Exception):
