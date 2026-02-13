@@ -484,7 +484,7 @@ export const authApi = {
     return response.data;
   },
 
-  listUsers: async (): Promise<{ users: Array<{ id: number; username: string; role: string; created_at: string; updated_at: string; last_active?: string | null; feed_allowance?: number; feed_subscription_status?: string; manual_feed_allowance?: number | null }> }> => {
+  listUsers: async (): Promise<{ users: Array<{ id: number; username: string; role: string; created_at: string; updated_at: string; last_active?: string | null; feed_allowance?: number; feed_subscription_status?: string; manual_feed_allowance?: number | null; ad_detection_strategy?: string; oneshot_model?: string | null }> }> => {
     const response = await api.get('/api/auth/users');
     return response.data;
   },
@@ -494,7 +494,7 @@ export const authApi = {
     return response.data;
   },
 
-  updateUser: async (username: string, payload: { password?: string; role?: string; manual_feed_allowance?: number | null }): Promise<{ status: string }> => {
+  updateUser: async (username: string, payload: { password?: string; role?: string; manual_feed_allowance?: number | null; ad_detection_strategy?: 'llm' | 'oneshot'; oneshot_model?: string | null }): Promise<{ status: string }> => {
     const response = await api.patch(`/api/auth/users/${username}`, payload);
     return response.data;
   },

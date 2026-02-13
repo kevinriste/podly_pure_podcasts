@@ -9,13 +9,13 @@ export interface Feed {
   member_count?: number;
   is_member?: boolean;
   is_active_subscription?: boolean;
-  ad_detection_strategy?: 'llm' | 'chapter';
+  ad_detection_strategy?: 'inherit' | 'llm' | 'oneshot' | 'chapter';
   chapter_filter_strings?: string | null;
   auto_whitelist_new_episodes_override?: boolean | null;
 }
 
 export interface FeedSettingsUpdate {
-  ad_detection_strategy?: 'llm' | 'chapter';
+  ad_detection_strategy?: 'inherit' | 'llm' | 'oneshot' | 'chapter';
   chapter_filter_strings?: string | null;
   auto_whitelist_new_episodes_override?: boolean | null;
 }
@@ -204,6 +204,8 @@ export interface ManagedUser extends AuthUser {
   created_at: string;
   updated_at: string;
   last_active?: string | null;
+  ad_detection_strategy?: 'llm' | 'oneshot';
+  oneshot_model?: string | null;
 }
 
 export interface DiscordStatus {
