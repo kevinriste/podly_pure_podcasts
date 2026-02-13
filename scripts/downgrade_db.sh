@@ -9,4 +9,4 @@ export PYTHONPATH="$REPO_ROOT/src"
 # Default to downgrading one revision if not specified
 REVISION=${1:-"-1"}
 
-pipenv run flask --app app db downgrade "$REVISION"
+uv run flask --app app db downgrade "$REVISION"

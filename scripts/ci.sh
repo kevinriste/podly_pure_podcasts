@@ -11,23 +11,23 @@ done
 
 # ensure dependencies are installed and are always up to date
 echo '============================================================='
-echo "Running 'pipenv sync --dev'"
+echo "Running 'uv sync --extra dev'"
 echo '============================================================='
-pipenv sync --dev
+uv sync --extra dev
 echo '============================================================='
-echo "Running 'pipenv run black .'"
+echo "Running 'uv run ruff format .'"
 echo '============================================================='
-pipenv run black .
+uv run ruff format .
 echo '============================================================='
-echo "Running 'pipenv run isort .'"
+echo "Running 'uv run isort .'"
 echo '============================================================='
-pipenv run isort .
+uv run isort .
 
 # lint and type check
 echo '============================================================='
-echo "Running 'pipenv run mypy . --install-types --non-interactive'"
+echo "Running 'uv run mypy . --install-types --non-interactive'"
 echo '============================================================='
-pipenv run mypy . \
+uv run mypy . \
     --install-types \
     --non-interactive \
     --explicit-package-bases \
@@ -39,20 +39,20 @@ pipenv run mypy . \
     --exclude 'src/app/routes.py'
 
 echo '============================================================='
-echo "Running 'pipenv run pylint src/ --ignore=migrations,tests'"
+echo "Running 'uv run pylint src/ --ignore=migrations,tests'"
 echo '============================================================='
-pipenv run pylint src/ --ignore=migrations,tests
+uv run pylint src/ --ignore=migrations,tests
 
 # run tests
 echo '============================================================='
-echo "Running 'pipenv run pytest --disable-warnings'"
+echo "Running 'uv run pytest --disable-warnings'"
 echo '============================================================='
-pipenv run pytest --disable-warnings
+uv run pytest --disable-warnings
 
 # Run integration tests only if --int flag is provided
 if [ "$RUN_INTEGRATION" = true ]; then
     echo '============================================================='
     echo "Running integration workflow checks..."
     echo '============================================================='
-    pipenv run python scripts/check_integration_workflow.py
+    uv run python scripts/check_integration_workflow.py
 fi
