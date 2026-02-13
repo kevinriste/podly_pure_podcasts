@@ -588,6 +588,12 @@ export const configApi = {
     const response = await api.post('/api/config/test-whisper', payload ?? {});
     return response.data;
   },
+  testOneShot: async (
+    payload: Partial<{ llm: LLMConfig }>
+  ): Promise<{ ok: boolean; message?: string; error?: string }> => {
+    const response = await api.post('/api/config/test-oneshot', payload ?? {});
+    return response.data;
+  },
   getWhisperCapabilities: async (): Promise<{ local_available: boolean }> => {
     const response = await api.get('/api/config/whisper-capabilities');
     const local_available = !!response.data?.local_available;
