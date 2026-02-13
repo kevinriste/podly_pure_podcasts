@@ -104,6 +104,9 @@ export interface LLMConfig {
   llm_api_key?: string | null;
   llm_api_key_preview?: string | null;
   llm_model: string;
+  oneshot_model?: string | null;
+  oneshot_max_chunk_duration_seconds: number;
+  oneshot_chunk_overlap_seconds: number;
   openai_base_url?: string | null;
   openai_timeout: number;
   openai_max_tokens: number;
@@ -155,6 +158,7 @@ export interface AppConfigUI {
   automatically_whitelist_new_episodes: boolean;
   post_cleanup_retention_days: number | null;
   number_of_episodes_to_whitelist_from_archive_of_new_feed: number;
+  ad_detection_strategy: 'llm' | 'oneshot';
   enable_public_landing_page: boolean;
   user_limit_total: number | null;
   autoprocess_on_download: boolean;
@@ -204,8 +208,6 @@ export interface ManagedUser extends AuthUser {
   created_at: string;
   updated_at: string;
   last_active?: string | null;
-  ad_detection_strategy?: 'llm' | 'oneshot';
-  oneshot_model?: string | null;
 }
 
 export interface DiscordStatus {

@@ -69,6 +69,14 @@ def _set_if_default(obj: Any, attr: str, new_val: Any, default_val: Any) -> bool
     return False
 
 
+def _get_env_oneshot_model() -> str | None:
+    env_val = os.environ.get("ONESHOT_MODEL") or os.environ.get("LLM_ONESHOT_MODEL")
+    if not env_val:
+        return None
+    normalized = env_val.strip()
+    return normalized or None
+
+
 def _ensure_row(model: type, defaults: dict[str, Any]) -> Any:
     row = db.session.get(model, 1)
     if row is None:
@@ -104,6 +112,8 @@ def ensure_defaults() -> None:
         LLMSettings,
         {
             "llm_model": DEFAULTS.LLM_DEFAULT_MODEL,
+            "oneshot_max_chunk_duration_seconds": 7200,
+            "oneshot_chunk_overlap_seconds": 900,
             "openai_timeout": DEFAULTS.OPENAI_DEFAULT_TIMEOUT_SEC,
             "openai_max_tokens": DEFAULTS.OPENAI_DEFAULT_MAX_TOKENS,
             "llm_max_concurrent_calls": DEFAULTS.LLM_DEFAULT_MAX_CONCURRENT_CALLS,
@@ -154,6 +164,7 @@ def ensure_defaults() -> None:
             "automatically_whitelist_new_episodes": DEFAULTS.APP_AUTOMATICALLY_WHITELIST_NEW_EPISODES,
             "post_cleanup_retention_days": DEFAULTS.APP_POST_CLEANUP_RETENTION_DAYS,
             "number_of_episodes_to_whitelist_from_archive_of_new_feed": DEFAULTS.APP_NUM_EPISODES_TO_WHITELIST_FROM_ARCHIVE_OF_NEW_FEED,
+            "ad_detection_strategy": DEFAULTS.AD_DETECTION_DEFAULT_STRATEGY,
             "enable_public_landing_page": DEFAULTS.APP_ENABLE_PUBLIC_LANDING_PAGE,
             "user_limit_total": DEFAULTS.APP_USER_LIMIT_TOTAL,
             "autoprocess_on_download": DEFAULTS.APP_AUTOPROCESS_ON_DOWNLOAD,
@@ -440,6 +451,9 @@ def read_combined() -> dict[str, Any]:
         "llm": {
             "llm_api_key": llm.llm_api_key,
             "llm_model": llm.llm_model,
+            "oneshot_model": llm.oneshot_model,
+            "oneshot_max_chunk_duration_seconds": llm.oneshot_max_chunk_duration_seconds,
+            "oneshot_chunk_overlap_seconds": llm.oneshot_chunk_overlap_seconds,
             "openai_base_url": llm.openai_base_url,
             "openai_timeout": llm.openai_timeout,
             "openai_max_tokens": llm.openai_max_tokens,
@@ -466,6 +480,7 @@ def read_combined() -> dict[str, Any]:
             "automatically_whitelist_new_episodes": app_s.automatically_whitelist_new_episodes,
             "post_cleanup_retention_days": app_s.post_cleanup_retention_days,
             "number_of_episodes_to_whitelist_from_archive_of_new_feed": app_s.number_of_episodes_to_whitelist_from_archive_of_new_feed,
+            "ad_detection_strategy": app_s.ad_detection_strategy,
             "enable_public_landing_page": app_s.enable_public_landing_page,
             "user_limit_total": app_s.user_limit_total,
             "autoprocess_on_download": app_s.autoprocess_on_download,
@@ -479,6 +494,9 @@ def _update_section_llm(data: dict[str, Any]) -> None:
     for key in [
         "llm_api_key",
         "llm_model",
+        "oneshot_model",
+        "oneshot_max_chunk_duration_seconds",
+        "oneshot_chunk_overlap_seconds",
         "openai_base_url",
         "openai_timeout",
         "openai_max_tokens",
@@ -493,6 +511,11 @@ def _update_section_llm(data: dict[str, Any]) -> None:
         if key in data:
             new_val = data[key]
             if key == "llm_api_key" and _is_empty(new_val):
+                continue
+            if key == "oneshot_model" and _get_env_oneshot_model() is not None:
+                logger.info(
+                    "Skipping llm.oneshot_model DB update because ONESHOT_MODEL env override is set."
+                )
                 continue
             setattr(row, key, new_val)
     safe_commit(
@@ -600,6 +623,7 @@ def _update_section_app(data: dict[str, Any]) -> tuple[int | None, int | None]:
         "automatically_whitelist_new_episodes",
         "post_cleanup_retention_days",
         "number_of_episodes_to_whitelist_from_archive_of_new_feed",
+        "ad_detection_strategy",
         "enable_public_landing_page",
         "user_limit_total",
         "autoprocess_on_download",
@@ -720,6 +744,13 @@ def to_pydantic_config() -> PydanticConfig:
     return PydanticConfig(
         llm_api_key=data["llm"].get("llm_api_key"),
         llm_model=data["llm"].get("llm_model", DEFAULTS.LLM_DEFAULT_MODEL),
+        oneshot_model=data["llm"].get("oneshot_model"),
+        oneshot_max_chunk_duration_seconds=int(
+            data["llm"].get("oneshot_max_chunk_duration_seconds", 7200) or 7200
+        ),
+        oneshot_chunk_overlap_seconds=int(
+            data["llm"].get("oneshot_chunk_overlap_seconds", 900) or 900
+        ),
         openai_base_url=data["llm"].get("openai_base_url"),
         openai_max_tokens=int(
             data["llm"].get("openai_max_tokens", DEFAULTS.OPENAI_DEFAULT_MAX_TOKENS)
@@ -782,6 +813,10 @@ def to_pydantic_config() -> PydanticConfig:
                 DEFAULTS.APP_NUM_EPISODES_TO_WHITELIST_FROM_ARCHIVE_OF_NEW_FEED,
             )
             or DEFAULTS.APP_NUM_EPISODES_TO_WHITELIST_FROM_ARCHIVE_OF_NEW_FEED
+        ),
+        ad_detection_strategy=(
+            data["app"].get("ad_detection_strategy")
+            or DEFAULTS.AD_DETECTION_DEFAULT_STRATEGY
         ),
         enable_public_landing_page=bool(
             data["app"].get(
@@ -846,6 +881,10 @@ def _apply_top_level_env_overrides(cfg: PydanticConfig) -> None:
     env_openai_base_url = os.environ.get("OPENAI_BASE_URL")
     if env_openai_base_url:
         cfg.openai_base_url = env_openai_base_url
+
+    env_oneshot_model = _get_env_oneshot_model()
+    if env_oneshot_model:
+        cfg.oneshot_model = env_oneshot_model
 
 
 def _apply_whisper_env_overrides(cfg: PydanticConfig) -> None:

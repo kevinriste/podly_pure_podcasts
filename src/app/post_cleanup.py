@@ -62,13 +62,14 @@ def _get_most_recent_posts_per_feed(post_guids: Sequence[str]) -> set[str]:
 def _get_post_timestamp(
     post: Post, latest_completed: dict[str, datetime | None]
 ) -> datetime | None:
-    """Get the most recent timestamp for a post (file or job completion)."""
-    file_timestamp = _get_processed_file_timestamp(post)
-    job_timestamp = latest_completed.get(post.guid)
+    """Get a post timestamp for recency comparison.
 
-    if file_timestamp and job_timestamp:
-        return max(file_timestamp, job_timestamp)
-    return file_timestamp or job_timestamp
+    Prefer job completion time when present; fall back to processed file mtime.
+    """
+    job_timestamp = latest_completed.get(post.guid)
+    if job_timestamp:
+        return job_timestamp
+    return _get_processed_file_timestamp(post)
 
 
 def _build_cleanup_query(

@@ -174,8 +174,11 @@ export const feedsApi = {
     return response.data;
   },
 
-  reprocessPost: async (guid: string): Promise<{ status: string; job_id?: string; message: string; download_url?: string }> => {
-    const response = await api.post(`/api/posts/${guid}/reprocess`);
+  reprocessPost: async (
+    guid: string,
+    payload?: { force_retranscribe?: boolean }
+  ): Promise<{ status: string; job_id?: string; message: string; download_url?: string }> => {
+    const response = await api.post(`/api/posts/${guid}/reprocess`, payload ?? {});
     return response.data;
   },
 
@@ -258,7 +261,7 @@ export const feedsApi = {
       whitelisted: boolean;
       has_processed_audio: boolean;
     };
-    ad_detection_strategy: 'llm' | 'chapter';
+    ad_detection_strategy: 'llm' | 'oneshot' | 'chapter';
     processing_stats: {
       total_segments: number;
       total_model_calls: number;
@@ -484,7 +487,7 @@ export const authApi = {
     return response.data;
   },
 
-  listUsers: async (): Promise<{ users: Array<{ id: number; username: string; role: string; created_at: string; updated_at: string; last_active?: string | null; feed_allowance?: number; feed_subscription_status?: string; manual_feed_allowance?: number | null; ad_detection_strategy?: string; oneshot_model?: string | null }> }> => {
+  listUsers: async (): Promise<{ users: Array<{ id: number; username: string; role: string; created_at: string; updated_at: string; last_active?: string | null; feed_allowance?: number; feed_subscription_status?: string; manual_feed_allowance?: number | null }> }> => {
     const response = await api.get('/api/auth/users');
     return response.data;
   },
@@ -494,7 +497,7 @@ export const authApi = {
     return response.data;
   },
 
-  updateUser: async (username: string, payload: { password?: string; role?: string; manual_feed_allowance?: number | null; ad_detection_strategy?: 'llm' | 'oneshot'; oneshot_model?: string | null }): Promise<{ status: string }> => {
+  updateUser: async (username: string, payload: { password?: string; role?: string; manual_feed_allowance?: number | null }): Promise<{ status: string }> => {
     const response = await api.patch(`/api/auth/users/${username}`, payload);
     return response.data;
   },

@@ -94,6 +94,19 @@ def _hydrate_llm_config(data: dict[str, Any]) -> None:
     llm = data["llm"]
     llm["llm_api_key"] = getattr(runtime_config, "llm_api_key", llm.get("llm_api_key"))
     llm["llm_model"] = getattr(runtime_config, "llm_model", llm.get("llm_model"))
+    llm["oneshot_model"] = getattr(
+        runtime_config, "oneshot_model", llm.get("oneshot_model")
+    )
+    llm["oneshot_max_chunk_duration_seconds"] = getattr(
+        runtime_config,
+        "oneshot_max_chunk_duration_seconds",
+        llm.get("oneshot_max_chunk_duration_seconds"),
+    )
+    llm["oneshot_chunk_overlap_seconds"] = getattr(
+        runtime_config,
+        "oneshot_chunk_overlap_seconds",
+        llm.get("oneshot_chunk_overlap_seconds"),
+    )
     llm["openai_base_url"] = getattr(
         runtime_config, "openai_base_url", llm.get("openai_base_url")
     )
@@ -192,6 +205,11 @@ def _get_attr_or_value(source: Any, key: str, default: Any) -> Any:
 def _hydrate_app_config(data: dict[str, Any]) -> None:
     data.setdefault("app", {})
     app_cfg = data["app"]
+    app_cfg["ad_detection_strategy"] = getattr(
+        runtime_config,
+        "ad_detection_strategy",
+        app_cfg.get("ad_detection_strategy"),
+    )
     app_cfg["post_cleanup_retention_days"] = getattr(
         runtime_config,
         "post_cleanup_retention_days",
@@ -255,6 +273,21 @@ def _register_llm_overrides(overrides: dict[str, Any]) -> None:
     llm_model = os.environ.get("LLM_MODEL")
     if llm_model:
         _register_override(overrides, "llm.llm_model", "LLM_MODEL", llm_model)
+
+    oneshot_model = os.environ.get("ONESHOT_MODEL") or os.environ.get(
+        "LLM_ONESHOT_MODEL"
+    )
+    if oneshot_model:
+        _register_override(
+            overrides,
+            "llm.oneshot_model",
+            (
+                "ONESHOT_MODEL"
+                if os.environ.get("ONESHOT_MODEL")
+                else "LLM_ONESHOT_MODEL"
+            ),
+            oneshot_model,
+        )
 
 
 def _register_groq_shared_overrides(overrides: dict[str, Any]) -> None:

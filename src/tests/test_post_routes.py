@@ -247,7 +247,9 @@ def test_reprocess_returns_snapshot_path_when_created(app):
         mock.patch("app.routes.post_routes.clear_post_identifications_only"),
         mock.patch("app.routes.post_routes.get_jobs_manager") as mock_mgr,
     ):
-        mock_snapshot.return_value = Path("/tmp/reprocess-snapshots/reprocess-guid.json")
+        mock_snapshot.return_value = Path(
+            "/tmp/reprocess-snapshots/reprocess-guid.json"
+        )
         mock_mgr.return_value.start_post_processing.return_value = {
             "status": "started",
             "job_id": "job-reprocess-1",
@@ -265,9 +267,7 @@ def test_reprocess_returns_snapshot_path_when_created(app):
         data = response.get_json()
         assert data["status"] == "started"
         assert "transcript preserved" in data["message"].lower()
-        assert (
-            data["snapshot_path"] == "/tmp/reprocess-snapshots/reprocess-guid.json"
-        )
+        assert data["snapshot_path"] == "/tmp/reprocess-snapshots/reprocess-guid.json"
 
 
 def test_toggle_whitelist_all_requires_admin(app):

@@ -52,12 +52,14 @@ class WordBoundaryRefiner:
         )
         if path.exists():
             return Template(path.read_text())
-        return Template("""Find start/end phrases for the ad break.
+        return Template(
+            """Find start/end phrases for the ad break.
 Ad: {{ad_start}}s-{{ad_end}}s
 {% for seg in context_segments %}[seq={{seg.sequence_num}} start={{seg.start_time}} end={{seg.end_time}}] {{seg.text}}
 {% endfor %}
     Return JSON: {"refined_start_segment_seq": 0, "refined_start_phrase": "", "refined_end_segment_seq": 0, "refined_end_phrase": "", "start_adjustment_reason": "", "end_adjustment_reason": ""}
-""")
+"""
+        )
 
     def refine(
         self,

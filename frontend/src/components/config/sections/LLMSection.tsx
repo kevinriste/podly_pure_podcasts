@@ -23,6 +23,9 @@ export default function LLMSection() {
 
   if (!pending) return null;
 
+  const oneshotEnvMeta = getEnvHint('llm.oneshot_model');
+  const oneshotLockedByEnv = oneshotEnvMeta?.value !== undefined;
+
   const handleTestLLM = () => {
     toast.promise(configApi.testLLM({ llm: pending.llm as LLMConfig }), {
       loading: 'Testing LLM connection...',
@@ -98,6 +101,51 @@ export default function LLMSection() {
                 placeholder="e.g. groq/openai/gpt-oss-120b"
               />
             </div>
+          </Field>
+          <Field label="One-shot Model" envMeta={oneshotEnvMeta}>
+            <input
+              className="input"
+              type="text"
+              value={pending?.llm?.oneshot_model ?? ''}
+              onChange={(e) =>
+                setField(
+                  ['llm', 'oneshot_model'],
+                  e.target.value.trim() === '' ? null : e.target.value
+                )
+              }
+              disabled={oneshotLockedByEnv}
+              placeholder="e.g. openai/gpt-5-mini"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              {oneshotLockedByEnv
+                ? 'Set via environment variable; editing is disabled.'
+                : 'Used when ad detection strategy is set to One-shot LLM.'}
+            </p>
+          </Field>
+          <Field label="One-shot Max Chunk Duration (sec)">
+            <input
+              className="input"
+              type="number"
+              min={1}
+              value={pending?.llm?.oneshot_max_chunk_duration_seconds ?? 7200}
+              onChange={(e) =>
+                setField(
+                  ['llm', 'oneshot_max_chunk_duration_seconds'],
+                  Number(e.target.value)
+                )
+              }
+            />
+          </Field>
+          <Field label="One-shot Chunk Overlap (sec)">
+            <input
+              className="input"
+              type="number"
+              min={0}
+              value={pending?.llm?.oneshot_chunk_overlap_seconds ?? 900}
+              onChange={(e) =>
+                setField(['llm', 'oneshot_chunk_overlap_seconds'], Number(e.target.value))
+              }
+            />
           </Field>
           <Field label="OpenAI Timeout (sec)">
             <input

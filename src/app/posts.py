@@ -1,5 +1,5 @@
-import logging
 import json
+import logging
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -251,7 +251,9 @@ def snapshot_post_processing_data(
                 ensure_ascii=True,
                 default=_json_default,
             )
-        logger.info("Saved reprocess snapshot for post %s at %s", post.id, snapshot_path)
+        logger.info(
+            "Saved reprocess snapshot for post %s at %s", post.id, snapshot_path
+        )
         return snapshot_path
     except Exception as exc:  # pylint: disable=broad-except
         logger.error(

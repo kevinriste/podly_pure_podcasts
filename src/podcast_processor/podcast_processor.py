@@ -30,7 +30,7 @@ from podcast_processor.prompt import (
     DEFAULT_USER_PROMPT_TEMPLATE_PATH,
 )
 from podcast_processor.transcription_manager import TranscriptionManager
-from shared.config import Config
+from shared.config import Config, get_effective_oneshot_model
 from shared.processing_paths import (
     ProcessingPaths,
     get_job_unprocessed_path,
@@ -161,14 +161,11 @@ class PodcastProcessor:
         cached_job_id = job.id
         cached_current_step = job.current_step
         # Get ad detection strategy: feed explicit override takes precedence,
-        # then fall back to user's default strategy
-        cached_user_strategy = "llm"
-        cached_user_oneshot_model = None
-        if job.billing_user:
-            cached_user_strategy = (
-                getattr(job.billing_user, "ad_detection_strategy", None) or "llm"
-            )
-            cached_user_oneshot_model = getattr(job.billing_user, "oneshot_model", None)
+        # then fall back to the global app default.
+        cached_global_strategy = (
+            getattr(self.config, "ad_detection_strategy", None) or "llm"
+        )
+        cached_global_oneshot_model = getattr(self.config, "oneshot_model", None)
 
         cached_feed_strategy = getattr(post.feed, "ad_detection_strategy", "inherit")
         cached_chapter_filter_strings = getattr(
@@ -177,11 +174,11 @@ class PodcastProcessor:
 
         # Determine effective strategy:
         # - Feed explicit value ("chapter", "oneshot", "llm") wins
-        # - "inherit" → use user default
+        # - "inherit" → use global default
         if cached_feed_strategy != "inherit":
             cached_ad_detection_strategy = cached_feed_strategy
         else:
-            cached_ad_detection_strategy = cached_user_strategy
+            cached_ad_detection_strategy = cached_global_strategy
 
         try:
             self.logger.debug(
@@ -261,7 +258,7 @@ class PodcastProcessor:
                     cancel_callback,
                     cached_ad_detection_strategy,
                     cached_chapter_filter_strings,
-                    cached_user_oneshot_model,
+                    cached_global_oneshot_model,
                 )
 
                 self.logger.info(f"Processing podcast: {post} complete")
@@ -465,17 +462,21 @@ class PodcastProcessor:
             db_session=self.db_session,
         )
 
+        try:
+            effective_model = model_override or get_effective_oneshot_model(self.config)
+        except ValueError as model_error:
+            raise ProcessorException(str(model_error)) from model_error
         ad_segments = oneshot_classifier.classify(
             transcript_segments=transcript_segments,
             post=post,
-            model_override=model_override,
+            model_override=effective_model,
         )
         self._raise_if_cancelled(job, 3, cancel_callback)
 
         # Create identification records for UI/database visibility
         if ad_segments:
             model_call = oneshot_classifier.get_model_call_for_post(
-                post, model_override or self.config.oneshot.model
+                post, effective_model
             )
             if model_call:
                 oneshot_classifier.create_identifications(
