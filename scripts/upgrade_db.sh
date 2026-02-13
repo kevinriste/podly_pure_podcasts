@@ -6,4 +6,4 @@ REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 export PODLY_INSTANCE_DIR="$REPO_ROOT/src/instance"
 export PYTHONPATH="$REPO_ROOT/src"
 
-pipenv run flask --app app db upgrade
+uv run flask --app app db upgrade
