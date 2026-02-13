@@ -19,9 +19,9 @@ echo "Running 'uv run ruff format .'"
 echo '============================================================='
 uv run ruff format .
 echo '============================================================='
-echo "Running 'uv run isort .'"
+echo "Running 'uv run ruff check --select I --fix .'"
 echo '============================================================='
-uv run isort .
+uv run ruff check --select I --fix .
 
 # lint and type check
 echo '============================================================='

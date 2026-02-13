@@ -986,7 +986,6 @@ dependencies = [
 [package.optional-dependencies]
 dev = [
     { name = "dill" },
-    { name = "isort" },
     { name = "mypy" },
     { name = "pylint" },
     { name = "pytest" },
@@ -1019,7 +1018,6 @@ requires-dist = [
     { name = "flask-migrate" },
     { name = "flask-sqlalchemy" },
     { name = "groq" },
-    { name = "isort", marker = "extra == 'dev'" },
     { name = "jinja2" },
     { name = "litellm", specifier = ">=1.59.8,<1.75.0" },
     { name = "mutagen" },

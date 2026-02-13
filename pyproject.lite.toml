@@ -53,7 +53,6 @@ dev = [
     "pylint",
     "pytest",
     "dill",
-    "isort",
     "types-flask-migrate",
     "pytest-mock",
     "watchdog",

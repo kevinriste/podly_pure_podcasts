@@ -55,7 +55,6 @@ dev = [
     "pylint",
     "pytest",
     "dill",
-    "isort",
     "types-flask-migrate",
     "pytest-mock",
     "watchdog",
@@ -93,7 +92,5 @@ testpaths = []  # No test paths - tests converted to standalone scripts
 line-length = 88
 target-version = "py311"
 
-[tool.isort]
-profile = "black"
-line_length = 88
-float_to_top = true
+[tool.ruff.lint]
+extend-select = ["I"]

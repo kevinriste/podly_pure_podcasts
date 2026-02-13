@@ -53,8 +53,8 @@ jobs:
       - name: Run ruff format
         run: uv run ruff format --check src
 
-      - name: Run isort
-        run: uv run isort --check-only src
+      - name: Run ruff import sorting
+        run: uv run ruff check --select I src
 
       - name: Run pytest
         run: uv run pytest --disable-warnings
