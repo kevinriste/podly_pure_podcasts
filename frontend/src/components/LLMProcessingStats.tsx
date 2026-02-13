@@ -60,6 +60,47 @@ export default function LLMProcessingStats({
     setExpandedModelCalls(newExpanded);
   };
 
+  const formatConfidence = (value: number | null | undefined) => {
+    if (value === null || value === undefined) {
+      return 'N/A';
+    }
+    return value.toFixed(2);
+  };
+
+  const getTranscriptSegmentConfidence = (
+    segment: {
+      primary_label: 'ad' | 'content';
+      identifications: Array<{ label: string; confidence: number | null }>;
+    }
+  ): number | null => {
+    const adConfidences = segment.identifications
+      .filter(
+        (identification) =>
+          identification.label === 'ad' &&
+          identification.confidence !== null &&
+          identification.confidence !== undefined
+      )
+      .map((identification) => identification.confidence as number);
+
+    if (segment.primary_label === 'ad' && adConfidences.length > 0) {
+      return Math.max(...adConfidences);
+    }
+
+    const allConfidences = segment.identifications
+      .filter(
+        (identification) =>
+          identification.confidence !== null &&
+          identification.confidence !== undefined
+      )
+      .map((identification) => identification.confidence as number);
+
+    if (allConfidences.length === 0) {
+      return null;
+    }
+
+    return Math.max(...allConfidences);
+  };
+
   if (!isStatsReady) {
     return null;
   }
@@ -424,6 +465,7 @@ export default function LLMProcessingStats({
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Seq #</th>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time Range</th>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Label</th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Confidence</th>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Text</th>
                               </tr>
                             </thead>
@@ -446,6 +488,9 @@ export default function LLMProcessingStats({
                                         ? (segment.mixed ? 'Ad (mixed)' : 'Ad')
                                         : 'Content'}
                                     </span>
+                                  </td>
+                                  <td className="px-4 py-3 text-sm text-gray-600">
+                                    {formatConfidence(getTranscriptSegmentConfidence(segment))}
                                   </td>
                                   <td className="px-4 py-3 text-sm text-gray-900 max-w-md">
                                     <div className="truncate text-left" title={segment.text}>
@@ -500,7 +545,7 @@ export default function LLMProcessingStats({
                                     </span>
                                   </td>
                                   <td className="px-4 py-3 text-sm text-gray-600">
-                                    {identification.confidence ? identification.confidence.toFixed(2) : 'N/A'}
+                                    {formatConfidence(identification.confidence)}
                                   </td>
                                   <td className="px-4 py-3 text-sm text-gray-600">{identification.model_call_id}</td>
                                   <td className="px-4 py-3 text-sm text-gray-900 max-w-md">

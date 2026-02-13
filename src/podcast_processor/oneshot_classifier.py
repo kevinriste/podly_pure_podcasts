@@ -46,6 +46,14 @@ Exclude:
 
 For each ad, provide start_time, end_time (in seconds), and confidence (0.0-1.0).
 You may split a single ad into multiple segments if confidence varies across its duration.
+Strongly prefer boundary-aware segmentation at ad transitions: when confidence changes near the beginning/end of an ad, split those edge regions into separate segments with appropriately lower confidence instead of forcing one uniform segment.
+Do not force artificial splits if confidence is consistently high throughout a continuous ad.
+
+Boundary confidence guidance:
+- Core sponsor pitch / explicit CTA / offer code: typically high confidence (about 0.80-0.99).
+- Entry/exit transition lines (thanks sponsor, partial CTA fragments, hand-off back to hosts): often medium or low confidence (about 0.40-0.79).
+- If transcript flow clearly returns to normal show conversation, stop ad segments before that content.
+- If uncertain at a boundary, prefer a short low-confidence transition segment rather than extending a high-confidence ad segment into likely content.
 
 Return a JSON object with an "ad_segments" array. Each segment should have:
 - start_time: float (seconds)
@@ -64,7 +72,7 @@ Duration: {duration:.1f} seconds
 TRANSCRIPT:
 {transcript}
 
-Identify all advertisement segments with timestamps. Return JSON with an "ad_segments" array."""
+Identify all advertisement segments with timestamps. Strongly prefer transition-aware segmentation with confidence gradients near ad boundaries (separate lower-confidence edge segments where appropriate). Return JSON with an "ad_segments" array."""
 
 
 class OneShotClassifyException(Exception):
