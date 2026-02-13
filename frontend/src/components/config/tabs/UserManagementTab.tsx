@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { toast } from 'react-hot-toast';
 import { authApi } from '../../../services/api';
 import { useAuth } from '../../../contexts/AuthContext';
+import { useTimestampFormatter } from '../../../hooks/useTimestampFormatter';
 import { useConfigContext } from '../ConfigContext';
 import { Section, Field, SaveButton } from '../shared';
 import type { ManagedUser } from '../../../types';
@@ -207,6 +208,7 @@ interface UserManagementProps {
 }
 
 function UserManagementSection({ currentUser, refreshUser, logout, managedUsers, usersLoading, refetchUsers }: UserManagementProps) {
+  const { formatDateTime } = useTimestampFormatter();
   const [newUser, setNewUser] = useState({ username: '', password: '', confirm: '', role: 'user' });
   const [activeResetUser, setActiveResetUser] = useState<string | null>(null);
   const [resetPassword, setResetPassword] = useState('');
@@ -397,9 +399,9 @@ function UserManagementSection({ currentUser, refreshUser, logout, managedUsers,
                       <div>
                         <div className="text-sm font-semibold text-gray-900">{managed.username}</div>
                         <div className="text-xs text-gray-500">
-                          Added {new Date(managed.created_at).toLocaleString()} • Role {managed.role} • Feeds {allowance} • Status {subscriptionStatus}
+                          Added {formatDateTime(managed.created_at)} • Role {managed.role} • Feeds {allowance} • Status {subscriptionStatus}
                           {managed.last_active && (
-                            <> • Last Active {new Date(managed.last_active).toLocaleString()}</>
+                            <> • Last Active {formatDateTime(managed.last_active)}</>
                           )}
                         </div>
                       </div>

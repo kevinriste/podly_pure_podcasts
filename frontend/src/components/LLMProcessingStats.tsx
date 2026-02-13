@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { feedsApi } from '../services/api';
+import { useTimestampFormatter } from '../hooks/useTimestampFormatter';
 
 interface LLMProcessingStatsProps {
   episodeGuid: string;
-  hasProcessedAudio: boolean;
+  isStatsReady: boolean;
   className?: string;
 }
 
@@ -12,9 +13,10 @@ type TabId = 'overview' | 'model-calls' | 'transcript' | 'identifications';
 
 export default function LLMProcessingStats({
   episodeGuid,
-  hasProcessedAudio,
+  isStatsReady,
   className = ''
 }: LLMProcessingStatsProps) {
+  const { formatDateTime } = useTimestampFormatter();
   const [showModal, setShowModal] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>('overview');
   const [expandedModelCalls, setExpandedModelCalls] = useState<Set<number>>(new Set());
@@ -22,7 +24,7 @@ export default function LLMProcessingStats({
   const { data: stats, isLoading, error } = useQuery({
     queryKey: ['episode-stats', episodeGuid],
     queryFn: () => feedsApi.getPostStats(episodeGuid),
-    enabled: showModal && hasProcessedAudio,
+    enabled: showModal && isStatsReady,
   });
 
   const formatDuration = (seconds: number) => {
@@ -48,11 +50,6 @@ export default function LLMProcessingStats({
     return `${minutes}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const formatTimestamp = (timestamp: string | null) => {
-    if (!timestamp) return 'N/A';
-    return new Date(timestamp).toLocaleString();
-  };
-
   const toggleModelCallDetails = (callId: number) => {
     const newExpanded = new Set(expandedModelCalls);
     if (newExpanded.has(callId)) {
@@ -63,7 +60,7 @@ export default function LLMProcessingStats({
     setExpandedModelCalls(newExpanded);
   };
 
-  if (!hasProcessedAudio) {
+  if (!isStatsReady) {
     return null;
   }
 
@@ -364,7 +361,7 @@ export default function LLMProcessingStats({
                                         {call.status}
                                       </span>
                                     </td>
-                                    <td className="px-4 py-3 text-sm text-gray-600">{formatTimestamp(call.timestamp)}</td>
+                                    <td className="px-4 py-3 text-sm text-gray-600">{call.timestamp ? formatDateTime(call.timestamp) : 'N/A'}</td>
                                     <td className="px-4 py-3 text-sm text-gray-600">{call.retry_attempts}</td>
                                     <td className="px-4 py-3">
                                       <button
