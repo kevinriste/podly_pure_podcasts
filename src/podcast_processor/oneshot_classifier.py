@@ -71,7 +71,11 @@ Duration: {duration:.1f} seconds
 TRANSCRIPT:
 {transcript}
 
-Find all ad segments. Split transitions where your confidence shifts. Strongly prefer transition-aware segmentation with confidence gradients near ad boundaries (separate lower-confidence edge segments where appropriate). Return JSON."""
+Find all ad segments and a few adjacent transition segments on each side of the ad, if possible. 
+Err on the side of returning multiple segments with different confidence levels, especially where your confidence in something being an ad shifts.
+Strongly prefer transition-aware segmentation with confidence gradients near ad boundaries (separate lower-confidence edge segments where appropriate).
+I would rather have too much to work with, lots of low-confidence segments, than have no information at all about segments in and around an ad.
+Return JSON."""
 
 
 class OneShotClassifyException(Exception):
