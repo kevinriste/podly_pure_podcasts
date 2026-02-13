@@ -13,7 +13,7 @@ Unlike the chunked AdClassifier, this approach:
 import json
 import logging
 import time
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 import litellm
 from pydantic import ValidationError
@@ -34,20 +34,34 @@ from shared.llm_utils import (
 # System prompt for one-shot ad detection
 ONESHOT_SYSTEM_PROMPT = """You are identifying advertisements in a podcast transcript.
 
-Your job: find the ad segments and mark how confident you are that each segment is 100% an ad (not show content).
+Your job: find the ad segments and mark how confident you are that each segment is part of an ad rather than regular show content.
 
-confidence = probability this segment is entirely an advertisement
-- 0.9+ → unmistakably an ad (sponsor pitch, offer code, CTA)
-- 0.5-0.9 → probably an ad but could be borderline
-- below 0.5 → more likely a transition or ambiguous
+confidence = how likely this segment is part of an ad, not regular show content.
 
-Use your judgment on what counts as an ad. Typical examples include sponsor reads, "brought to you by" segments, and network/house promos. Host self-promotion (their own books, Patreon, courses) and genuine conversational product mentions are generally not ads, but use your best judgment on edge cases.
+Use your judgment on what counts as an ad. Sponsor reads, "brought to you by" segments, and network/house promos are typical examples. Host self-promotion (their own books, Patreon, courses) and genuine conversational product mentions are generally not ads, but use your best judgment on edge cases.
 
-When confidence shifts within an ad — especially at the transitions in and out — split those portions into separate segments with appropriate confidence rather than forcing one uniform block. The beginnings and endings of ads are where you should be most granular. If the middle of an ad is clearly an ad throughout, keep it as one segment.
+TRANSITION HANDLING (important):
+When confidence shifts within an ad — especially at the entrances and exits — split those portions into separate segments with appropriately lower confidence rather than forcing one uniform block.
 
-Return JSON: {"ad_segments": [{"start_time": float, "end_time": float, "confidence": float, "label": string, "reason": string}]}
+Examples of transition moments worth splitting out at lower confidence:
+- "Thanks, [sponsor]" or sign-off lines after a sponsor read
+- Repeated CTAs at the tail end of a read ("that's example.com/offer, example.com/offer")
+- Opening lines that set up an ad before naming the sponsor
+- Hand-backs to the show ("anyway, back to...")
 
-label and reason are short free-text fields — use whatever descriptions feel most accurate."""
+When in doubt at a boundary, err toward an appropriate confidence ad segment rather than classifying it as not-an-ad-at-all. These lines are still part of the ad — just with less certainty. Content only begins when the show has genuinely resumed its normal topic.
+
+  Boundary confidence guidance:
+  - If uncertain at a boundary, prefer a one or more differential confidence transition segments rather than extending a high-confidence ad segment into likely content, cutting it inappropriately short.
+
+Broadly: it's perfectly fine to provide segments that don't seem like ads, just provide them with appropriately lower confidence. The goal is to capture the full extent of the ad, including transition moments, rather than missing parts of it entirely. I will make a decision on my end about which confidence level items to keep.
+
+  Return a JSON object with an "ad_segments" array. Each segment should have:
+  - start_time: float (seconds)
+  - end_time: float (seconds)
+  - confidence: float (0.00-1.00)
+  - ad_type: string (optional: "transition to ad", "beginning of ad", "ad content", "end of ad", "transition to content", or other similar descriptive label)
+  - reason: string (optional: brief explanation)"""
 
 ONESHOT_USER_PROMPT_TEMPLATE = """Podcast: "{title}"
 Description: {description}
@@ -57,7 +71,7 @@ Duration: {duration:.1f} seconds
 TRANSCRIPT:
 {transcript}
 
-Find all ad segments. Split transitions where your confidence shifts. Return JSON."""
+Find all ad segments. Split transitions where your confidence shifts. Strongly prefer transition-aware segmentation with confidence gradients near ad boundaries (separate lower-confidence edge segments where appropriate). Return JSON."""
 
 
 class OneShotClassifyException(Exception):
@@ -602,34 +616,34 @@ class OneShotAdClassifier:
         if not ad_segments:
             return 0
 
-        # Build segment lookup by time
         to_insert: List[Dict[str, Any]] = []
-        matched_segment_ids: Set[int] = set()
 
-        for ad_seg in ad_segments:
-            if ad_seg.confidence < min_confidence:
-                self.logger.debug(
-                    f"Skipping ad segment {ad_seg.start_time:.1f}-{ad_seg.end_time:.1f} "
-                    f"(confidence {ad_seg.confidence:.2f} < {min_confidence})"
-                )
+        # Persist one identification per transcript segment using the strongest
+        # overlapping one-shot confidence. Keep below-threshold evidence as
+        # non-cutting candidates for UI/debug visibility.
+        for ts in transcript_segments:
+            best_confidence: Optional[float] = None
+
+            for ad_seg in ad_segments:
+                if ts.start_time < ad_seg.end_time and ts.end_time > ad_seg.start_time:
+                    if (
+                        best_confidence is None
+                        or ad_seg.confidence > best_confidence
+                    ):
+                        best_confidence = ad_seg.confidence
+
+            if best_confidence is None:
                 continue
 
-            # Find all transcript segments that overlap with this ad
-            for ts in transcript_segments:
-                # Check for overlap
-                if ts.start_time < ad_seg.end_time and ts.end_time > ad_seg.start_time:
-                    if ts.id in matched_segment_ids:
-                        continue
-                    matched_segment_ids.add(ts.id)
-
-                    to_insert.append(
-                        {
-                            "transcript_segment_id": ts.id,
-                            "model_call_id": model_call.id,
-                            "label": "ad",
-                            "confidence": ad_seg.confidence,
-                        }
-                    )
+            label = "ad" if best_confidence >= min_confidence else "ad_candidate"
+            to_insert.append(
+                {
+                    "transcript_segment_id": ts.id,
+                    "model_call_id": model_call.id,
+                    "label": label,
+                    "confidence": best_confidence,
+                }
+            )
 
         if not to_insert:
             return 0
@@ -646,8 +660,14 @@ class OneShotAdClassifier:
             )
 
         inserted = int((result.data or {}).get("inserted") or 0)
+        ad_count = sum(1 for row in to_insert if row["label"] == "ad")
+        candidate_count = sum(1 for row in to_insert if row["label"] == "ad_candidate")
         self.logger.info(
-            f"Created {inserted} identifications from {len(ad_segments)} ad segments"
+            "Created %s identifications (%s ad, %s ad_candidate) from %s ad segments",
+            inserted,
+            ad_count,
+            candidate_count,
+            len(ad_segments),
         )
 
         return inserted
