@@ -436,7 +436,9 @@ def api_post_stats(p_guid: str) -> flask.Response:
                         "id": ident.id,
                         "label": ident.label,
                         "confidence": (
-                            round(ident.confidence, 2) if ident.confidence else None
+                            round(ident.confidence, 2)
+                            if ident.confidence is not None
+                            else None
                         ),
                         "model_call_id": ident.model_call_id,
                     }
@@ -455,7 +457,7 @@ def api_post_stats(p_guid: str) -> flask.Response:
                 "label": identification.label,
                 "confidence": (
                     round(identification.confidence, 2)
-                    if identification.confidence
+                    if identification.confidence is not None
                     else None
                 ),
                 "model_call_id": identification.model_call_id,
