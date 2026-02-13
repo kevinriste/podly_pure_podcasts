@@ -15,6 +15,7 @@ const DEFAULT_ENV_HINTS: Record<string, EnvOverrideEntry> = {
   'groq.api_key': { env_var: 'GROQ_API_KEY' },
   'llm.llm_api_key': { env_var: 'LLM_API_KEY' },
   'llm.llm_model': { env_var: 'LLM_MODEL' },
+  'llm.oneshot_model': { env_var: 'ONESHOT_MODEL' },
   'llm.openai_base_url': { env_var: 'OPENAI_BASE_URL' },
   'whisper.whisper_type': { env_var: 'WHISPER_TYPE' },
   'whisper.api_key': { env_var: 'WHISPER_REMOTE_API_KEY' },

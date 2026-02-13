@@ -12,6 +12,7 @@ Unlike the chunked AdClassifier, this approach:
 
 import json
 import logging
+import time
 from typing import Any, Dict, List, Optional, Set
 
 import litellm
@@ -20,7 +21,7 @@ from pydantic import ValidationError
 from app.models import ModelCall, Post, TranscriptSegment
 from app.writer.client import writer_client
 from podcast_processor.oneshot_output import OneShotAdSegment, OneShotResponse
-from shared.config import Config
+from shared.config import Config, get_effective_oneshot_model
 from shared.llm_utils import (
     model_supports_structured_outputs,
     model_uses_max_completion_tokens,
@@ -100,7 +101,7 @@ class OneShotAdClassifier:
             self.logger.info(f"No transcript segments for post {post.id}. Skipping.")
             return []
 
-        model = model_override or self.config.oneshot.model
+        model = model_override or get_effective_oneshot_model(self.config)
         self.logger.info(
             f"Starting one-shot classification for post {post.id} with "
             f"{len(transcript_segments)} segments using model {model}"
@@ -154,8 +155,17 @@ class OneShotAdClassifier:
         if not segments:
             return [[]]
 
-        max_duration = self.config.oneshot.max_chunk_duration_seconds
-        overlap = self.config.oneshot.chunk_overlap_seconds
+        max_duration = int(self.config.oneshot_max_chunk_duration_seconds)
+        overlap = int(self.config.oneshot_chunk_overlap_seconds)
+        if overlap >= max_duration:
+            self.logger.warning(
+                "Invalid oneshot chunk settings (overlap=%s, max_duration=%s). "
+                "Adjusting overlap to %s.",
+                overlap,
+                max_duration,
+                max_duration - 1,
+            )
+            overlap = max_duration - 1
 
         total_duration = segments[-1].end_time - segments[0].start_time
 
@@ -305,10 +315,10 @@ class OneShotAdClassifier:
 
             model_call = db.session.get(ModelCall, int(model_call_id))
 
-        if model_call is None:
+        if not isinstance(model_call, ModelCall):
             raise RuntimeError(f"ModelCall {model_call_id} not found after creation")
 
-        return model_call  # type: ignore[return-value]
+        return model_call
 
     def _call_llm(
         self,
@@ -326,7 +336,7 @@ class OneShotAdClassifier:
         completion_args: Dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "timeout": self.config.oneshot.timeout_sec,
+            "timeout": self.config.openai_timeout,
         }
 
         # Add API key if configured
@@ -354,13 +364,109 @@ class OneShotAdClassifier:
             f"(post {model_call.post_id}, segments {model_call.first_segment_sequence_num}-{model_call.last_segment_sequence_num})"
         )
 
-        response = litellm.completion(**completion_args)
+        retry_count = max(
+            1, int(getattr(self.config, "llm_max_retry_attempts", 1) or 1)
+        )
+        original_retry_attempts = (
+            0 if model_call.retry_attempts is None else int(model_call.retry_attempts)
+        )
+        last_error: Optional[Exception] = None
 
-        content = response.choices[0].message.content
-        if content is None:
-            raise OneShotClassifyException("LLM returned empty response")
+        for attempt in range(retry_count):
+            current_attempt_num = attempt + 1
+            retry_attempts_value = original_retry_attempts + current_attempt_num
 
-        return str(content)
+            self.logger.info(
+                "Calling one-shot LLM for ModelCall %s (attempt %s/%s)",
+                model_call.id,
+                current_attempt_num,
+                retry_count,
+            )
+
+            pending_result = writer_client.update(
+                "ModelCall",
+                model_call.id,
+                {"status": "pending", "retry_attempts": retry_attempts_value},
+                wait=True,
+            )
+            if not pending_result or not pending_result.success:
+                raise RuntimeError(
+                    getattr(pending_result, "error", "Failed to update ModelCall")
+                )
+            model_call.retry_attempts = retry_attempts_value
+
+            try:
+                response = litellm.completion(**completion_args)
+                content = response.choices[0].message.content
+                if content is None:
+                    raise OneShotClassifyException("LLM returned empty response")
+                return str(content)
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                last_error = e
+                self.logger.error(
+                    "One-shot LLM error for ModelCall %s (attempt %s/%s): %s",
+                    model_call.id,
+                    current_attempt_num,
+                    retry_count,
+                    e,
+                )
+                err_result = writer_client.update(
+                    "ModelCall",
+                    model_call.id,
+                    {
+                        "error_message": str(e),
+                        "retry_attempts": retry_attempts_value,
+                    },
+                    wait=True,
+                )
+                if not err_result or not err_result.success:
+                    raise RuntimeError(
+                        getattr(err_result, "error", "Failed to update ModelCall")
+                    ) from e
+
+                model_call.error_message = str(e)
+                model_call.retry_attempts = retry_attempts_value
+
+                if not self._is_retryable_error(e):
+                    raise
+
+                if attempt < retry_count - 1:
+                    self._wait_before_retry(e, attempt)
+
+        if last_error:
+            raise last_error
+
+        raise OneShotClassifyException(
+            f"Maximum retries ({retry_count}) exceeded for ModelCall {model_call.id}"
+        )
+
+    def _is_retryable_error(self, error: Exception) -> bool:
+        error_str = str(error).lower()
+        return (
+            "503" in error_str
+            or "service unavailable" in error_str
+            or "rate_limit_error" in error_str
+            or "ratelimiterror" in error_str
+            or "429" in error_str
+            or "rate limit" in error_str
+        )
+
+    def _wait_before_retry(self, error: Exception, attempt: int) -> None:
+        error_str = str(error).lower()
+        if any(
+            term in error_str
+            for term in ["rate_limit_error", "ratelimiterror", "429", "rate limit"]
+        ):
+            wait_time = 60 * (2**attempt)
+        else:
+            wait_time = 2**attempt
+
+        self.logger.info(
+            "Waiting %ss before next one-shot retry for ModelCall error: %s",
+            wait_time,
+            error,
+        )
+        time.sleep(wait_time)
 
     def _parse_response(
         self,

@@ -38,6 +38,7 @@ from app.routes.post_utils import (
     increment_download_count,
     missing_processed_audio_response,
 )
+from app.runtime_config import config as runtime_config
 from app.writer.client import writer_client
 from podcast_processor.chapter_filter import parse_filter_strings
 from shared import defaults as DEFAULTS
@@ -336,7 +337,15 @@ def api_post_stats(p_guid: str) -> flask.Response:
         return flask.make_response(flask.jsonify({"error": "Post not found"}), 404)
 
     feed = db.session.get(Feed, post.feed_id)
-    ad_detection_strategy = feed.ad_detection_strategy if feed else "llm"
+    ad_detection_strategy = "llm"
+    if feed:
+        feed_strategy = getattr(feed, "ad_detection_strategy", "inherit") or "inherit"
+        if feed_strategy == "inherit":
+            ad_detection_strategy = (
+                getattr(runtime_config, "ad_detection_strategy", None) or "llm"
+            )
+        else:
+            ad_detection_strategy = feed_strategy
 
     model_calls = (
         ModelCall.query.filter_by(post_id=post.id)

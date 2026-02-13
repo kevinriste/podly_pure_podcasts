@@ -26,7 +26,6 @@ from app.auth.state import failure_rate_limiter
 from app.extensions import db
 from app.models import User
 from app.runtime_config import config as runtime_config
-from app.writer.client import writer_client
 
 logger = logging.getLogger("global_logger")
 
@@ -211,8 +210,6 @@ def list_users_route() -> RouteResult:
                     "feed_subscription_status": getattr(
                         u, "feed_subscription_status", "inactive"
                     ),
-                    "ad_detection_strategy": getattr(u, "ad_detection_strategy", "llm"),
-                    "oneshot_model": getattr(u, "oneshot_model", None),
                 }
                 for u in users
             ]
@@ -266,37 +263,6 @@ def create_user_route() -> RouteResult:
     )
 
 
-def _apply_ad_strategy_updates(
-    payload: dict[str, object], target: User
-) -> RouteResult | None:
-    """Validate and apply ad_detection_strategy / oneshot_model from payload.
-
-    Returns an error response tuple if validation fails, or None on success.
-    """
-    updates: dict[str, object] = {}
-    if "ad_detection_strategy" in payload:
-        strategy = payload["ad_detection_strategy"]
-        if strategy not in ("llm", "oneshot"):
-            return (
-                jsonify({"error": "ad_detection_strategy must be 'llm' or 'oneshot'"}),
-                400,
-            )
-        updates["ad_detection_strategy"] = strategy
-    if "oneshot_model" in payload:
-        model_val = payload["oneshot_model"]
-        if model_val is not None and not isinstance(model_val, str):
-            return jsonify({"error": "oneshot_model must be a string or null"}), 400
-        updates["oneshot_model"] = model_val or None
-    if updates:
-        result = writer_client.update("User", target.id, updates, wait=True)
-        if not result or not result.success:
-            raise AuthServiceError(
-                getattr(result, "error", "Failed to update user settings")
-            )
-        db.session.expire(target)
-    return None
-
-
 @auth_bp.route("/api/auth/users/<string:username>", methods=["PATCH"])
 def update_user_route(username: str) -> RouteResult:
     if not _auth_enabled():
@@ -325,11 +291,6 @@ def update_user_route(username: str) -> RouteResult:
             update_password(target, new_password)
         if "manual_feed_allowance" in payload:
             set_manual_feed_allowance(target, manual_feed_allowance)
-
-        # Ad detection strategy + oneshot model updates
-        err = _apply_ad_strategy_updates(payload, target)
-        if err is not None:
-            return err
 
         return jsonify({"status": "ok"})
     except (PasswordValidationError, LastAdminRemovalError, AuthServiceError) as exc:

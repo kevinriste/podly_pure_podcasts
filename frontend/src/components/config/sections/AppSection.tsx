@@ -68,6 +68,21 @@ export default function AppSection() {
               }
             />
           </Field>
+          <Field label="Global Ad Detection Strategy">
+            <select
+              className="input"
+              value={pending?.app?.ad_detection_strategy ?? 'llm'}
+              onChange={(e) =>
+                setField(
+                  ['app', 'ad_detection_strategy'],
+                  e.target.value as 'llm' | 'oneshot'
+                )
+              }
+            >
+              <option value="llm">LLM (chunked)</option>
+              <option value="oneshot">One-shot LLM</option>
+            </select>
+          </Field>
           <div className="col-span-1 md:col-span-2 flex items-center gap-3">
             <label className="flex items-center gap-2 text-sm text-gray-700 font-medium">
               <input

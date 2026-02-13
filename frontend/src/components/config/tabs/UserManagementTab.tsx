@@ -277,26 +277,6 @@ function UserManagementSection({ currentUser, refreshUser, logout, managedUsers,
     }
   };
 
-  const handleStrategyChange = async (username: string, strategy: 'llm' | 'oneshot') => {
-    try {
-      await authApi.updateUser(username, { ad_detection_strategy: strategy });
-      toast.success(`Updated ad detection strategy for ${username}.`);
-      await refetchUsers();
-    } catch (error) {
-      toast.error(getErrorMessage(error, 'Failed to update strategy.'));
-    }
-  };
-
-  const handleOneshotModelChange = async (username: string, model: string) => {
-    try {
-      await authApi.updateUser(username, { oneshot_model: model || null });
-      toast.success(`Updated oneshot model for ${username}.`);
-      await refetchUsers();
-    } catch (error) {
-      toast.error(getErrorMessage(error, 'Failed to update oneshot model.'));
-    }
-  };
-
   const handleResetPassword = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!activeResetUser) {
@@ -446,45 +426,6 @@ function UserManagementSection({ currentUser, refreshUser, logout, managedUsers,
                             }}
                           />
                         </div>
-                        <div className="flex items-center gap-1" title="Ad detection strategy">
-                          <span className="text-xs text-gray-500">Strategy:</span>
-                          <select
-                            className="input text-sm w-24 py-1"
-                            value={managed.ad_detection_strategy ?? 'llm'}
-                            onChange={(e) => {
-                              const val = e.target.value as 'llm' | 'oneshot';
-                              if (val !== (managed.ad_detection_strategy ?? 'llm')) {
-                                void handleStrategyChange(managed.username, val);
-                              }
-                            }}
-                          >
-                            <option value="llm">LLM</option>
-                            <option value="oneshot">One-shot</option>
-                          </select>
-                        </div>
-                        {(managed.ad_detection_strategy === 'oneshot') && (
-                          <div className="flex items-center gap-1" title="Oneshot model override">
-                            <span className="text-xs text-gray-500">Model:</span>
-                            <input
-                              className="input text-sm w-32 py-1"
-                              type="text"
-                              placeholder="Default"
-                              defaultValue={managed.oneshot_model ?? ''}
-                              onBlur={(e) => {
-                                const val = e.target.value;
-                                const current = managed.oneshot_model ?? '';
-                                if (val !== current) {
-                                  void handleOneshotModelChange(managed.username, val);
-                                }
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  e.currentTarget.blur();
-                                }
-                              }}
-                            />
-                          </div>
-                        )}
                         <select
                           className="input text-sm"
                           value={managed.role}

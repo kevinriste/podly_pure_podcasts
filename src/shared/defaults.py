@@ -55,9 +55,3 @@ AD_DETECTION_DEFAULT_STRATEGY = "llm"
 CHAPTER_FILTER_DEFAULT_STRINGS = (
     "sponsor,advertisement,ad break,promo,brought to you by"
 )
-
-# One-shot LLM detection defaults
-ONESHOT_DEFAULT_MODEL = "openai/gpt-5-mini"
-ONESHOT_MAX_CHUNK_DURATION_SECONDS = 7200  # 2 hours per chunk
-ONESHOT_CHUNK_OVERLAP_SECONDS = 900  # 15 minutes overlap between chunks
-ONESHOT_TIMEOUT_SEC = 600  # 10 minutes timeout for large context calls

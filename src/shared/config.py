@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -69,30 +70,12 @@ class LocalWhisperConfig(BaseModel):
     model: str = DEFAULTS.WHISPER_LOCAL_MODEL
 
 
-class OneShotConfig(BaseModel):
-    """Configuration for one-shot LLM ad detection strategy."""
-
-    model: str = Field(
-        default=DEFAULTS.ONESHOT_DEFAULT_MODEL,
-        description="LLM model to use for one-shot detection (must support large context)",
-    )
-    max_chunk_duration_seconds: int = Field(
-        default=DEFAULTS.ONESHOT_MAX_CHUNK_DURATION_SECONDS,
-        description="Maximum duration per chunk in seconds (episodes longer than this are split)",
-    )
-    chunk_overlap_seconds: int = Field(
-        default=DEFAULTS.ONESHOT_CHUNK_OVERLAP_SECONDS,
-        description="Overlap between chunks in seconds to avoid missing ads at boundaries",
-    )
-    timeout_sec: int = Field(
-        default=DEFAULTS.ONESHOT_TIMEOUT_SEC,
-        description="Timeout for LLM calls in seconds",
-    )
-
-
 class Config(BaseModel):
     llm_api_key: Optional[str] = Field(default=None)
     llm_model: str = Field(default=DEFAULTS.LLM_DEFAULT_MODEL)
+    oneshot_model: Optional[str] = Field(default=None)
+    oneshot_max_chunk_duration_seconds: int = Field(default=7200, ge=1)
+    oneshot_chunk_overlap_seconds: int = Field(default=900, ge=0)
     openai_base_url: Optional[str] = None
     openai_max_tokens: int = DEFAULTS.OPENAI_DEFAULT_MAX_TOKENS
     openai_timeout: int = DEFAULTS.OPENAI_DEFAULT_TIMEOUT_SEC
@@ -167,13 +150,10 @@ class Config(BaseModel):
     number_of_episodes_to_whitelist_from_archive_of_new_feed: int = (
         DEFAULTS.APP_NUM_EPISODES_TO_WHITELIST_FROM_ARCHIVE_OF_NEW_FEED
     )
+    ad_detection_strategy: str = DEFAULTS.AD_DETECTION_DEFAULT_STRATEGY
     enable_public_landing_page: bool = DEFAULTS.APP_ENABLE_PUBLIC_LANDING_PAGE
     user_limit_total: int | None = DEFAULTS.APP_USER_LIMIT_TOTAL
     autoprocess_on_download: bool = DEFAULTS.APP_AUTOPROCESS_ON_DOWNLOAD
-    oneshot: OneShotConfig = Field(
-        default_factory=OneShotConfig,
-        description="Configuration for one-shot LLM ad detection strategy",
-    )
 
     def redacted(self) -> Config:
         return self.model_copy(
@@ -211,3 +191,18 @@ class Config(BaseModel):
         self.remote_whisper = None
 
         return self
+
+
+def get_effective_oneshot_model(config: Config) -> str:
+    """Resolve one-shot model from env first, then DB-backed config."""
+    env_model = os.environ.get("ONESHOT_MODEL") or os.environ.get("LLM_ONESHOT_MODEL")
+    if env_model and env_model.strip():
+        return env_model.strip()
+
+    if config.oneshot_model and config.oneshot_model.strip():
+        return config.oneshot_model.strip()
+
+    raise ValueError(
+        "One-shot model is not configured. Set ONESHOT_MODEL (or LLM_ONESHOT_MODEL) "
+        "or configure llm.oneshot_model in settings."
+    )
