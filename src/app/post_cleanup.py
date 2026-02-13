@@ -38,23 +38,20 @@ def _get_most_recent_posts_per_feed(post_guids: Sequence[str]) -> set[str]:
     # Build map of completion timestamps
     latest_completed = _load_latest_completed_map(post_guids)
 
-    # Group by feed and find most recent per feed
-    feed_posts: dict[int, tuple[str, datetime | None]] = {}
+    # Group by feed and find most recent per feed using deterministic tie-breakers:
+    # primary timestamp (newest of file/job), then job timestamp, then file timestamp,
+    # then post id.
+    feed_posts: dict[int, tuple[str, tuple[datetime, datetime, datetime, int]]] = {}
 
     for post in posts:
-        timestamp = _get_post_timestamp(post, latest_completed)
+        recency_key = _get_post_recency_key(post, latest_completed)
 
         if post.feed_id not in feed_posts:
-            feed_posts[post.feed_id] = (post.guid, timestamp)
+            feed_posts[post.feed_id] = (post.guid, recency_key)
         else:
-            _, current_timestamp = feed_posts[post.feed_id]
-            # Keep the post with the latest timestamp
-            if timestamp and current_timestamp:
-                if timestamp > current_timestamp:
-                    feed_posts[post.feed_id] = (post.guid, timestamp)
-            elif timestamp:  # Only new post has timestamp
-                feed_posts[post.feed_id] = (post.guid, timestamp)
-            # If neither has timestamp, keep current
+            _, current_key = feed_posts[post.feed_id]
+            if recency_key > current_key:
+                feed_posts[post.feed_id] = (post.guid, recency_key)
 
     return {guid for guid, _ in feed_posts.values()}
 
@@ -69,6 +66,22 @@ def _get_post_timestamp(
     if file_timestamp and job_timestamp:
         return max(file_timestamp, job_timestamp)
     return file_timestamp or job_timestamp
+
+
+def _get_post_recency_key(
+    post: Post, latest_completed: dict[str, datetime | None]
+) -> tuple[datetime, datetime, datetime, int]:
+    """Build a deterministic recency key for selecting the preserved post."""
+    file_timestamp = _get_processed_file_timestamp(post)
+    job_timestamp = latest_completed.get(post.guid)
+    primary_timestamp = _get_post_timestamp(post, latest_completed) or datetime.min
+    post_id = int(getattr(post, "id", 0) or 0)
+    return (
+        primary_timestamp,
+        job_timestamp or datetime.min,
+        file_timestamp or datetime.min,
+        post_id,
+    )
 
 
 def _build_cleanup_query(
