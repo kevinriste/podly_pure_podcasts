@@ -44,7 +44,12 @@ function withModeTimezone(
   options: Intl.DateTimeFormatOptions
 ): Intl.DateTimeFormatOptions {
   if (mode === 'utc') {
-    return { ...options, timeZone: 'UTC' };
+    return {
+      ...options,
+      timeZone: 'UTC',
+      hour12: false,
+      hourCycle: 'h23',
+    };
   }
   return options;
 }
