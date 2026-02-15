@@ -477,7 +477,7 @@ def _start_scheduler_and_jobs(app: Flask) -> None:
     setup_scheduler(app)
 
     jobs_manager = get_jobs_manager()
-    clear_result = jobs_manager.clear_all_jobs()
+    clear_result = jobs_manager.clear_all_jobs(active_only=True)
     if clear_result["status"] == "success":
         logger.info(f"Startup: {clear_result['message']}")
     else:
