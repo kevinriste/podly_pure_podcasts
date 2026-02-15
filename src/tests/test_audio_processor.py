@@ -173,14 +173,16 @@ def test_process_audio(
         output_path = "path/to/output.mp3"
 
         # Set up mocks for get_ad_segments and get_audio_duration_ms
-        with patch.object(
-            processor, "get_ad_segments", return_value=[(5.0, 10.0)]
-        ), patch(
-            "podcast_processor.audio_processor.get_audio_duration_ms",
-            return_value=30000,
-        ), patch(
-            "podcast_processor.audio_processor.clip_segments_with_fade"
-        ) as mock_clip:
+        with (
+            patch.object(processor, "get_ad_segments", return_value=[(5.0, 10.0)]),
+            patch(
+                "podcast_processor.audio_processor.get_audio_duration_ms",
+                return_value=30000,
+            ),
+            patch(
+                "podcast_processor.audio_processor.clip_segments_with_fade"
+            ) as mock_clip,
+        ):
             # Call the method
             processor.process_audio(post, output_path)
 

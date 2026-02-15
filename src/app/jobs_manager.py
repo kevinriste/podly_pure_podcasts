@@ -659,9 +659,7 @@ class JobsManager:
                                     f"Job execution failed: {exc}",
                                     failed_job.progress_percentage or 0.0,
                                 )
-                        except (
-                            Exception
-                        ) as cleanup_error:  # pylint: disable=broad-except
+                        except Exception as cleanup_error:  # pylint: disable=broad-except
                             logger.error(
                                 "Failed to update job status after error: %s",
                                 cleanup_error,

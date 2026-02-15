@@ -94,9 +94,9 @@ def _attempt_json_repair(json_str: str) -> str:
 def clean_and_parse_model_output(model_output: str) -> AdSegmentPredictionList:
     start_marker, end_marker = "{", "}"
 
-    assert (
-        model_output.count(start_marker) >= 1
-    ), f"No opening brace found in: {model_output[:200]}"
+    assert model_output.count(start_marker) >= 1, (
+        f"No opening brace found in: {model_output[:200]}"
+    )
 
     start_idx = model_output.index(start_marker)
     model_output = model_output[start_idx:]
