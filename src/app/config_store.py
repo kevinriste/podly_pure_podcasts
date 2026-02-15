@@ -635,7 +635,7 @@ def _maybe_reschedule_refresh_job(
     if not job:
         return
 
-    # Avoid importing app.background here (it creates a cycle for pylint).
+    # Avoid importing app.background here (it creates a circular import).
     # Use best-effort rescheduling on the underlying APScheduler instance.
     scheduler_obj = getattr(scheduler, "scheduler", scheduler)
     reschedule = getattr(scheduler_obj, "reschedule_job", None)

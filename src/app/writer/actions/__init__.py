@@ -1,7 +1,4 @@
-"""Writer action function re-exports.
-
-Mypy runs with `--no-implicit-reexport`, so imports use explicit aliasing.
-"""
+"""Writer action function re-exports."""
 
 from .cleanup import (
     cleanup_missing_audio_paths_action as cleanup_missing_audio_paths_action,

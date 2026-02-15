@@ -19,7 +19,7 @@ def generate_job_id() -> str:
     return generate_uuid()
 
 
-# mypy typing issue https://github.com/python/mypy/issues/17918
+# https://github.com/python/mypy/issues/17918
 class Feed(db.Model):  # type: ignore[name-defined, misc]
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     alt_id = db.Column(

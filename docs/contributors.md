@@ -285,10 +285,9 @@ scripts/ci.sh
 
 This will run all the necessary checks including:
 
-- Type checking with mypy
-- Code formatting checks
+- Code formatting and linting with ruff
+- Type checking with ty
 - Unit tests
-- Linting
 
 ### Pull Request Process
 

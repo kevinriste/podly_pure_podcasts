@@ -1,7 +1,6 @@
 """LLM-based word-boundary refiner.
 
 Note: We intentionally share some call-setup patterns with BoundaryRefiner.
-Pylint may flag these as R0801 (duplicate-code); we ignore that for this module.
 """
 
 import json

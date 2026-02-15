@@ -45,7 +45,6 @@ class LLMConcurrencyLimiter:
         Returns:
             True if a slot was acquired, False if timeout occurred
         """
-        # Disable specific pylint warning for this line as manual semaphore control is needed
         acquired = self._semaphore.acquire(timeout=timeout)
         if acquired:
             logger.debug("Acquired LLM concurrency slot")
