@@ -99,15 +99,11 @@ RUN set -e && \
     if [ "${LITE_BUILD}" = "true" ]; then \
     echo "Installing lite dependencies (without Whisper)"; \
     echo "Using lite pyproject:" && \
-    uv export --frozen --no-dev --no-emit-project --project pyproject.lite.toml -o requirements.txt && \
-    uv pip install --system -r requirements.txt && \
-    rm -f requirements.txt; \
+    uv sync --frozen --no-dev --no-install-project --project pyproject.lite.toml; \
     else \
     echo "Installing full dependencies (including Whisper)"; \
     echo "Using full pyproject:" && \
-    uv export --frozen --no-dev --no-emit-project --project pyproject.toml -o requirements.txt && \
-    uv pip install --system -r requirements.txt && \
-    rm -f requirements.txt; \
+    uv sync --frozen --no-dev --no-install-project --project pyproject.toml; \
     fi
 
 # Install PyTorch with CUDA support if using NVIDIA image (skip if LITE_BUILD)
@@ -166,4 +162,4 @@ EXPOSE 5001
 
 # Run the application through the entrypoint script
 ENTRYPOINT ["/docker-entrypoint.sh"]
-CMD ["./scripts/start_services.sh"]
+CMD ["uv", "run", "--no-sync", "./scripts/start_services.sh"]
