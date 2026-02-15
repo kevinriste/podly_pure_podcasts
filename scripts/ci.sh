@@ -20,9 +20,11 @@ uv run ruff check --select I --fix .
 
 # lint and type check
 echo '============================================================='
-echo "Running 'uv run mypy .'"
+echo "Running 'uv run mypy . --install-types --non-interactive'"
 echo '============================================================='
 uv run mypy . \
+    --install-types \
+    --non-interactive \
     --explicit-package-bases \
     --exclude 'migrations' \
     --exclude 'build' \
