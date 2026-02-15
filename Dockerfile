@@ -19,7 +19,7 @@ RUN set -e && \
 
 # Backend stage
 FROM ${BASE_IMAGE} AS backend
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.10.2 /uv /uvx /bin/
 
 # Environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -87,12 +87,6 @@ COPY pyproject.toml pyproject.lite.toml uv.lock uv.lite.lock ./
 RUN if [ -f /etc/debian_version ]; then \
     apt-get remove -y python3-blinker 2>/dev/null || true; \
     fi
-
-# Set pip timeout and retries for better reliability
-ENV PIP_DEFAULT_TIMEOUT=1000
-ENV PIP_RETRIES=3
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1
-ENV PIP_NO_CACHE_DIR=1
 
 # Install dependencies conditionally based on LITE_BUILD
 RUN set -e && \
