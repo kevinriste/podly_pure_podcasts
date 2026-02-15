@@ -99,11 +99,15 @@ RUN set -e && \
     if [ "${LITE_BUILD}" = "true" ]; then \
     echo "Installing lite dependencies (without Whisper)"; \
     echo "Using lite pyproject:" && \
-    uv pip install --system -r pyproject.lite.toml; \
+    uv export --frozen --no-dev --no-emit-project --project pyproject.lite.toml -o requirements.txt && \
+    uv pip install --system -r requirements.txt && \
+    rm -f requirements.txt; \
     else \
     echo "Installing full dependencies (including Whisper)"; \
     echo "Using full pyproject:" && \
-    uv pip install --system -r pyproject.toml; \
+    uv export --frozen --no-dev --no-emit-project --project pyproject.toml -o requirements.txt && \
+    uv pip install --system -r requirements.txt && \
+    rm -f requirements.txt; \
     fi
 
 # Install PyTorch with CUDA support if using NVIDIA image (skip if LITE_BUILD)
