@@ -92,12 +92,12 @@ RUN if [ -f /etc/debian_version ]; then \
 RUN set -e && \
     if [ "${LITE_BUILD}" = "true" ]; then \
     echo "Installing lite dependencies (without Whisper)"; \
-    echo "Using lite pyproject:" && \
-    uv sync --frozen --no-dev --no-install-project --project pyproject.lite.toml; \
+    cp pyproject.lite.toml pyproject.toml && \
+    cp uv.lite.lock uv.lock && \
+    uv sync --frozen --no-dev --no-install-project; \
     else \
     echo "Installing full dependencies (including Whisper)"; \
-    echo "Using full pyproject:" && \
-    uv sync --frozen --no-dev --no-install-project --project pyproject.toml; \
+    uv sync --frozen --no-dev --no-install-project; \
     fi
 
 # Install PyTorch with CUDA support if using NVIDIA image (skip if LITE_BUILD)
