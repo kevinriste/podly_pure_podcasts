@@ -23,16 +23,13 @@ jobs:
           python-version: "3.11"
 
       - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends ffmpeg
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
-
-      - name: Install dependencies
-        run: uv sync --frozen --extra dev
 
       - name: Cache mypy
         uses: actions/cache@v4
@@ -41,6 +38,9 @@ jobs:
           key: ${{ runner.os }}-mypy-${{ steps.python.outputs.python-version }}-${{ hashFiles('uv.lock') }}
           restore-keys: |
             ${{ runner.os }}-mypy-${{ steps.python.outputs.python-version }}-
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev
 
       - name: Run mypy
         run: uv run mypy src --install-types --non-interactive --explicit-package-bases --exclude 'migrations' --exclude 'build' --exclude 'scripts' --exclude 'src/tests' --exclude 'src/tests/test_routes.py' --exclude 'src/app/routes.py'
