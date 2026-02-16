@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import List, Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -13,16 +13,17 @@ class AdSegmentPrediction(BaseModel):
 
 
 class AdSegmentPredictionList(BaseModel):
-    ad_segments: List[AdSegmentPrediction]
-    content_type: Optional[
+    ad_segments: list[AdSegmentPrediction]
+    content_type: (
         Literal[
             "technical_discussion",
             "educational/self_promo",
             "promotional_external",
             "transition",
         ]
-    ] = None
-    confidence: Optional[float] = None
+        | None
+    ) = None
+    confidence: float | None = None
 
 
 def _attempt_json_repair(json_str: str) -> str:
@@ -94,9 +95,9 @@ def _attempt_json_repair(json_str: str) -> str:
 def clean_and_parse_model_output(model_output: str) -> AdSegmentPredictionList:
     start_marker, end_marker = "{", "}"
 
-    assert (
-        model_output.count(start_marker) >= 1
-    ), f"No opening brace found in: {model_output[:200]}"
+    assert model_output.count(start_marker) >= 1, (
+        f"No opening brace found in: {model_output[:200]}"
+    )
 
     start_idx = model_output.index(start_marker)
     model_output = model_output[start_idx:]
@@ -116,7 +117,7 @@ def clean_and_parse_model_output(model_output: str) -> AdSegmentPredictionList:
     # First attempt: try to parse as-is
     try:
         return AdSegmentPredictionList.parse_raw(model_output)
-    except Exception as first_error:
+    except Exception as first_error:  # noqa: BLE001
         logger.debug(f"Initial parse failed: {first_error}")
 
         # Second attempt: try to repair truncated JSON

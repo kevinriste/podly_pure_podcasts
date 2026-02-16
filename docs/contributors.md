@@ -102,7 +102,7 @@ After=network.target
 User=yourusername
 Group=yourusername
 WorkingDirectory=/path/to/your/app
-ExecStart=/usr/bin/pipenv run python src/main.py
+ExecStart=/usr/bin/env uv run python src/main.py
 Restart=always
 
 [Install]
@@ -123,7 +123,7 @@ The database auto-migrates on launch.
 To add a migration after data model change:
 
 ```bash
-pipenv run flask --app ./src/main.py db migrate -m "[change description]"
+uv run flask --app ./src/main.py db migrate -m "[change description]"
 ```
 
 On next launch, the database updates automatically.
@@ -271,10 +271,10 @@ Both scripts provide the same core user experience:
 
 Before submitting a pull request, you can run the same tests that run in CI:
 
-To prep your pipenv environment to run this script, you will need to first run:
+To prep your local uv environment to run this script, you will need to first run:
 
 ```bash
-pipenv install --dev
+uv sync --extra dev
 ```
 
 Then, to run the checks,
@@ -285,10 +285,9 @@ scripts/ci.sh
 
 This will run all the necessary checks including:
 
-- Type checking with mypy
-- Code formatting checks
+- Code formatting and linting with ruff
+- Type checking with ty
 - Unit tests
-- Linting
 
 ### Pull Request Process
 
@@ -299,6 +298,6 @@ This will run all the necessary checks including:
 
 ### Code Style
 
-- We use black for code formatting
+- We use ruff for code formatting
 - Type hints are required for all new code
 - Follow existing patterns in the codebase
