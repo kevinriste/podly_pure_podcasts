@@ -575,22 +575,21 @@ def _run_llm_probe(
         )
 
     try:
-        # Configure litellm for this probe
-        litellm.api_key = api_key
-        if base_url:
-            litellm.api_base = base_url
-
         # Minimal completion to validate connectivity and credentials
         messages = [
             {"role": "system", "content": "You are a healthcheck probe."},
             {"role": "user", "content": "ping"},
         ]
 
+        probe_timeout = min(timeout, 15)
         completion_kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "timeout": timeout,
+            "timeout": probe_timeout,
+            "api_key": api_key,
         }
+        if base_url:
+            completion_kwargs["base_url"] = base_url
 
         # Keep probe lightweight but high enough to avoid false failures on
         # providers/models that cannot complete within a 1-token budget.
