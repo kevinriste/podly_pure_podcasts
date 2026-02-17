@@ -1,3 +1,15 @@
+# [2.5.0](https://github.com/kevinriste/podly_pure_podcasts/compare/v2.4.0...v2.5.0) (2026-02-17)
+
+
+### Bug Fixes
+
+* **tests:** stabilize flaky post cleanup tests with explicit file mtimes ([e414f56](https://github.com/kevinriste/podly_pure_podcasts/commit/e414f5693ff30b347c1f0b65f3f4a086a336b51d))
+
+
+### Features
+
+* add reprocess with transcript preservation ([20081c2](https://github.com/kevinriste/podly_pure_podcasts/commit/20081c2e40cd1747787a7dd655745c94b501a350))
+
 # [2.4.0](https://github.com/kevinriste/podly_pure_podcasts/compare/v2.3.0...v2.4.0) (2026-02-17)
 
 
