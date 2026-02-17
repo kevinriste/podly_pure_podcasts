@@ -240,3 +240,69 @@ def test_call_llm_uses_oneshot_api_key_and_structured_output_switch() -> None:
     pending_update_payload = mock_update.call_args_list[0].args[2]
     assert pending_update_payload["status"] == "pending"
     assert pending_update_payload["retry_attempts"] == 1
+
+
+def test_maybe_chunk_transcript_single_chunk_for_short_episode() -> None:
+    config = create_standard_test_config()
+    config.oneshot_max_chunk_duration_seconds = 7200
+    config.oneshot_chunk_overlap_seconds = 900
+    classifier = OneShotAdClassifier(config=config)
+
+    segments = [
+        _make_segment(i, i, float(i * 10), float(i * 10 + 10))
+        for i in range(60)  # 600 seconds total
+    ]
+
+    chunks = classifier._maybe_chunk_transcript(segments)
+    assert len(chunks) == 1
+    assert chunks[0] is segments  # returns original list, not a copy
+
+
+def test_maybe_chunk_transcript_splits_long_episode_with_overlap() -> None:
+    config = create_standard_test_config()
+    config.oneshot_max_chunk_duration_seconds = 100
+    config.oneshot_chunk_overlap_seconds = 20
+    classifier = OneShotAdClassifier(config=config)
+
+    # 25 segments, each 10s, total = 250s
+    segments = [
+        _make_segment(i, i, float(i * 10), float(i * 10 + 10)) for i in range(25)
+    ]
+
+    chunks = classifier._maybe_chunk_transcript(segments)
+    # With max_duration=100 and overlap=20, step=80:
+    # Chunk 0: 0-100s, Chunk 1: 80-180s, Chunk 2: 160-240s, Chunk 3: 240-250s
+    assert len(chunks) >= 3
+
+    # First chunk covers 0-99s
+    assert chunks[0][0].start_time == 0.0
+    assert chunks[0][-1].start_time < 100.0
+
+    # Chunks should have overlapping segments
+    first_chunk_end_times = {s.start_time for s in chunks[0]}
+    second_chunk_start_times = {s.start_time for s in chunks[1]}
+    assert first_chunk_end_times & second_chunk_start_times  # overlap exists
+
+
+def test_maybe_chunk_transcript_degenerate_overlap_resets_to_zero() -> None:
+    config = create_standard_test_config()
+    config.oneshot_max_chunk_duration_seconds = 100
+    config.oneshot_chunk_overlap_seconds = 95  # >= 90% of max_duration
+    classifier = OneShotAdClassifier(config=config)
+
+    segments = [
+        _make_segment(i, i, float(i * 10), float(i * 10 + 10))
+        for i in range(25)  # 250s total
+    ]
+
+    chunks = classifier._maybe_chunk_transcript(segments)
+    # With overlap reset to 0, step=100, expect 3 chunks: 0-100, 100-200, 200-250
+    assert len(chunks) == 3
+
+
+def test_maybe_chunk_transcript_empty_input() -> None:
+    config = create_standard_test_config()
+    classifier = OneShotAdClassifier(config=config)
+
+    chunks = classifier._maybe_chunk_transcript([])
+    assert chunks == [[]]

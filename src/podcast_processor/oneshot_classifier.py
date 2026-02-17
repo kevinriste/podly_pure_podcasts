@@ -183,15 +183,14 @@ class OneShotAdClassifier:
 
         max_duration = int(self.config.oneshot_max_chunk_duration_seconds)
         overlap = int(self.config.oneshot_chunk_overlap_seconds)
-        if overlap >= max_duration:
+        if overlap >= max_duration * 0.9:
             self.logger.warning(
-                "Invalid oneshot chunk settings (overlap=%s, max_duration=%s). "
-                "Adjusting overlap to %s.",
+                "Invalid oneshot chunk settings (overlap=%s >= 90%% of max_duration=%s). "
+                "Disabling overlap to avoid degenerate chunking.",
                 overlap,
                 max_duration,
-                max_duration - 1,
             )
-            overlap = max_duration - 1
+            overlap = 0
 
         total_duration = segments[-1].end_time - segments[0].start_time
 
@@ -278,15 +277,6 @@ class OneShotAdClassifier:
                 model=model,
                 model_call=model_call,
             )
-
-            # Parse response
-            ad_segments = self._parse_response(response, model_call)
-
-            # Update model call status
-            self._update_model_call_success(model_call, response)
-
-            return ad_segments
-
         except Exception as e:
             self.logger.error(
                 f"One-shot LLM call failed for post {post.id} chunk {chunk_index}: {e}",
@@ -296,6 +286,22 @@ class OneShotAdClassifier:
             raise OneShotClassifyException(
                 f"LLM call failed for chunk {chunk_index}"
             ) from e
+
+        # Parse response — mark ModelCall failed if parsing fails
+        try:
+            ad_segments = self._parse_response(response, model_call)
+        except (OneShotClassifyException, Exception) as e:
+            self.logger.error(
+                f"One-shot response parse failed for post {post.id} chunk {chunk_index}: {e}",
+                exc_info=True,
+            )
+            self._update_model_call_failed(model_call, f"Parse error: {e}")
+            raise OneShotClassifyException(
+                f"Response parse failed for chunk {chunk_index}"
+            ) from e
+
+        self._update_model_call_success(model_call, response)
+        return ad_segments
 
     def _build_transcript_text(self, segments: list[TranscriptSegment]) -> str:
         """Build transcript CSV using segment-provided time boundaries."""
@@ -640,10 +646,23 @@ class OneShotAdClassifier:
         # Persist one identification per transcript segment using the strongest
         # overlapping one-shot confidence. Keep below-threshold evidence as
         # non-cutting candidates for UI/debug visibility.
+        #
+        # Both lists are sorted by start_time, so we use a sweep-line approach
+        # (O(n+m)) instead of a nested loop (O(n*m)).
+        sorted_ads = sorted(ad_segments, key=lambda s: s.start_time)
+        ad_idx = 0
         for ts in transcript_segments:
             best_confidence: float | None = None
 
-            for ad_seg in ad_segments:
+            # Advance ad_idx past segments that end before this transcript segment starts
+            while ad_idx > 0 and sorted_ads[ad_idx - 1].end_time > ts.start_time:
+                ad_idx -= 1  # back up if needed (shouldn't happen with sorted input)
+
+            # Scan forward through ads that could overlap with this transcript segment
+            for j in range(ad_idx, len(sorted_ads)):
+                ad_seg = sorted_ads[j]
+                if ad_seg.start_time >= ts.end_time:
+                    break  # all remaining ads start after this segment
                 if ts.start_time < ad_seg.end_time and ts.end_time > ad_seg.start_time:
                     if best_confidence is None or ad_seg.confidence > best_confidence:
                         best_confidence = ad_seg.confidence
