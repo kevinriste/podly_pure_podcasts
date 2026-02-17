@@ -147,17 +147,15 @@ def refresh_feed(feed: Feed) -> None:
     oldest_whitelisted_post = min(
         (
             post
-            for post in feed.posts
+            for post in feed.posts  # type: ignore[attr-defined]
             if post.whitelisted and post.release_date
-        ),  # type: ignore[attr-defined]
+        ),
         key=lambda p: p.release_date,
         default=None,
     )
     oldest_known_date = oldest_post.release_date.date() if oldest_post else None
     oldest_whitelisted_date = (
-        oldest_whitelisted_post.release_date.date()
-        if oldest_whitelisted_post
-        else None
+        oldest_whitelisted_post.release_date.date() if oldest_whitelisted_post else None
     )
 
     # For existing feeds, use the stricter floor date to prevent historical
@@ -174,10 +172,7 @@ def refresh_feed(feed: Feed) -> None:
             logger.debug("found new podcast: %s", entry.title)
             p = make_post(feed, entry)
             # do not allow automatic download of any backcatalog added to the feed
-            if (
-                floor_date is not None
-                and p.release_date is None
-            ):
+            if floor_date is not None and p.release_date is None:
                 p.whitelisted = False
                 logger.debug(
                     "skipping post without release_date for existing feed: %s",

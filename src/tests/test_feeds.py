@@ -335,12 +335,12 @@ def test_refresh_feed_blocks_auto_whitelist_for_older_than_whitelisted_floor(
 ):
     existing_very_old = MockPost(
         guid="existing-very-old",
-        release_date=datetime.datetime(2021, 6, 1, tzinfo=datetime.timezone.utc),
+        release_date=datetime.datetime(2021, 6, 1, tzinfo=datetime.UTC),
         whitelisted=False,
     )
     existing_whitelisted_floor = MockPost(
         guid="existing-whitelisted-floor",
-        release_date=datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
+        release_date=datetime.datetime(2024, 1, 1, tzinfo=datetime.UTC),
         whitelisted=True,
     )
     existing_whitelisted_floor.whitelisted = True
@@ -358,7 +358,7 @@ def test_refresh_feed_blocks_auto_whitelist_for_older_than_whitelisted_floor(
 
     post_one = MockPost(
         guid="new-backfill-guid",
-        release_date=datetime.datetime(2023, 1, 1, tzinfo=datetime.timezone.utc),
+        release_date=datetime.datetime(2023, 1, 1, tzinfo=datetime.UTC),
     )
     mock_make_post.return_value = post_one
     mock_should_auto_whitelist.return_value = True
@@ -385,7 +385,7 @@ def test_refresh_feed_blocks_auto_whitelist_when_release_date_missing(
 ):
     existing_whitelisted_floor = MockPost(
         guid="existing-whitelisted-floor",
-        release_date=datetime.datetime(2024, 1, 1, tzinfo=datetime.timezone.utc),
+        release_date=datetime.datetime(2024, 1, 1, tzinfo=datetime.UTC),
         whitelisted=True,
     )
     existing_whitelisted_floor.whitelisted = True
