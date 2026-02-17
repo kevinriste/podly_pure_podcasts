@@ -894,7 +894,6 @@ class PodcastProcessor:
                 self.logger.warning(
                     "Failed to remove unprocessed file '%s': %s", path, exc
                 )
-        post.unprocessed_audio_path = None
 
     def _check_existing_processed_audio(self, post: Post) -> bool:
         """
