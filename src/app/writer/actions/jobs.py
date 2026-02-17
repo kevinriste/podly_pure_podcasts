@@ -49,9 +49,17 @@ def cleanup_stale_jobs_action(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def clear_all_jobs_action(params: dict[str, Any]) -> int:
-    all_jobs = ProcessingJob.query.all()
-    count = len(all_jobs)
-    for job in all_jobs:
+    active_only = bool(params.get("active_only", False))
+
+    if active_only:
+        jobs = ProcessingJob.query.filter(
+            ProcessingJob.status.in_(["pending", "running"])
+        ).all()
+    else:
+        jobs = ProcessingJob.query.all()
+
+    count = len(jobs)
+    for job in jobs:
         db.session.delete(job)
     return count
 
@@ -135,7 +143,7 @@ def update_job_status_action(params: dict[str, Any]) -> dict[str, Any]:
 
 def mark_cancelled_action(params: dict[str, Any]) -> dict[str, Any]:
     job_id = params.get("job_id")
-    reason = params.get("reason")
+    reason = params.get("reason") or "Cancelled by user request"
 
     job = db.session.get(ProcessingJob, job_id)
     if not job:
@@ -143,6 +151,9 @@ def mark_cancelled_action(params: dict[str, Any]) -> dict[str, Any]:
 
     job.status = "cancelled"
     job.error_message = reason
+    # Ensure terminal cancelled jobs don't keep a stale in-flight label
+    # such as "Queued for processing (priority=...)".
+    job.step_name = reason
     job.completed_at = datetime.utcnow()
 
     if job.jobs_manager_run_id:
