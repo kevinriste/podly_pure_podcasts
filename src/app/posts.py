@@ -1,9 +1,9 @@
 import json
 import logging
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any
 
 from app.models import Identification, ModelCall, Post, ProcessingJob, TranscriptSegment
 from app.writer.client import writer_client
@@ -218,7 +218,7 @@ def clear_post_identifications_only(post: Post) -> None:
             f"Error clearing identifications for post {post.id}: {e}",
             exc_info=True,
         )
-        raise PostException(f"Failed to clear identifications: {str(e)}") from e
+        raise PostException(f"Failed to clear identifications: {e!s}") from e
 
 
 def snapshot_post_processing_data(
@@ -226,12 +226,12 @@ def snapshot_post_processing_data(
     *,
     trigger: str,
     force_retranscribe: bool,
-    requested_by_user_id: Optional[int],
-) -> Optional[Path]:
+    requested_by_user_id: int | None,
+) -> Path | None:
     """Persist a pre-reprocess snapshot of post processing data to JSON."""
     from shared.processing_paths import get_base_podcast_data_dir
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     snapshot_dir = get_base_podcast_data_dir() / "reprocess_snapshots" / str(post.guid)
     snapshot_path = snapshot_dir / f"{timestamp}.json"
 
@@ -269,14 +269,14 @@ class PostException(Exception):
     pass
 
 
-def _archive_processed_audio_for_reprocess(post: Post) -> Optional[Path]:
+def _archive_processed_audio_for_reprocess(post: Post) -> Path | None:
     """Archive the current processed audio so reprocess can regenerate output."""
     processed_paths = _collect_processed_paths(post)
     _, processed_audio_path = _dedupe_and_find_existing(processed_paths)
     if processed_audio_path is None:
         return None
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     backup_path = processed_audio_path.with_name(
         f"{processed_audio_path.name}.reprocess-{timestamp}.bak"
     )
@@ -341,7 +341,7 @@ def _build_post_processing_snapshot(
     post: Post,
     trigger: str,
     force_retranscribe: bool,
-    requested_by_user_id: Optional[int],
+    requested_by_user_id: int | None,
 ) -> dict[str, Any]:
     feed_title = getattr(getattr(post, "feed", None), "title", None)
 
@@ -376,7 +376,7 @@ def _build_post_processing_snapshot(
 
     return {
         "snapshot_version": 1,
-        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "created_at_utc": datetime.now(UTC).isoformat(),
         "request": {
             "trigger": trigger,
             "force_retranscribe": bool(force_retranscribe),
@@ -461,12 +461,12 @@ def _build_post_processing_snapshot(
     }
 
 
-def _path_metadata(path_str: Optional[str]) -> dict[str, Any]:
+def _path_metadata(path_str: str | None) -> dict[str, Any]:
     if not path_str:
         return {"path": None, "exists": False, "size_bytes": None}
     path_obj = Path(path_str)
     exists = path_obj.exists()
-    size_bytes: Optional[int] = None
+    size_bytes: int | None = None
     if exists:
         try:
             size_bytes = path_obj.stat().st_size
@@ -475,7 +475,7 @@ def _path_metadata(path_str: Optional[str]) -> dict[str, Any]:
     return {"path": str(path_obj), "exists": exists, "size_bytes": size_bytes}
 
 
-def _iso_datetime(value: Any) -> Optional[str]:
+def _iso_datetime(value: Any) -> str | None:
     if value is None:
         return None
     if isinstance(value, datetime):

@@ -213,8 +213,8 @@ def get_effective_oneshot_model(config: Config) -> str:
 
 
 def get_effective_oneshot_api_key(
-    config: Config | None = None, *, db_llm_api_key: Optional[str] = None
-) -> Optional[str]:
+    config: Config | None = None, *, db_llm_api_key: str | None = None
+) -> str | None:
     """Resolve one-shot API key with one-shot-specific precedence.
 
     Order:

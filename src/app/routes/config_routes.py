@@ -502,8 +502,8 @@ def api_test_oneshot() -> flask.Response:
     if error_response:
         return error_response
 
-    payload: Dict[str, Any] = request.get_json(silent=True) or {}
-    llm: Dict[str, Any] = dict(payload.get("llm", {}))
+    payload: dict[str, Any] = request.get_json(silent=True) or {}
+    llm: dict[str, Any] = dict(payload.get("llm", {}))
 
     db_llm_api_key: str | None = None
     try:

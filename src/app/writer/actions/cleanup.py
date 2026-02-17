@@ -176,7 +176,7 @@ def cleanup_processed_post_files_only_action(params: dict[str, Any]) -> dict[str
     return {"post_id": post.id}
 
 
-def clear_post_identifications_only_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def clear_post_identifications_only_action(params: dict[str, Any]) -> dict[str, Any]:
     """Clear identifications and LLM model calls but preserve transcript segments.
 
     This allows reprocessing with a different ad detection strategy while

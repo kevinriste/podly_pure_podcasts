@@ -15,7 +15,7 @@ import json
 import logging
 import time
 from io import StringIO
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import litellm
 from pydantic import ValidationError
@@ -99,8 +99,8 @@ class OneShotAdClassifier:
     def __init__(
         self,
         config: Config,
-        logger: Optional[logging.Logger] = None,
-        db_session: Optional[Any] = None,
+        logger: logging.Logger | None = None,
+        db_session: Any | None = None,
     ):
         self.config = config
         self.logger = logger or logging.getLogger("global_logger")
@@ -108,10 +108,10 @@ class OneShotAdClassifier:
 
     def classify(
         self,
-        transcript_segments: List[TranscriptSegment],
+        transcript_segments: list[TranscriptSegment],
         post: Post,
-        model_override: Optional[str] = None,
-    ) -> List[OneShotAdSegment]:
+        model_override: str | None = None,
+    ) -> list[OneShotAdSegment]:
         """
         Classify ads in transcript using one-shot LLM approach.
 
@@ -137,7 +137,7 @@ class OneShotAdClassifier:
         chunks = self._maybe_chunk_transcript(transcript_segments)
         self.logger.info(f"Processing {len(chunks)} chunk(s) for post {post.id}")
 
-        all_segments: List[OneShotAdSegment] = []
+        all_segments: list[OneShotAdSegment] = []
         total_duration = transcript_segments[-1].end_time
 
         for i, chunk in enumerate(chunks):
@@ -164,8 +164,8 @@ class OneShotAdClassifier:
 
     def _maybe_chunk_transcript(
         self,
-        segments: List[TranscriptSegment],
-    ) -> List[List[TranscriptSegment]]:
+        segments: list[TranscriptSegment],
+    ) -> list[list[TranscriptSegment]]:
         """
         Split transcript into chunks for very long episodes.
 
@@ -200,7 +200,7 @@ class OneShotAdClassifier:
             return [segments]
 
         # Multi-chunk with overlap for very long episodes
-        chunks: List[List[TranscriptSegment]] = []
+        chunks: list[list[TranscriptSegment]] = []
         chunk_start_time = segments[0].start_time
 
         while chunk_start_time < segments[-1].end_time:
@@ -228,13 +228,13 @@ class OneShotAdClassifier:
 
     def _process_chunk(
         self,
-        chunk: List[TranscriptSegment],
+        chunk: list[TranscriptSegment],
         chunk_index: int,
         total_chunks: int,
         post: Post,
         model: str,
         total_duration: float,
-    ) -> List[OneShotAdSegment]:
+    ) -> list[OneShotAdSegment]:
         """Process a single chunk of transcript segments."""
         if not chunk:
             return []
@@ -297,7 +297,7 @@ class OneShotAdClassifier:
                 f"LLM call failed for chunk {chunk_index}"
             ) from e
 
-    def _build_transcript_text(self, segments: List[TranscriptSegment]) -> str:
+    def _build_transcript_text(self, segments: list[TranscriptSegment]) -> str:
         """Build transcript CSV using segment-provided time boundaries."""
         output = StringIO(newline="")
         writer = csv.writer(output, lineterminator="\n")
@@ -311,7 +311,7 @@ class OneShotAdClassifier:
     def _create_model_call(
         self,
         post: Post,
-        chunk: List[TranscriptSegment],
+        chunk: list[TranscriptSegment],
         user_prompt: str,
         model: str,
     ) -> ModelCall:
@@ -363,7 +363,7 @@ class OneShotAdClassifier:
             {"role": "user", "content": user_prompt},
         ]
 
-        completion_args: Dict[str, Any] = {
+        completion_args: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "timeout": self.config.openai_timeout,
@@ -401,7 +401,7 @@ class OneShotAdClassifier:
         original_retry_attempts = (
             0 if model_call.retry_attempts is None else int(model_call.retry_attempts)
         )
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
 
         for attempt in range(retry_count):
             current_attempt_num = attempt + 1
@@ -503,7 +503,7 @@ class OneShotAdClassifier:
         self,
         response: str,
         model_call: ModelCall,
-    ) -> List[OneShotAdSegment]:
+    ) -> list[OneShotAdSegment]:
         """Parse LLM response into ad segments."""
         try:
             # Try parsing as OneShotResponse directly
@@ -569,8 +569,8 @@ class OneShotAdClassifier:
 
     def _deduplicate_segments(
         self,
-        segments: List[OneShotAdSegment],
-    ) -> List[OneShotAdSegment]:
+        segments: list[OneShotAdSegment],
+    ) -> list[OneShotAdSegment]:
         """
         Deduplicate overlapping ad segments from chunk boundaries.
 
@@ -583,7 +583,7 @@ class OneShotAdClassifier:
         # Sort by start time
         sorted_segments = sorted(segments, key=lambda s: s.start_time)
 
-        merged: List[OneShotAdSegment] = []
+        merged: list[OneShotAdSegment] = []
         for seg in sorted_segments:
             if not merged:
                 merged.append(seg)
@@ -612,8 +612,8 @@ class OneShotAdClassifier:
 
     def create_identifications(
         self,
-        ad_segments: List[OneShotAdSegment],
-        transcript_segments: List[TranscriptSegment],
+        ad_segments: list[OneShotAdSegment],
+        transcript_segments: list[TranscriptSegment],
         model_call: ModelCall,
         min_confidence: float,
     ) -> int:
@@ -635,20 +635,17 @@ class OneShotAdClassifier:
         if not ad_segments:
             return 0
 
-        to_insert: List[Dict[str, Any]] = []
+        to_insert: list[dict[str, Any]] = []
 
         # Persist one identification per transcript segment using the strongest
         # overlapping one-shot confidence. Keep below-threshold evidence as
         # non-cutting candidates for UI/debug visibility.
         for ts in transcript_segments:
-            best_confidence: Optional[float] = None
+            best_confidence: float | None = None
 
             for ad_seg in ad_segments:
                 if ts.start_time < ad_seg.end_time and ts.end_time > ad_seg.start_time:
-                    if (
-                        best_confidence is None
-                        or ad_seg.confidence > best_confidence
-                    ):
+                    if best_confidence is None or ad_seg.confidence > best_confidence:
                         best_confidence = ad_seg.confidence
 
             if best_confidence is None:
@@ -695,7 +692,7 @@ class OneShotAdClassifier:
         self,
         post: Post,
         model: str,
-    ) -> Optional[ModelCall]:
+    ) -> ModelCall | None:
         """Get the most recent successful oneshot model call for a post."""
         if self.db_session:
             query = self.db_session.query(ModelCall)
@@ -704,7 +701,7 @@ class OneShotAdClassifier:
 
             query = db.session.query(ModelCall)
 
-        result: Optional[ModelCall] = (
+        result: ModelCall | None = (
             query.filter_by(
                 post_id=post.id,
                 model_name=f"oneshot:{model}",

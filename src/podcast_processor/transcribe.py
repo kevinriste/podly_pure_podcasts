@@ -64,13 +64,13 @@ def _serialize_raw_response_body(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=True, default=str, indent=2)
 
 
-def _combine_chunk_raw_response_bodies(raw_bodies: List[str]) -> str:
+def _combine_chunk_raw_response_bodies(raw_bodies: list[str]) -> str:
     if not raw_bodies:
         return ""
     if len(raw_bodies) == 1:
         return raw_bodies[0]
 
-    lines: List[str] = []
+    lines: list[str] = []
     for idx, raw_body in enumerate(raw_bodies, start=1):
         lines.append(f"--- chunk {idx} ---")
         lines.append(raw_body)
@@ -108,7 +108,10 @@ class TestWhisperTranscriber(Transcriber):
             Segment(start=1, end=2, text="This is another test"),
         ]
         self.last_raw_response_body = json.dumps(
-            [{"start": seg.start, "end": seg.end, "text": seg.text} for seg in segments],
+            [
+                {"start": seg.start, "end": seg.end, "text": seg.text}
+                for seg in segments
+            ],
             ensure_ascii=True,
             indent=2,
         )
@@ -218,7 +221,9 @@ class OpenAIWhisperTranscriber(Transcriber):
             "[WHISPER_REMOTE] Transcription complete: %d total segments",
             len(all_segments),
         )
-        self.last_raw_response_body = _combine_chunk_raw_response_bodies(raw_chunk_bodies)
+        self.last_raw_response_body = _combine_chunk_raw_response_bodies(
+            raw_chunk_bodies
+        )
         return self.convert_segments(all_segments)
 
     @staticmethod
@@ -243,7 +248,9 @@ class OpenAIWhisperTranscriber(Transcriber):
 
         return segments
 
-    def get_segments_for_chunk(self, chunk_path: str) -> tuple[list[TranscriptionSegment], str]:
+    def get_segments_for_chunk(
+        self, chunk_path: str
+    ) -> tuple[list[TranscriptionSegment], str]:
         with open(chunk_path, "rb") as f:
             self.logger.info(
                 "[WHISPER_API_CALL] Sending chunk to API: %s (timeout=%ds)",
@@ -327,7 +334,9 @@ class GroqWhisperTranscriber(Transcriber):
             "[WHISPER_GROQ] Transcription complete: %d total segments",
             len(all_segments),
         )
-        self.last_raw_response_body = _combine_chunk_raw_response_bodies(raw_chunk_bodies)
+        self.last_raw_response_body = _combine_chunk_raw_response_bodies(
+            raw_chunk_bodies
+        )
         return self.convert_segments(all_segments)
 
     @staticmethod
@@ -352,7 +361,9 @@ class GroqWhisperTranscriber(Transcriber):
 
         return segments
 
-    def get_segments_for_chunk(self, chunk_path: str) -> tuple[list[GroqTranscriptionSegment], str]:
+    def get_segments_for_chunk(
+        self, chunk_path: str
+    ) -> tuple[list[GroqTranscriptionSegment], str]:
 
         self.logger.info("[GROQ_API_CALL] Sending chunk to Groq API: %s", chunk_path)
         transcription = self.client.audio.transcriptions.create(

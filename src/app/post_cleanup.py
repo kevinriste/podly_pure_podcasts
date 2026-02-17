@@ -178,7 +178,7 @@ def cleanup_processed_posts(retention_days: int | None) -> int:
                     raise RuntimeError(
                         getattr(result, "error", "Writer action returned failure")
                     )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.error(
                     "Cleanup failed for post %s (guid=%s): %s",
                     post.id,
@@ -239,7 +239,6 @@ def _remove_associated_files(post: Post) -> None:
             logger.info("Cleanup deleted file: %s", file_path)
         except OSError as exc:
             logger.warning("Cleanup unable to delete %s: %s", file_path, exc)
-
 
 
 def _load_latest_completed_map(

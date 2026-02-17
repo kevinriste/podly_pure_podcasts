@@ -422,8 +422,8 @@ class PodcastProcessor:
         post: Post,
         job: ProcessingJob,
         processed_audio_path: str,
-        cancel_callback: Optional[Callable[[], bool]] = None,
-        model_override: Optional[str] = None,
+        cancel_callback: Callable[[], bool] | None = None,
+        model_override: str | None = None,
     ) -> None:
         """
         Perform one-shot LLM ad detection: transcription, single LLM call, audio processing.
