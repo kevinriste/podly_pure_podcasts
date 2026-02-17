@@ -43,6 +43,6 @@ def model_supports_structured_outputs(model_name: str | None) -> bool:
         from litellm import supports_response_schema
 
         return supports_response_schema(model=model_name)
-    except Exception:
+    except Exception:  # noqa: BLE001
         # If litellm check fails for any reason, assume no support
         return False

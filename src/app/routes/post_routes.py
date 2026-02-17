@@ -330,7 +330,7 @@ def _get_chapter_stats(post: Post, feed: Feed) -> dict[str, Any]:
 
 
 @post_bp.route("/api/posts/<string:p_guid>/stats", methods=["GET"])
-def api_post_stats(p_guid: str) -> flask.Response:
+def api_post_stats(p_guid: str) -> flask.Response:  # noqa: PLR0912
     """Get processing statistics for a post in JSON format."""
     post = Post.query.filter_by(guid=p_guid).first()
     if post is None:

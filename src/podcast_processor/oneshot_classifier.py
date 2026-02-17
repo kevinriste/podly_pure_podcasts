@@ -82,7 +82,7 @@ Duration: {duration:.1f} seconds
 TRANSCRIPT CSV (columns: start_time,end_time,text):
 {transcript}
 
-Find all ad segments and a few adjacent transition segments on each side of the ad, if possible. 
+Find all ad segments and a few adjacent transition segments on each side of the ad, if possible.
 Err on the side of returning multiple segments with different confidence levels, especially where your confidence in something being an ad shifts.
 Strongly prefer transition-aware segmentation with confidence gradients near ad boundaries (separate lower-confidence edge segments where appropriate).
 I would rather have too much to work with, lots of low-confidence segments, than have no information at all about segments in and around an ad.
@@ -350,7 +350,7 @@ class OneShotAdClassifier:
 
         return model_call
 
-    def _call_llm(
+    def _call_llm(  # noqa: PLR0912
         self,
         system_prompt: str,
         user_prompt: str,

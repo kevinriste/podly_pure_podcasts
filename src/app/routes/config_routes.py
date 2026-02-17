@@ -513,7 +513,7 @@ def api_test_oneshot() -> flask.Response:
             candidate = db_llm.get("llm_api_key")
             if isinstance(candidate, str) and candidate.strip():
                 db_llm_api_key = candidate
-    except Exception as e:  # pylint: disable=broad-except
+    except Exception as e:  # noqa: BLE001
         logger.warning(
             "Failed to read DB llm_api_key for one-shot test fallback: %s", e
         )
