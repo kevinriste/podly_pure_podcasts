@@ -20,11 +20,7 @@ from app.models import (
     Post,
     TranscriptSegment,
 )
-from app.posts import (
-    clear_post_identifications_only,
-    clear_post_processing_data,
-    snapshot_post_processing_data,
-)
+from app.posts import clear_post_processing_data
 from app.routes.post_stats_utils import (
     count_model_calls,
     count_primary_labels,
@@ -737,23 +733,11 @@ def api_process_post(p_guid: str) -> ResponseReturnValue:
 
 @post_bp.route("/api/posts/<string:p_guid>/reprocess", methods=["POST"])
 def api_reprocess_post(p_guid: str) -> ResponseReturnValue:
-    """Clear processing data for a post and start processing from scratch.
+    """Clear all processing data for a post and start processing from scratch.
 
     Admin only.
-
-    Request body (optional):
-        force_retranscribe: bool - If true, clears transcript and re-transcribes.
-                                   If false (default), keeps existing transcript
-                                   and only clears identifications.
     """
-    data = request.get_json(silent=True) or {}
-    force_retranscribe = data.get("force_retranscribe", False)
-
-    logger.info(
-        "[API] Reprocess requested for post_guid=%s force_retranscribe=%s",
-        p_guid,
-        force_retranscribe,
-    )
+    logger.info("[API] Reprocess requested for post_guid=%s", p_guid)
 
     post = Post.query.filter_by(guid=p_guid).first()
     if not post:
@@ -829,45 +813,13 @@ def api_reprocess_post(p_guid: str) -> ResponseReturnValue:
     billing_user_id = getattr(user, "id", None)
 
     try:
-        snapshot_path = snapshot_post_processing_data(
-            post,
-            trigger="reprocess",
-            force_retranscribe=bool(force_retranscribe),
-            requested_by_user_id=billing_user_id,
-        )
-        if snapshot_path:
-            logger.info(
-                "[API] Reprocess: snapshot created guid=%s post_id=%s path=%s",
-                p_guid,
-                getattr(post, "id", None),
-                snapshot_path,
-            )
-        else:
-            logger.warning(
-                "[API] Reprocess: snapshot was not created guid=%s post_id=%s",
-                p_guid,
-                getattr(post, "id", None),
-            )
-
         logger.info(
-            "[API] Reprocess: cancelling jobs and clearing processing data guid=%s post_id=%s force_retranscribe=%s",
+            "[API] Reprocess: cancelling jobs and clearing processing data guid=%s post_id=%s",
             p_guid,
             getattr(post, "id", None),
-            force_retranscribe,
         )
         get_jobs_manager().cancel_post_jobs(p_guid)
-
-        if force_retranscribe:
-            # Clear everything including transcript (full re-process)
-            clear_post_processing_data(post)
-            clear_message = (
-                "Post fully cleared (including transcript) and reprocessing started"
-            )
-        else:
-            # Keep transcript, only clear identifications (re-classify with new strategy)
-            clear_post_identifications_only(post)
-            clear_message = "Post identifications cleared (transcript preserved) and reprocessing started"
-
+        clear_post_processing_data(post)
         logger.info(
             "[API] Reprocess: starting post processing guid=%s post_id=%s",
             p_guid,
@@ -881,9 +833,7 @@ def api_reprocess_post(p_guid: str) -> ResponseReturnValue:
         )
         status_code = 200 if result.get("status") in ("started", "completed") else 400
         if result.get("status") == "started":
-            result["message"] = clear_message
-        if snapshot_path:
-            result["snapshot_path"] = str(snapshot_path)
+            result["message"] = "Post cleared and reprocessing started"
         logger.info(
             "[API] Reprocess: completed guid=%s status=%s code=%s",
             p_guid,
