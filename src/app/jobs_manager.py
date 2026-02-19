@@ -230,6 +230,7 @@ class JobsManager:
             if job.status == "failed" and job.error_message:
                 response["error"] = job.error_message
             if job.status == "cancelled" and job.error_message:
+                response["step_name"] = job.error_message
                 response["message"] = job.error_message
             return response
 
@@ -438,19 +439,24 @@ class JobsManager:
 
             return count
 
-    def clear_all_jobs(self) -> dict[str, Any]:
+    def clear_all_jobs(self, *, active_only: bool = False) -> dict[str, Any]:
         """
-        Clear all processing jobs from the database.
-        This is typically called during application startup to ensure a clean state.
+        Clear processing jobs from the database.
+
+        When active_only=True, clear only in-flight jobs ("pending"/"running"),
+        preserving historical completed/failed records.
         """
         try:
-            result = writer_client.action("clear_all_jobs", {}, wait=True)
+            result = writer_client.action(
+                "clear_all_jobs", {"active_only": active_only}, wait=True
+            )
             count = result.data if result and result.success else 0
-            logger.info(f"Cleared {count} processing jobs on startup")
+            scope = "active processing jobs" if active_only else "processing jobs"
+            logger.info(f"Cleared {count} {scope}")
             return {
                 "status": "success",
                 "cleared_jobs": count,
-                "message": f"Cleared {count} jobs from database",
+                "message": f"Cleared {count} {scope} from database",
             }
         except Exception as e:  # noqa: BLE001
             logger.error(f"Error clearing all jobs: {e}")
