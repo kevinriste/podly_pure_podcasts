@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { feedsApi } from '../services/api';
+import { useTimestampFormatter } from '../hooks/useTimestampFormatter';
 
 interface LLMProcessingStatsProps {
   episodeGuid: string;
-  hasProcessedAudio: boolean;
+  isStatsReady: boolean;
   className?: string;
 }
 
@@ -12,9 +13,10 @@ type TabId = 'overview' | 'model-calls' | 'transcript' | 'identifications';
 
 export default function LLMProcessingStats({
   episodeGuid,
-  hasProcessedAudio,
+  isStatsReady,
   className = ''
 }: LLMProcessingStatsProps) {
+  const { formatDateTime } = useTimestampFormatter();
   const [showModal, setShowModal] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>('overview');
   const [expandedModelCalls, setExpandedModelCalls] = useState<Set<number>>(new Set());
@@ -22,7 +24,7 @@ export default function LLMProcessingStats({
   const { data: stats, isLoading, error } = useQuery({
     queryKey: ['episode-stats', episodeGuid],
     queryFn: () => feedsApi.getPostStats(episodeGuid),
-    enabled: showModal && hasProcessedAudio,
+    enabled: showModal && isStatsReady,
   });
 
   const formatDuration = (seconds: number) => {
@@ -48,11 +50,6 @@ export default function LLMProcessingStats({
     return `${minutes}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const formatTimestamp = (timestamp: string | null) => {
-    if (!timestamp) return 'N/A';
-    return new Date(timestamp).toLocaleString();
-  };
-
   const toggleModelCallDetails = (callId: number) => {
     const newExpanded = new Set(expandedModelCalls);
     if (newExpanded.has(callId)) {
@@ -63,7 +60,48 @@ export default function LLMProcessingStats({
     setExpandedModelCalls(newExpanded);
   };
 
-  if (!hasProcessedAudio) {
+  const formatConfidence = (value: number | null | undefined) => {
+    if (value === null || value === undefined) {
+      return 'N/A';
+    }
+    return value.toFixed(2);
+  };
+
+  const getTranscriptSegmentConfidence = (
+    segment: {
+      primary_label: 'ad' | 'content';
+      identifications: Array<{ label: string; confidence: number | null }>;
+    }
+  ): number | null => {
+    const adConfidences = segment.identifications
+      .filter(
+        (identification) =>
+          identification.label === 'ad' &&
+          identification.confidence !== null &&
+          identification.confidence !== undefined
+      )
+      .map((identification) => identification.confidence as number);
+
+    if (segment.primary_label === 'ad' && adConfidences.length > 0) {
+      return Math.max(...adConfidences);
+    }
+
+    const allConfidences = segment.identifications
+      .filter(
+        (identification) =>
+          identification.confidence !== null &&
+          identification.confidence !== undefined
+      )
+      .map((identification) => identification.confidence as number);
+
+    if (allConfidences.length === 0) {
+      return null;
+    }
+
+    return Math.max(...allConfidences);
+  };
+
+  if (!isStatsReady) {
     return null;
   }
 
@@ -364,7 +402,7 @@ export default function LLMProcessingStats({
                                         {call.status}
                                       </span>
                                     </td>
-                                    <td className="px-4 py-3 text-sm text-gray-600">{formatTimestamp(call.timestamp)}</td>
+                                    <td className="px-4 py-3 text-sm text-gray-600">{call.timestamp ? formatDateTime(call.timestamp) : 'N/A'}</td>
                                     <td className="px-4 py-3 text-sm text-gray-600">{call.retry_attempts}</td>
                                     <td className="px-4 py-3">
                                       <button
@@ -427,6 +465,7 @@ export default function LLMProcessingStats({
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Seq #</th>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time Range</th>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Label</th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Confidence</th>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Text</th>
                               </tr>
                             </thead>
@@ -449,6 +488,9 @@ export default function LLMProcessingStats({
                                         ? (segment.mixed ? 'Ad (mixed)' : 'Ad')
                                         : 'Content'}
                                     </span>
+                                  </td>
+                                  <td className="px-4 py-3 text-sm text-gray-600">
+                                    {formatConfidence(getTranscriptSegmentConfidence(segment))}
                                   </td>
                                   <td className="px-4 py-3 text-sm text-gray-900 max-w-md">
                                     <div className="truncate text-left" title={segment.text}>
@@ -503,7 +545,7 @@ export default function LLMProcessingStats({
                                     </span>
                                   </td>
                                   <td className="px-4 py-3 text-sm text-gray-600">
-                                    {identification.confidence ? identification.confidence.toFixed(2) : 'N/A'}
+                                    {formatConfidence(identification.confidence)}
                                   </td>
                                   <td className="px-4 py-3 text-sm text-gray-600">{identification.model_call_id}</td>
                                   <td className="px-4 py-3 text-sm text-gray-900 max-w-md">

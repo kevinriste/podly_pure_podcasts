@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -47,7 +47,7 @@ def upsert_model_call_action(params: dict[str, Any]) -> dict[str, Any]:
             model_name=str(model_name),
             prompt=str(prompt),
             status="pending",
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
             retry_attempts=0,
             error_message=None,
             response=None,
@@ -116,7 +116,7 @@ def upsert_whisper_model_call_action(params: dict[str, Any]) -> dict[str, Any]:
             retry_attempts=int(reset_fields.get("retry_attempts") or 0),
             error_message=reset_fields.get("error_message"),
             response=reset_fields.get("response"),
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
         )
         db.session.add(model_call)
         try:
@@ -158,6 +158,7 @@ def replace_transcription_action(params: dict[str, Any]) -> dict[str, Any]:
     post_id = params.get("post_id")
     segments = params.get("segments")
     model_call_id = params.get("model_call_id")
+    model_call_response = params.get("model_call_response")
 
     if post_id is None:
         raise ValueError("post_id is required")
@@ -203,7 +204,10 @@ def replace_transcription_action(params: dict[str, Any]) -> dict[str, Any]:
         if mc is not None:
             mc.first_segment_sequence_num = 0
             mc.last_segment_sequence_num = len(payload) - 1
-            mc.response = f"{len(payload)} segments transcribed."
+            if isinstance(model_call_response, str) and model_call_response.strip():
+                mc.response = model_call_response
+            else:
+                mc.response = f"{len(payload)} segments transcribed."
             mc.status = "success"
             mc.error_message = None
 

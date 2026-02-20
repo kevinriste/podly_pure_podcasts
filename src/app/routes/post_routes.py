@@ -34,6 +34,7 @@ from app.routes.post_utils import (
     increment_download_count,
     missing_processed_audio_response,
 )
+from app.runtime_config import config as runtime_config
 from app.writer.client import writer_client
 from podcast_processor.chapter_filter import parse_filter_strings
 from shared import defaults as DEFAULTS
@@ -325,14 +326,22 @@ def _get_chapter_stats(post: Post, feed: Feed) -> dict[str, Any]:
 
 
 @post_bp.route("/api/posts/<string:p_guid>/stats", methods=["GET"])
-def api_post_stats(p_guid: str) -> flask.Response:
+def api_post_stats(p_guid: str) -> flask.Response:  # noqa: PLR0912
     """Get processing statistics for a post in JSON format."""
     post = Post.query.filter_by(guid=p_guid).first()
     if post is None:
         return flask.make_response(flask.jsonify({"error": "Post not found"}), 404)
 
     feed = db.session.get(Feed, post.feed_id)
-    ad_detection_strategy = feed.ad_detection_strategy if feed else "llm"
+    ad_detection_strategy = "llm"
+    if feed:
+        feed_strategy = getattr(feed, "ad_detection_strategy", "inherit") or "inherit"
+        if feed_strategy == "inherit":
+            ad_detection_strategy = (
+                getattr(runtime_config, "ad_detection_strategy", None) or "llm"
+            )
+        else:
+            ad_detection_strategy = feed_strategy
 
     model_calls = (
         ModelCall.query.filter_by(post_id=post.id)
@@ -423,7 +432,9 @@ def api_post_stats(p_guid: str) -> flask.Response:
                         "id": ident.id,
                         "label": ident.label,
                         "confidence": (
-                            round(ident.confidence, 2) if ident.confidence else None
+                            round(ident.confidence, 2)
+                            if ident.confidence is not None
+                            else None
                         ),
                         "model_call_id": ident.model_call_id,
                     }
@@ -442,7 +453,7 @@ def api_post_stats(p_guid: str) -> flask.Response:
                 "label": identification.label,
                 "confidence": (
                     round(identification.confidence, 2)
-                    if identification.confidence
+                    if identification.confidence is not None
                     else None
                 ),
                 "model_call_id": identification.model_call_id,

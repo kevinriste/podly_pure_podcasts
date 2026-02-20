@@ -740,11 +740,12 @@ def update_feed_settings(feed_id: int) -> ResponseReturnValue:
     # Validate and extract ad_detection_strategy
     if "ad_detection_strategy" in data:
         strategy = data["ad_detection_strategy"]
-        if strategy not in ("llm", "chapter"):
+        if strategy not in ("inherit", "llm", "oneshot", "chapter"):
             return (
                 jsonify(
                     {
-                        "error": "Invalid ad_detection_strategy. Must be 'llm' or 'chapter'"
+                        "error": "Invalid ad_detection_strategy."
+                        " Must be 'inherit', 'llm', 'oneshot', or 'chapter'"
                     }
                 ),
                 400,
@@ -817,7 +818,7 @@ def _serialize_feed(
         "member_count": len(member_ids),
         "is_member": is_member,
         "is_active_subscription": is_active_subscription,
-        "ad_detection_strategy": getattr(feed, "ad_detection_strategy", "llm"),
+        "ad_detection_strategy": getattr(feed, "ad_detection_strategy", "inherit"),
         "chapter_filter_strings": getattr(feed, "chapter_filter_strings", None),
     }
     return feed_payload

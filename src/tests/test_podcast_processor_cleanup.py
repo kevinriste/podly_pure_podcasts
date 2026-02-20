@@ -48,5 +48,6 @@ def test_remove_unprocessed_audio_deletes_file(app, tmp_path) -> None:
 
         processor._remove_unprocessed_audio(post)
 
-        assert post.unprocessed_audio_path is None
+        # Method only deletes the file; ORM update is handled by the caller
+        # via writer_client.update in _finalize_processing.
         assert not file_path.exists()

@@ -29,7 +29,7 @@ def generate_system_prompt() -> str:
         exclude_none=True
     )
 
-    output_for_one_shot_example = AdSegmentPredictionList(
+    output_for_oneshot_example = AdSegmentPredictionList(
         ad_segments=[
             AdSegmentPrediction(segment_offset=59.8, confidence=0.95),
             AdSegmentPrediction(segment_offset=64.8, confidence=0.9),
@@ -41,9 +41,9 @@ def generate_system_prompt() -> str:
         confidence=0.96,
     ).model_dump_json(exclude_none=True)
 
-    example_output_for_prompt = output_for_one_shot_example.strip()
+    example_output_for_prompt = output_for_oneshot_example.strip()
 
-    one_shot_transcript_example = transcript_excerpt_for_prompt(
+    oneshot_transcript_example = transcript_excerpt_for_prompt(
         [
             Segment(start=53.8, end=-1, text="That's all coming after the break."),
             Segment(
@@ -137,7 +137,7 @@ DECISION RULES:
 This transcript excerpt is broken into segments starting with a timestamp [X] (seconds). Output every segment that is advertisement content.
 
 Example (external sponsor with CTA):
-{one_shot_transcript_example}
+{oneshot_transcript_example}
 Output: {example_output_for_prompt}
 
 Example (technical mention, not an ad):

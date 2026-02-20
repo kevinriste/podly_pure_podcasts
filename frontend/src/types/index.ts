@@ -9,13 +9,13 @@ export interface Feed {
   member_count?: number;
   is_member?: boolean;
   is_active_subscription?: boolean;
-  ad_detection_strategy?: 'llm' | 'chapter';
+  ad_detection_strategy?: 'inherit' | 'llm' | 'oneshot' | 'chapter';
   chapter_filter_strings?: string | null;
   auto_whitelist_new_episodes_override?: boolean | null;
 }
 
 export interface FeedSettingsUpdate {
-  ad_detection_strategy?: 'llm' | 'chapter';
+  ad_detection_strategy?: 'inherit' | 'llm' | 'oneshot' | 'chapter';
   chapter_filter_strings?: string | null;
   auto_whitelist_new_episodes_override?: boolean | null;
 }
@@ -104,6 +104,9 @@ export interface LLMConfig {
   llm_api_key?: string | null;
   llm_api_key_preview?: string | null;
   llm_model: string;
+  oneshot_model?: string | null;
+  oneshot_max_chunk_duration_seconds: number;
+  oneshot_chunk_overlap_seconds: number;
   openai_base_url?: string | null;
   openai_timeout: number;
   openai_max_tokens: number;
@@ -155,6 +158,7 @@ export interface AppConfigUI {
   automatically_whitelist_new_episodes: boolean;
   post_cleanup_retention_days: number | null;
   number_of_episodes_to_whitelist_from_archive_of_new_feed: number;
+  ad_detection_strategy: 'llm' | 'oneshot';
   enable_public_landing_page: boolean;
   user_limit_total: number | null;
   autoprocess_on_download: boolean;

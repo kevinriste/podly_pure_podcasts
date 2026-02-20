@@ -16,9 +16,10 @@ from shared.test_utils import create_standard_test_config
 class MockTranscriber(Transcriber):
     """Mock transcriber for testing TranscriptionManager."""
 
-    def __init__(self, mock_response=None):
+    def __init__(self, mock_response=None, raw_response_body: str | None = None):
         self.mock_response = mock_response or []
         self._model_name = "mock_transcriber"
+        self.last_raw_response_body = raw_response_body
 
     @property
     def model_name(self) -> str:
@@ -179,8 +180,8 @@ def test_transcribe_new(
 
         transcriber = MockTranscriber(
             [
-                Segment(start=0.0, end=5.0, text="Test segment 1"),
-                Segment(start=5.0, end=10.0, text="Test segment 2"),
+                Segment(start=0.04, end=5.678, text="Test segment 1"),
+                Segment(start=5.678, end=10.001, text="Test segment 2"),
             ]
         )
         manager = TranscriptionManager(
@@ -195,6 +196,10 @@ def test_transcribe_new(
         assert len(segments) == 2
         assert segments[0].text == "Test segment 1"
         assert segments[1].text == "Test segment 2"
+        assert segments[0].start_time == pytest.approx(0.04)
+        assert segments[0].end_time == pytest.approx(5.678)
+        assert segments[1].start_time == pytest.approx(5.678)
+        assert segments[1].end_time == pytest.approx(10.001)
         assert TranscriptSegment.query.filter_by(post_id=post.id).count() == 2
         assert ModelCall.query.filter_by(post_id=post.id).count() == 1
         assert ModelCall.query.filter_by(post_id=post.id).first().status == "success"
@@ -292,3 +297,45 @@ def test_transcribe_reuses_placeholder_model_call(
         assert refreshed_call.id == existing_call.id
         assert refreshed_call.status == "success"
         assert refreshed_call.last_segment_sequence_num == 1
+
+
+def test_transcribe_persists_raw_whisper_response_body(
+    test_config: Config,
+    test_logger: logging.Logger,
+    app: Flask,
+) -> None:
+    with app.app_context():
+        feed = Feed(title="Raw Feed", rss_url="http://example.com/raw.xml")
+        post = Post(
+            feed=feed,
+            guid="guid-raw",
+            download_url="http://example.com/audio-raw.mp3",
+            title="Raw Episode",
+            unprocessed_audio_path="/tmp/raw.mp3",
+        )
+        db.session.add_all([feed, post])
+        db.session.commit()
+
+        raw_response = '{"segments":[{"start":0.0,"end":1.0,"text":"hello"}]}'
+        manager = TranscriptionManager(
+            test_logger,
+            test_config,
+            db_session=db.session,
+            transcriber=MockTranscriber(
+                [
+                    Segment(start=0.0, end=5.0, text="Segment 1"),
+                    Segment(start=5.0, end=10.0, text="Segment 2"),
+                ],
+                raw_response_body=raw_response,
+            ),
+        )
+
+        manager.transcribe(post)
+
+        call = (
+            ModelCall.query.filter_by(post_id=post.id)
+            .order_by(ModelCall.timestamp.desc())
+            .first()
+        )
+        assert call is not None
+        assert call.response == raw_response

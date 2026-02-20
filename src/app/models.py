@@ -30,12 +30,11 @@ class Feed(db.Model):  # type: ignore[name-defined, misc]
     author = db.Column(db.Text)
     rss_url = db.Column(db.Text, unique=True, nullable=False)
     image_url = db.Column(db.Text)
-    # Ad detection strategy: "llm" (default) or "chapter".
+    # Ad detection strategy: "inherit" = use global default,
+    # "llm" / "oneshot" = explicit feed override, "chapter" = chapter-based detection.
     # Note: "chapter" strategy requires CBR audio encoding for accurate chapter marker
     # seeking. "llm" uses VBR for smaller files.
-    ad_detection_strategy = db.Column(
-        db.String(20), nullable=False, default=DEFAULTS.AD_DETECTION_DEFAULT_STRATEGY
-    )
+    ad_detection_strategy = db.Column(db.String(20), nullable=False, default="inherit")
     # Per-feed filter strings override (comma-separated), null = use global defaults
     chapter_filter_strings = db.Column(db.Text, nullable=True)
     auto_whitelist_new_episodes_override = db.Column(db.Boolean, nullable=True)
@@ -363,6 +362,11 @@ class LLMSettings(db.Model):  # type: ignore[name-defined, misc]
     id = db.Column(db.Integer, primary_key=True, default=1)
     llm_api_key = db.Column(db.Text, nullable=True)
     llm_model = db.Column(db.Text, nullable=False, default=DEFAULTS.LLM_DEFAULT_MODEL)
+    oneshot_model = db.Column(db.String(100), nullable=True)
+    oneshot_max_chunk_duration_seconds = db.Column(
+        db.Integer, nullable=False, default=7200
+    )
+    oneshot_chunk_overlap_seconds = db.Column(db.Integer, nullable=False, default=900)
     openai_base_url = db.Column(db.Text, nullable=True)
     openai_timeout = db.Column(
         db.Integer, nullable=False, default=DEFAULTS.OPENAI_DEFAULT_TIMEOUT_SEC
@@ -504,6 +508,9 @@ class AppSettings(db.Model):  # type: ignore[name-defined, misc]
         db.Integer,
         nullable=False,
         default=DEFAULTS.APP_NUM_EPISODES_TO_WHITELIST_FROM_ARCHIVE_OF_NEW_FEED,
+    )
+    ad_detection_strategy = db.Column(
+        db.String(20), nullable=False, default=DEFAULTS.AD_DETECTION_DEFAULT_STRATEGY
     )
     enable_public_landing_page = db.Column(
         db.Boolean,

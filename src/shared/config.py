@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -72,6 +73,9 @@ class LocalWhisperConfig(BaseModel):
 class Config(BaseModel):
     llm_api_key: str | None = Field(default=None)
     llm_model: str = Field(default=DEFAULTS.LLM_DEFAULT_MODEL)
+    oneshot_model: str | None = Field(default=None)
+    oneshot_max_chunk_duration_seconds: int = Field(default=7200, ge=1)
+    oneshot_chunk_overlap_seconds: int = Field(default=900, ge=0)
     openai_base_url: str | None = None
     openai_max_tokens: int = DEFAULTS.OPENAI_DEFAULT_MAX_TOKENS
     openai_timeout: int = DEFAULTS.OPENAI_DEFAULT_TIMEOUT_SEC
@@ -150,6 +154,7 @@ class Config(BaseModel):
     number_of_episodes_to_whitelist_from_archive_of_new_feed: int = (
         DEFAULTS.APP_NUM_EPISODES_TO_WHITELIST_FROM_ARCHIVE_OF_NEW_FEED
     )
+    ad_detection_strategy: str = DEFAULTS.AD_DETECTION_DEFAULT_STRATEGY
     enable_public_landing_page: bool = DEFAULTS.APP_ENABLE_PUBLIC_LANDING_PAGE
     user_limit_total: int | None = DEFAULTS.APP_USER_LIMIT_TOTAL
     autoprocess_on_download: bool = DEFAULTS.APP_AUTOPROCESS_ON_DOWNLOAD
@@ -190,3 +195,45 @@ class Config(BaseModel):
         self.remote_whisper = None
 
         return self
+
+
+def get_effective_oneshot_model(config: Config) -> str:
+    """Resolve one-shot model from env first, then DB-backed config."""
+    env_model = os.environ.get("ONESHOT_MODEL") or os.environ.get("LLM_ONESHOT_MODEL")
+    if env_model and env_model.strip():
+        return env_model.strip()
+
+    if config.oneshot_model and config.oneshot_model.strip():
+        return config.oneshot_model.strip()
+
+    raise ValueError(
+        "One-shot model is not configured. Set ONESHOT_MODEL (or LLM_ONESHOT_MODEL) "
+        "or configure llm.oneshot_model in settings."
+    )
+
+
+def get_effective_oneshot_api_key(
+    config: Config | None = None, *, db_llm_api_key: str | None = None
+) -> str | None:
+    """Resolve one-shot API key with one-shot-specific precedence.
+
+    Order:
+    1) ONESHOT_API_KEY
+    2) LLM_API_KEY
+    3) DB llm_api_key value (or config.llm_api_key fallback)
+    """
+    env_oneshot_key = os.environ.get("ONESHOT_API_KEY")
+    if isinstance(env_oneshot_key, str) and env_oneshot_key.strip():
+        return env_oneshot_key.strip()
+
+    env_llm_key = os.environ.get("LLM_API_KEY")
+    if isinstance(env_llm_key, str) and env_llm_key.strip():
+        return env_llm_key.strip()
+
+    fallback_key = db_llm_api_key
+    if fallback_key is None and config is not None:
+        fallback_key = config.llm_api_key
+
+    if isinstance(fallback_key, str) and fallback_key.strip():
+        return fallback_key.strip()
+    return None

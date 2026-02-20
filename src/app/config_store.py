@@ -69,6 +69,14 @@ def _set_if_default(obj: Any, attr: str, new_val: Any, default_val: Any) -> bool
     return False
 
 
+def _get_env_oneshot_model() -> str | None:
+    env_val = os.environ.get("ONESHOT_MODEL") or os.environ.get("LLM_ONESHOT_MODEL")
+    if not env_val:
+        return None
+    normalized = env_val.strip()
+    return normalized or None
+
+
 def _ensure_row(model: type, defaults: dict[str, Any]) -> Any:
     row = db.session.get(model, 1)
     if row is None:
@@ -78,8 +86,10 @@ def _ensure_row(model: type, defaults: dict[str, Any]) -> Any:
         except Exception:  # noqa: BLE001
             role = None
 
-        # Web app should be read-only; only the writer process is allowed to create
-        # missing settings rows.
+        # NOTE: This direct safe_commit is intentional — it is guarded by
+        # role == "writer" so it only runs in the writer process, not the
+        # read-only web app.  This is a deliberate exemption from the
+        # writer_client pattern used elsewhere.
         if role == "writer":
             row = model(id=1, **defaults)
             db.session.add(row)
@@ -104,6 +114,8 @@ def ensure_defaults() -> None:
         LLMSettings,
         {
             "llm_model": DEFAULTS.LLM_DEFAULT_MODEL,
+            "oneshot_max_chunk_duration_seconds": 7200,
+            "oneshot_chunk_overlap_seconds": 900,
             "openai_timeout": DEFAULTS.OPENAI_DEFAULT_TIMEOUT_SEC,
             "openai_max_tokens": DEFAULTS.OPENAI_DEFAULT_MAX_TOKENS,
             "llm_max_concurrent_calls": DEFAULTS.LLM_DEFAULT_MAX_CONCURRENT_CALLS,
@@ -154,6 +166,7 @@ def ensure_defaults() -> None:
             "automatically_whitelist_new_episodes": DEFAULTS.APP_AUTOMATICALLY_WHITELIST_NEW_EPISODES,
             "post_cleanup_retention_days": DEFAULTS.APP_POST_CLEANUP_RETENTION_DAYS,
             "number_of_episodes_to_whitelist_from_archive_of_new_feed": DEFAULTS.APP_NUM_EPISODES_TO_WHITELIST_FROM_ARCHIVE_OF_NEW_FEED,
+            "ad_detection_strategy": DEFAULTS.AD_DETECTION_DEFAULT_STRATEGY,
             "enable_public_landing_page": DEFAULTS.APP_ENABLE_PUBLIC_LANDING_PAGE,
             "user_limit_total": DEFAULTS.APP_USER_LIMIT_TOTAL,
             "autoprocess_on_download": DEFAULTS.APP_AUTOPROCESS_ON_DOWNLOAD,
@@ -161,68 +174,66 @@ def ensure_defaults() -> None:
     )
 
 
-def _apply_llm_env_overrides_to_db(llm: Any) -> bool:
+def _apply_llm_env_overrides_to_db(llm: Any, *, force: bool = False) -> bool:
     """Apply LLM-related environment variable overrides to database settings.
+
+    When *force* is False (first-boot), only updates empty/default fields.
+    When *force* is True (env hash changed), overwrites existing values.
 
     Returns True if any settings were changed.
     """
     changed = False
+
+    def _set(attr: str, env_val: Any, default: Any = _SENTINEL) -> bool:
+        if env_val is None:
+            return False
+        if force:
+            setattr(llm, attr, env_val)
+            return True
+        if default is _SENTINEL:
+            return _set_if_empty(llm, attr, env_val)
+        return _set_if_default(llm, attr, env_val, default)
 
     env_llm_key = (
         os.environ.get("LLM_API_KEY")
         or os.environ.get("OPENAI_API_KEY")
         or os.environ.get("GROQ_API_KEY")
     )
-    changed = _set_if_empty(llm, "llm_api_key", env_llm_key) or changed
+    changed = _set("llm_api_key", env_llm_key) or changed
 
-    env_llm_model = os.environ.get("LLM_MODEL")
     changed = (
-        _set_if_default(llm, "llm_model", env_llm_model, DEFAULTS.LLM_DEFAULT_MODEL)
+        _set("llm_model", os.environ.get("LLM_MODEL"), DEFAULTS.LLM_DEFAULT_MODEL)
         or changed
     )
-
-    env_openai_base_url = os.environ.get("OPENAI_BASE_URL")
-    changed = _set_if_empty(llm, "openai_base_url", env_openai_base_url) or changed
-
-    env_openai_timeout = _parse_int(os.environ.get("OPENAI_TIMEOUT"))
+    changed = _set("openai_base_url", os.environ.get("OPENAI_BASE_URL")) or changed
     changed = (
-        _set_if_default(
-            llm,
+        _set(
             "openai_timeout",
-            env_openai_timeout,
+            _parse_int(os.environ.get("OPENAI_TIMEOUT")),
             DEFAULTS.OPENAI_DEFAULT_TIMEOUT_SEC,
         )
         or changed
     )
-
-    env_openai_max_tokens = _parse_int(os.environ.get("OPENAI_MAX_TOKENS"))
     changed = (
-        _set_if_default(
-            llm,
+        _set(
             "openai_max_tokens",
-            env_openai_max_tokens,
+            _parse_int(os.environ.get("OPENAI_MAX_TOKENS")),
             DEFAULTS.OPENAI_DEFAULT_MAX_TOKENS,
         )
         or changed
     )
-
-    env_llm_max_concurrent = _parse_int(os.environ.get("LLM_MAX_CONCURRENT_CALLS"))
     changed = (
-        _set_if_default(
-            llm,
+        _set(
             "llm_max_concurrent_calls",
-            env_llm_max_concurrent,
+            _parse_int(os.environ.get("LLM_MAX_CONCURRENT_CALLS")),
             DEFAULTS.LLM_DEFAULT_MAX_CONCURRENT_CALLS,
         )
         or changed
     )
-
-    env_llm_max_retries = _parse_int(os.environ.get("LLM_MAX_RETRY_ATTEMPTS"))
     changed = (
-        _set_if_default(
-            llm,
+        _set(
             "llm_max_retry_attempts",
-            env_llm_max_retries,
+            _parse_int(os.environ.get("LLM_MAX_RETRY_ATTEMPTS")),
             DEFAULTS.LLM_DEFAULT_MAX_RETRY_ATTEMPTS,
         )
         or changed
@@ -231,9 +242,9 @@ def _apply_llm_env_overrides_to_db(llm: Any) -> bool:
     env_llm_enable_token_rl = _parse_bool(
         os.environ.get("LLM_ENABLE_TOKEN_RATE_LIMITING")
     )
-    if (
-        llm.llm_enable_token_rate_limiting == DEFAULTS.LLM_ENABLE_TOKEN_RATE_LIMITING
-        and env_llm_enable_token_rl is not None
+    if env_llm_enable_token_rl is not None and (
+        force
+        or llm.llm_enable_token_rate_limiting == DEFAULTS.LLM_ENABLE_TOKEN_RATE_LIMITING
     ):
         llm.llm_enable_token_rate_limiting = bool(env_llm_enable_token_rl)
         changed = True
@@ -241,9 +252,8 @@ def _apply_llm_env_overrides_to_db(llm: Any) -> bool:
     env_llm_max_input_tokens_per_call = _parse_int(
         os.environ.get("LLM_MAX_INPUT_TOKENS_PER_CALL")
     )
-    if (
-        llm.llm_max_input_tokens_per_call is None
-        and env_llm_max_input_tokens_per_call is not None
+    if env_llm_max_input_tokens_per_call is not None and (
+        force or llm.llm_max_input_tokens_per_call is None
     ):
         llm.llm_max_input_tokens_per_call = env_llm_max_input_tokens_per_call
         changed = True
@@ -251,14 +261,17 @@ def _apply_llm_env_overrides_to_db(llm: Any) -> bool:
     env_llm_max_input_tokens_per_minute = _parse_int(
         os.environ.get("LLM_MAX_INPUT_TOKENS_PER_MINUTE")
     )
-    if (
-        llm.llm_max_input_tokens_per_minute is None
-        and env_llm_max_input_tokens_per_minute is not None
+    if env_llm_max_input_tokens_per_minute is not None and (
+        force or llm.llm_max_input_tokens_per_minute is None
     ):
         llm.llm_max_input_tokens_per_minute = env_llm_max_input_tokens_per_minute
         changed = True
 
     return changed
+
+
+# Sentinel used by _apply_llm_env_overrides_to_db to distinguish "no default" from None.
+_SENTINEL = object()
 
 
 def _apply_whisper_env_overrides_to_db(whisper: Any) -> bool:
@@ -440,6 +453,9 @@ def read_combined() -> dict[str, Any]:
         "llm": {
             "llm_api_key": llm.llm_api_key,
             "llm_model": llm.llm_model,
+            "oneshot_model": llm.oneshot_model,
+            "oneshot_max_chunk_duration_seconds": llm.oneshot_max_chunk_duration_seconds,
+            "oneshot_chunk_overlap_seconds": llm.oneshot_chunk_overlap_seconds,
             "openai_base_url": llm.openai_base_url,
             "openai_timeout": llm.openai_timeout,
             "openai_max_tokens": llm.openai_max_tokens,
@@ -466,6 +482,7 @@ def read_combined() -> dict[str, Any]:
             "automatically_whitelist_new_episodes": app_s.automatically_whitelist_new_episodes,
             "post_cleanup_retention_days": app_s.post_cleanup_retention_days,
             "number_of_episodes_to_whitelist_from_archive_of_new_feed": app_s.number_of_episodes_to_whitelist_from_archive_of_new_feed,
+            "ad_detection_strategy": app_s.ad_detection_strategy,
             "enable_public_landing_page": app_s.enable_public_landing_page,
             "user_limit_total": app_s.user_limit_total,
             "autoprocess_on_download": app_s.autoprocess_on_download,
@@ -479,6 +496,9 @@ def _update_section_llm(data: dict[str, Any]) -> None:
     for key in [
         "llm_api_key",
         "llm_model",
+        "oneshot_model",
+        "oneshot_max_chunk_duration_seconds",
+        "oneshot_chunk_overlap_seconds",
         "openai_base_url",
         "openai_timeout",
         "openai_max_tokens",
@@ -493,6 +513,11 @@ def _update_section_llm(data: dict[str, Any]) -> None:
         if key in data:
             new_val = data[key]
             if key == "llm_api_key" and _is_empty(new_val):
+                continue
+            if key == "oneshot_model" and _get_env_oneshot_model() is not None:
+                logger.info(
+                    "Skipping llm.oneshot_model DB update because ONESHOT_MODEL env override is set."
+                )
                 continue
             setattr(row, key, new_val)
     safe_commit(
@@ -600,6 +625,7 @@ def _update_section_app(data: dict[str, Any]) -> tuple[int | None, int | None]:
         "automatically_whitelist_new_episodes",
         "post_cleanup_retention_days",
         "number_of_episodes_to_whitelist_from_archive_of_new_feed",
+        "ad_detection_strategy",
         "enable_public_landing_page",
         "user_limit_total",
         "autoprocess_on_download",
@@ -720,6 +746,13 @@ def to_pydantic_config() -> PydanticConfig:
     return PydanticConfig(
         llm_api_key=data["llm"].get("llm_api_key"),
         llm_model=data["llm"].get("llm_model", DEFAULTS.LLM_DEFAULT_MODEL),
+        oneshot_model=data["llm"].get("oneshot_model"),
+        oneshot_max_chunk_duration_seconds=int(
+            data["llm"].get("oneshot_max_chunk_duration_seconds", 7200) or 7200
+        ),
+        oneshot_chunk_overlap_seconds=int(
+            data["llm"].get("oneshot_chunk_overlap_seconds", 900) or 900
+        ),
         openai_base_url=data["llm"].get("openai_base_url"),
         openai_max_tokens=int(
             data["llm"].get("openai_max_tokens", DEFAULTS.OPENAI_DEFAULT_MAX_TOKENS)
@@ -782,6 +815,10 @@ def to_pydantic_config() -> PydanticConfig:
                 DEFAULTS.APP_NUM_EPISODES_TO_WHITELIST_FROM_ARCHIVE_OF_NEW_FEED,
             )
             or DEFAULTS.APP_NUM_EPISODES_TO_WHITELIST_FROM_ARCHIVE_OF_NEW_FEED
+        ),
+        ad_detection_strategy=(
+            data["app"].get("ad_detection_strategy")
+            or DEFAULTS.AD_DETECTION_DEFAULT_STRATEGY
         ),
         enable_public_landing_page=bool(
             data["app"].get(
@@ -846,6 +883,10 @@ def _apply_top_level_env_overrides(cfg: PydanticConfig) -> None:
     env_openai_base_url = os.environ.get("OPENAI_BASE_URL")
     if env_openai_base_url:
         cfg.openai_base_url = env_openai_base_url
+
+    env_oneshot_model = _get_env_oneshot_model()
+    if env_oneshot_model:
+        cfg.oneshot_model = env_oneshot_model
 
 
 def _apply_whisper_env_overrides(cfg: PydanticConfig) -> None:
@@ -1113,6 +1154,10 @@ def _calculate_env_hash() -> str:
         "GROQ_WHISPER_MODEL",
         "WHISPER_GROQ_MODEL",
         "GROQ_MAX_RETRIES",
+        # One-shot
+        "ONESHOT_MODEL",
+        "LLM_ONESHOT_MODEL",
+        "ONESHOT_API_KEY",
         # App
         "PODLY_APP_ROLE",
         "DEVELOPER_MODE",
@@ -1160,82 +1205,6 @@ def _check_and_apply_env_changes() -> None:
 
     except Exception as e:  # noqa: BLE001
         logger.warning(f"Failed to check/update environment hash: {e}")
-
-
-def _apply_llm_env_overrides(llm: LLMSettings) -> bool:
-    """Apply environment overrides to LLM settings."""
-    changed = False
-
-    env_llm_key = (
-        os.environ.get("LLM_API_KEY")
-        or os.environ.get("OPENAI_API_KEY")
-        or os.environ.get("GROQ_API_KEY")
-    )
-    if env_llm_key:
-        llm.llm_api_key = env_llm_key
-        changed = True
-
-    env_llm_model = os.environ.get("LLM_MODEL")
-    if env_llm_model:
-        llm.llm_model = env_llm_model
-        changed = True
-
-    env_openai_base_url = os.environ.get("OPENAI_BASE_URL")
-    if env_openai_base_url:
-        llm.openai_base_url = env_openai_base_url
-        changed = True
-
-    env_openai_timeout = _parse_int(os.environ.get("OPENAI_TIMEOUT"))
-    if env_openai_timeout is not None:
-        llm.openai_timeout = env_openai_timeout
-        changed = True
-
-    env_openai_max_tokens = _parse_int(os.environ.get("OPENAI_MAX_TOKENS"))
-    if env_openai_max_tokens is not None:
-        llm.openai_max_tokens = env_openai_max_tokens
-        changed = True
-
-    env_llm_max_concurrent = _parse_int(os.environ.get("LLM_MAX_CONCURRENT_CALLS"))
-    if env_llm_max_concurrent is not None:
-        llm.llm_max_concurrent_calls = env_llm_max_concurrent
-        changed = True
-
-    env_llm_max_retries = _parse_int(os.environ.get("LLM_MAX_RETRY_ATTEMPTS"))
-    if env_llm_max_retries is not None:
-        llm.llm_max_retry_attempts = env_llm_max_retries
-        changed = True
-
-    env_llm_enable_token_rl = _parse_bool(
-        os.environ.get("LLM_ENABLE_TOKEN_RATE_LIMITING")
-    )
-    if (
-        llm.llm_enable_token_rate_limiting == DEFAULTS.LLM_ENABLE_TOKEN_RATE_LIMITING
-        and env_llm_enable_token_rl is not None
-    ):
-        llm.llm_enable_token_rate_limiting = bool(env_llm_enable_token_rl)
-        changed = True
-
-    env_llm_max_input_tokens_per_call = _parse_int(
-        os.environ.get("LLM_MAX_INPUT_TOKENS_PER_CALL")
-    )
-    if (
-        llm.llm_max_input_tokens_per_call is None
-        and env_llm_max_input_tokens_per_call is not None
-    ):
-        llm.llm_max_input_tokens_per_call = env_llm_max_input_tokens_per_call
-        changed = True
-
-    env_llm_max_input_tokens_per_minute = _parse_int(
-        os.environ.get("LLM_MAX_INPUT_TOKENS_PER_MINUTE")
-    )
-    if (
-        llm.llm_max_input_tokens_per_minute is None
-        and env_llm_max_input_tokens_per_minute is not None
-    ):
-        llm.llm_max_input_tokens_per_minute = env_llm_max_input_tokens_per_minute
-        changed = True
-
-    return changed
 
 
 def _apply_whisper_remote_overrides(whisper: WhisperSettings) -> bool:
@@ -1331,7 +1300,7 @@ def _apply_env_overrides_to_db_force() -> None:
     if not llm or not whisper:
         return
 
-    llm_changed = _apply_llm_env_overrides(llm)
+    llm_changed = _apply_llm_env_overrides_to_db(llm, force=True)
     whisper_changed = _apply_whisper_env_overrides_force(whisper)
 
     if llm_changed or whisper_changed:

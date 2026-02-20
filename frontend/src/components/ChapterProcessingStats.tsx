@@ -4,7 +4,7 @@ import { feedsApi } from '../services/api';
 
 interface ChapterProcessingStatsProps {
   episodeGuid: string;
-  hasProcessedAudio: boolean;
+  isStatsReady: boolean;
   className?: string;
 }
 
@@ -12,7 +12,7 @@ type TabId = 'overview' | 'chapters';
 
 export default function ChapterProcessingStats({
   episodeGuid,
-  hasProcessedAudio,
+  isStatsReady,
   className = ''
 }: ChapterProcessingStatsProps) {
   const [showModal, setShowModal] = useState(false);
@@ -21,7 +21,7 @@ export default function ChapterProcessingStats({
   const { data: stats, isLoading, error } = useQuery({
     queryKey: ['episode-stats', episodeGuid],
     queryFn: () => feedsApi.getPostStats(episodeGuid),
-    enabled: showModal && hasProcessedAudio,
+    enabled: showModal && isStatsReady,
   });
 
   const formatDuration = (seconds: number) => {
@@ -35,7 +35,7 @@ export default function ChapterProcessingStats({
     return `${minutes}m ${secs}s`;
   };
 
-  if (!hasProcessedAudio) {
+  if (!isStatsReady) {
     return null;
   }
 

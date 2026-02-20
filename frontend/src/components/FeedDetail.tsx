@@ -9,6 +9,7 @@ import ProcessingStatsButton from './ProcessingStatsButton';
 import EpisodeProcessingStatus from './EpisodeProcessingStatus';
 import FeedSettingsModal from './FeedSettingsModal';
 import { useAuth } from '../contexts/AuthContext';
+import { useTimestampFormatter } from '../hooks/useTimestampFormatter';
 import { copyToClipboard } from '../utils/clipboard';
 import { emitDiagnosticError } from '../utils/diagnostics';
 import { getHttpErrorInfo } from '../utils/httpError';
@@ -32,6 +33,7 @@ const EPISODES_PAGE_SIZE = 25;
 
 export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailProps) {
   const { requireAuth, isAuthenticated, user } = useAuth();
+  const { formatDate } = useTimestampFormatter();
   const [sortBy, setSortBy] = useState<SortOption>('newest');
   const [showStickyHeader, setShowStickyHeader] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
@@ -521,9 +523,9 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
   // Calculate whitelist status for bulk button
   const allWhitelisted = totalCount > 0 && whitelistedCount === totalCount;
 
-  const formatDate = (dateString: string | null) => {
+  const formatEpisodeDate = (dateString: string | null) => {
     if (!dateString) return 'Unknown date';
-    return new Date(dateString).toLocaleDateString('en-US', {
+    return formatDate(dateString, {
       year: 'numeric',
       month: 'short',
       day: 'numeric'
@@ -1083,7 +1085,7 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
                           <span>•</span>
                         </>
                       )}
-                      <span>{formatDate(episode.release_date)}</span>
+                      <span>{formatEpisodeDate(episode.release_date)}</span>
                       {episode.duration && (
                         <>
                           <span>•</span>
@@ -1121,7 +1123,9 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
 
                           <ProcessingStatsButton
                             episodeGuid={episode.guid}
+                            isWhitelisted={episode.whitelisted}
                             hasProcessedAudio={episode.has_processed_audio}
+                            feedId={currentFeed.id}
                           />
                         </div>
 

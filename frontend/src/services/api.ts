@@ -174,8 +174,11 @@ export const feedsApi = {
     return response.data;
   },
 
-  reprocessPost: async (guid: string): Promise<{ status: string; job_id?: string; message: string; download_url?: string }> => {
-    const response = await api.post(`/api/posts/${guid}/reprocess`);
+  reprocessPost: async (
+    guid: string,
+    payload?: { force_retranscribe?: boolean }
+  ): Promise<{ status: string; job_id?: string; message: string; download_url?: string }> => {
+    const response = await api.post(`/api/posts/${guid}/reprocess`, payload ?? {});
     return response.data;
   },
 
@@ -258,7 +261,7 @@ export const feedsApi = {
       whitelisted: boolean;
       has_processed_audio: boolean;
     };
-    ad_detection_strategy: 'llm' | 'chapter';
+    ad_detection_strategy: 'llm' | 'oneshot' | 'chapter';
     processing_stats: {
       total_segments: number;
       total_model_calls: number;
@@ -583,6 +586,12 @@ export const configApi = {
     payload: Partial<{ whisper: WhisperConfig }>
   ): Promise<{ ok: boolean; message?: string; error?: string }> => {
     const response = await api.post('/api/config/test-whisper', payload ?? {});
+    return response.data;
+  },
+  testOneShot: async (
+    payload: Partial<{ llm: LLMConfig }>
+  ): Promise<{ ok: boolean; message?: string; error?: string }> => {
+    const response = await api.post('/api/config/test-oneshot', payload ?? {});
     return response.data;
   },
   getWhisperCapabilities: async (): Promise<{ local_available: boolean }> => {

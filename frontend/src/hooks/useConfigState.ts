@@ -15,6 +15,7 @@ const DEFAULT_ENV_HINTS: Record<string, EnvOverrideEntry> = {
   'groq.api_key': { env_var: 'GROQ_API_KEY' },
   'llm.llm_api_key': { env_var: 'LLM_API_KEY' },
   'llm.llm_model': { env_var: 'LLM_MODEL' },
+  'llm.oneshot_model': { env_var: 'ONESHOT_MODEL' },
   'llm.openai_base_url': { env_var: 'OPENAI_BASE_URL' },
   'whisper.whisper_type': { env_var: 'WHISPER_TYPE' },
   'whisper.api_key': { env_var: 'WHISPER_REMOTE_API_KEY' },
@@ -49,6 +50,22 @@ const valuesDiffer = (a: unknown, b: unknown): boolean => {
   return true;
 };
 
+const getProbeErrorMessage = (
+  err: unknown,
+  fallback: string
+): string => {
+  const e = err as {
+    response?: { data?: { error?: string; message?: string } };
+    message?: string;
+  };
+  return (
+    e?.response?.data?.error ||
+    e?.response?.data?.message ||
+    e?.message ||
+    fallback
+  );
+};
+
 export interface ConnectionStatus {
   status: 'loading' | 'ok' | 'error';
   message: string;
@@ -65,6 +82,7 @@ export interface UseConfigStateReturn {
   // Status
   llmStatus: ConnectionStatus;
   whisperStatus: ConnectionStatus;
+  oneshotStatus: ConnectionStatus;
   hasEdits: boolean;
   localWhisperAvailable: boolean | null;
   isSaving: boolean;
@@ -131,6 +149,11 @@ export function useConfigState(): UseConfigStateReturn {
     error: '',
   });
   const [whisperStatus, setWhisperStatus] = useState<ConnectionStatus>({
+    status: 'loading',
+    message: '',
+    error: '',
+  });
+  const [oneshotStatus, setOneshotStatus] = useState<ConnectionStatus>({
     status: 'loading',
     message: '',
     error: '',
@@ -244,52 +267,78 @@ export function useConfigState(): UseConfigStateReturn {
     if (!pending) return;
     setLlmStatus({ status: 'loading', message: '', error: '' });
     setWhisperStatus({ status: 'loading', message: '', error: '' });
+    setOneshotStatus({ status: 'loading', message: '', error: '' });
 
-    try {
-      const [llmRes, whisperRes] = await Promise.all([
-        configApi.testLLM({ llm: pending.llm as LLMConfig }),
-        configApi.testWhisper({ whisper: pending.whisper as WhisperConfig }),
-      ]);
+    const [llmResult, whisperResult, oneshotResult] = await Promise.allSettled([
+      configApi.testLLM({ llm: pending.llm as LLMConfig }),
+      configApi.testWhisper({ whisper: pending.whisper as WhisperConfig }),
+      configApi.testOneShot({ llm: pending.llm as LLMConfig }),
+    ]);
 
-      if (llmRes?.ok) {
+    if (llmResult.status === 'fulfilled') {
+      if (llmResult.value?.ok) {
         setLlmStatus({
           status: 'ok',
-          message: llmRes.message || 'LLM connection OK',
+          message: llmResult.value.message || 'LLM connection OK',
           error: '',
         });
       } else {
         setLlmStatus({
           status: 'error',
           message: '',
-          error: llmRes?.error || 'LLM connection failed',
+          error: llmResult.value?.error || 'LLM connection failed',
         });
       }
+    } else {
+      setLlmStatus({
+        status: 'error',
+        message: '',
+        error: getProbeErrorMessage(llmResult.reason, 'LLM connection failed'),
+      });
+    }
 
-      if (whisperRes?.ok) {
+    if (whisperResult.status === 'fulfilled') {
+      if (whisperResult.value?.ok) {
         setWhisperStatus({
           status: 'ok',
-          message: whisperRes.message || 'Whisper connection OK',
+          message: whisperResult.value.message || 'Whisper connection OK',
           error: '',
         });
       } else {
         setWhisperStatus({
           status: 'error',
           message: '',
-          error: whisperRes?.error || 'Whisper test failed',
+          error: whisperResult.value?.error || 'Whisper test failed',
         });
       }
-    } catch (err: unknown) {
-      const e = err as {
-        response?: { data?: { error?: string; message?: string } };
-        message?: string;
-      };
-      const msg =
-        e?.response?.data?.error ||
-        e?.response?.data?.message ||
-        e?.message ||
-        'Connection test failed';
-      setLlmStatus({ status: 'error', message: '', error: msg });
-      setWhisperStatus({ status: 'error', message: '', error: msg });
+    } else {
+      setWhisperStatus({
+        status: 'error',
+        message: '',
+        error: getProbeErrorMessage(whisperResult.reason, 'Whisper test failed'),
+      });
+    }
+
+    if (oneshotResult.status === 'fulfilled') {
+      if (oneshotResult.value?.ok) {
+        setOneshotStatus({
+          status: 'ok',
+          message: oneshotResult.value.message || 'One-shot connection OK',
+          error: '',
+        });
+      } else {
+        setOneshotStatus({
+          status: 'error',
+          message: '',
+          error: oneshotResult.value?.error || 'One-shot test failed',
+        });
+      }
+    } else {
+      setOneshotStatus({
+        status: 'error',
+        message: '',
+        error: getProbeErrorMessage(oneshotResult.reason, 'One-shot test failed'),
+      });
     }
   };
 
@@ -493,6 +542,7 @@ export function useConfigState(): UseConfigStateReturn {
       toast.success('Groq key verified and saved. Defaults applied.');
       setLlmStatus({ status: 'ok', message: 'LLM connection OK', error: '' });
       setWhisperStatus({ status: 'ok', message: 'Whisper connection OK', error: '' });
+      setOneshotStatus({ status: 'loading', message: '', error: '' });
     },
   });
 
@@ -525,6 +575,7 @@ export function useConfigState(): UseConfigStateReturn {
     // Status
     llmStatus,
     whisperStatus,
+    oneshotStatus,
     hasEdits,
     localWhisperAvailable,
     isSaving: saveMutation.isPending,
