@@ -33,7 +33,7 @@ export interface Episode {
   download_url: string;
   image_url: string | null;
   download_count: number;
-} 
+}
 
 export interface PagedResult<T> {
   items: T[];
@@ -119,23 +119,23 @@ export interface LLMConfig {
 export type WhisperConfig =
   | { whisper_type: 'local'; model: string }
   | {
-      whisper_type: 'remote';
-      model: string;
-      api_key?: string | null;
-      api_key_preview?: string | null;
-      base_url?: string;
-      language: string;
-      timeout_sec: number;
-      chunksize_mb: number;
-    }
+    whisper_type: 'remote';
+    model: string;
+    api_key?: string | null;
+    api_key_preview?: string | null;
+    base_url?: string;
+    language: string;
+    timeout_sec: number;
+    chunksize_mb: number;
+  }
   | {
-      whisper_type: 'groq';
-      api_key?: string | null;
-      api_key_preview?: string | null;
-      model: string;
-      language: string;
-      max_retries: number;
-    }
+    whisper_type: 'groq';
+    api_key?: string | null;
+    api_key_preview?: string | null;
+    model: string;
+    language: string;
+    max_retries: number;
+  }
   | { whisper_type: 'test' };
 
 export interface ProcessingConfigUI {
@@ -158,6 +158,7 @@ export interface AppConfigUI {
   enable_public_landing_page: boolean;
   user_limit_total: number | null;
   autoprocess_on_download: boolean;
+  cost_rate_per_hour: number;
 }
 
 export interface CombinedConfig {

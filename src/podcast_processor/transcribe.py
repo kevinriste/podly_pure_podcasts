@@ -295,7 +295,8 @@ class GroqWhisperTranscriber(Transcriber):
         return segments
 
     def get_segments_for_chunk(self, chunk_path: str) -> list[GroqTranscriptionSegment]:
-        max_attempts = max(1, self.config.max_retries) if self.config.max_retries else 1
+        retries = self.config.max_retries if self.config.max_retries is not None else 0
+        max_attempts = retries + 1
         for attempt in range(1, max_attempts + 1):
             self.logger.info(
                 "[GROQ_API_CALL] Sending chunk to Groq API: %s (attempt %d/%d)",

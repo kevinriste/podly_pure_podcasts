@@ -20,16 +20,13 @@ logger = logging.getLogger("global_logger")
 
 costs_bp = Blueprint("costs", __name__)
 
-# Cost rate: $0.04 per hour of audio processed
-COST_RATE_PER_HOUR = 0.04
-
-
-def _compute_cost_per_subscriber(duration_seconds: int, subscriber_count: int) -> float:
+from app.config_store import read_combined
+def _compute_cost_per_subscriber(duration_seconds: int, subscriber_count: int, cost_rate: float) -> float:
     """Cost attributed per subscriber for one episode."""
     if subscriber_count <= 0 or duration_seconds <= 0:
         return 0.0
     hours = duration_seconds / 3600.0
-    return COST_RATE_PER_HOUR * hours / subscriber_count
+    return cost_rate * hours / subscriber_count
 
 
 def _month_range(year: int, month: int) -> tuple[datetime, datetime]:
@@ -61,6 +58,9 @@ def api_admin_costs() -> flask.Response:
         return flask.make_response(jsonify({"error": "Invalid year or month"}), 400)
 
     month_start, month_end = _month_range(year, month)
+
+    config_data = read_combined()
+    cost_rate = config_data.get("app", {}).get("cost_rate_per_hour", 0.04)
 
     # --- Users ---
     users: list[User] = User.query.order_by(User.username).all()
@@ -114,9 +114,9 @@ def api_admin_costs() -> flask.Response:
         duration = post.duration or 0
         feed_id = post.feed_id
         subscriber_count = feed_subscriber_count.get(feed_id, 0)
-        cost_per_sub = _compute_cost_per_subscriber(duration, subscriber_count)
+        cost_per_sub = _compute_cost_per_subscriber(duration, subscriber_count, cost_rate)
         total_episode_cost = (
-            COST_RATE_PER_HOUR * (duration / 3600.0) if duration > 0 else 0.0
+            cost_rate * (duration / 3600.0) if duration > 0 else 0.0
         )
 
         feed_costs[feed_id] = feed_costs.get(feed_id, 0.0) + total_episode_cost
@@ -169,7 +169,7 @@ def api_admin_costs() -> flask.Response:
             "year": year,
             "month": month,
             "total_cost": total_cost,
-            "cost_rate_per_hour": COST_RATE_PER_HOUR,
+            "cost_rate_per_hour": cost_rate,
             "users": users_data,
             "feeds": feeds_data,
         }
