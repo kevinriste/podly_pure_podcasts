@@ -153,6 +153,7 @@ class Config(BaseModel):
     enable_public_landing_page: bool = DEFAULTS.APP_ENABLE_PUBLIC_LANDING_PAGE
     user_limit_total: int | None = DEFAULTS.APP_USER_LIMIT_TOTAL
     autoprocess_on_download: bool = DEFAULTS.APP_AUTOPROCESS_ON_DOWNLOAD
+    cost_rate_per_hour: float = DEFAULTS.APP_COST_RATE_PER_HOUR
 
     def redacted(self) -> Config:
         return self.model_copy(
