@@ -25,6 +25,7 @@ export interface Episode {
   guid: string;
   title: string;
   description: string;
+  podly_description_html?: string | null;
   release_date: string | null;
   duration: number | null;
   whitelisted: boolean;
@@ -114,6 +115,7 @@ export interface LLMConfig {
   llm_max_input_tokens_per_minute?: number | null;
   enable_boundary_refinement: boolean;
   enable_word_level_boundary_refinder?: boolean;
+  enable_llm_chapter_fallback_tagging?: boolean;
 }
 
 export type WhisperConfig =

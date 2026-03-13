@@ -8,11 +8,20 @@ interface FeedSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   autoWhitelistGlobalDefault?: boolean;
+  episodeDescriptionView?: 'source' | 'podly';
+  onEpisodeDescriptionViewChange?: (view: 'source' | 'podly') => void;
 }
 
 const DEFAULT_FILTER_STRINGS = 'sponsor,advertisement,ad break,promo,brought to you by';
 
-export default function FeedSettingsModal({ feed, isOpen, onClose, autoWhitelistGlobalDefault }: FeedSettingsModalProps) {
+export default function FeedSettingsModal({
+  feed,
+  isOpen,
+  onClose,
+  autoWhitelistGlobalDefault,
+  episodeDescriptionView = 'source',
+  onEpisodeDescriptionViewChange,
+}: FeedSettingsModalProps) {
   const queryClient = useQueryClient();
 
   const [strategy, setStrategy] = useState<'llm' | 'chapter'>(
@@ -134,6 +143,37 @@ export default function FeedSettingsModal({ feed, isOpen, onClose, autoWhitelist
                 </p>
               </div>
             )}
+          </div>
+
+          <div className="border-t border-gray-200" />
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Episode description preview
+            </label>
+            <label className="flex items-start gap-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-3">
+              <input
+                type="checkbox"
+                checked={episodeDescriptionView === 'podly'}
+                onChange={(e) =>
+                  onEpisodeDescriptionViewChange?.(
+                    e.target.checked ? 'podly' : 'source'
+                  )
+                }
+                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <div>
+                <div className="text-sm text-gray-900">
+                  Show Podly description preview in episode list
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Uses the same composed description as the Podly RSS feed
+                  (source description + Podly chapters + Podly link). This
+                  affects only the UI preview and does not change source RSS
+                  content.
+                </p>
+              </div>
+            </label>
           </div>
 
           <div className="border-t border-gray-200" />

@@ -391,6 +391,11 @@ class LLMSettings(db.Model):  # type: ignore[name-defined, misc]
         nullable=False,
         default=DEFAULTS.ENABLE_WORD_LEVEL_BOUNDARY_REFINDER,
     )
+    enable_llm_chapter_fallback_tagging = db.Column(
+        db.Boolean,
+        nullable=False,
+        default=DEFAULTS.ENABLE_LLM_CHAPTER_FALLBACK_TAGGING,
+    )
 
     created_at = db.Column(db.DateTime, nullable=False, default=_utc_now_naive)
     updated_at = db.Column(db.DateTime, nullable=False, default=_utc_now_naive)

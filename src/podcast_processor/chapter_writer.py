@@ -34,37 +34,27 @@ def recalculate_chapter_times(
     if not removed_segments:
         return chapters
 
-    # Sort removed segments by start time
-    sorted_segments = sorted(removed_segments, key=lambda x: x[0])
+    # Sort and normalize removed segments to integer milliseconds
+    sorted_segments_ms = sorted(
+        [(int(start * 1000), int(end * 1000)) for start, end in removed_segments],
+        key=lambda x: x[0],
+    )
 
     adjusted_chapters: list[Chapter] = []
 
     for chapter in chapters:
         chapter_start_ms = chapter.start_time_ms
         chapter_end_ms = chapter.end_time_ms
-        chapter_start_sec = chapter_start_ms / 1000.0
+        start_offset_ms = _removed_offset_ms_at_time(
+            chapter_start_ms, sorted_segments_ms
+        )
+        end_offset_ms = _removed_offset_ms_at_time(chapter_end_ms, sorted_segments_ms)
 
-        # Calculate cumulative offset from removed segments before this chapter
-        offset_ms = 0
-        for seg_start, seg_end in sorted_segments:
-            seg_start_ms = int(seg_start * 1000)
-            seg_end_ms = int(seg_end * 1000)
-            seg_duration_ms = seg_end_ms - seg_start_ms
+        end_offset_ms = max(end_offset_ms, start_offset_ms)
 
-            if seg_end <= chapter_start_sec:
-                # Segment is entirely before this chapter
-                offset_ms += seg_duration_ms
-            elif seg_start < chapter_start_sec < seg_end:
-                # Chapter starts inside a removed segment - shouldn't happen
-                # if chapters_to_keep doesn't include ads
-                logger.warning(
-                    "Chapter '%s' starts inside a removed segment", chapter.title
-                )
-                offset_ms += int((chapter_start_sec - seg_start) * 1000)
-
-        # Apply offset to timestamps
-        new_start_ms = max(0, chapter_start_ms - offset_ms)
-        new_end_ms = max(new_start_ms, chapter_end_ms - offset_ms)
+        # Apply offsets independently so cuts inside a chapter shrink its duration.
+        new_start_ms = max(0, chapter_start_ms - start_offset_ms)
+        new_end_ms = max(new_start_ms, chapter_end_ms - end_offset_ms)
 
         adjusted_chapters.append(
             Chapter(
@@ -80,10 +70,26 @@ def recalculate_chapter_times(
             chapter.title,
             chapter_start_ms,
             new_start_ms,
-            offset_ms,
+            start_offset_ms,
         )
 
     return adjusted_chapters
+
+
+def _removed_offset_ms_at_time(
+    time_ms: int,
+    sorted_segments_ms: list[tuple[int, int]],
+) -> int:
+    """Return cumulative removed audio before a given original timestamp."""
+    offset_ms = 0
+    for seg_start_ms, seg_end_ms in sorted_segments_ms:
+        if seg_end_ms <= time_ms:
+            offset_ms += max(0, seg_end_ms - seg_start_ms)
+            continue
+        if seg_start_ms < time_ms:
+            offset_ms += max(0, time_ms - seg_start_ms)
+        break
+    return offset_ms
 
 
 def write_chapters(

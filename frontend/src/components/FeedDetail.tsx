@@ -20,6 +20,7 @@ interface FeedDetailProps {
 }
 
 type SortOption = 'newest' | 'oldest' | 'title';
+type EpisodeDescriptionView = 'source' | 'podly';
 
 interface ProcessingEstimate {
   post_guid: string;
@@ -48,6 +49,8 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
   const [estimateError, setEstimateError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [episodeDescriptionView, setEpisodeDescriptionView] =
+    useState<EpisodeDescriptionView>('source');
 
   const isAdmin = !requireAuth || user?.role === 'admin';
   const whitelistedOnly = requireAuth && !isAdmin;
@@ -356,7 +359,7 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
 
   useEffect(() => {
     setExpandedDescriptions(new Set());
-  }, [feed.id]);
+  }, [feed.id, episodeDescriptionView]);
 
   useEffect(() => {
     setPage(1);
@@ -991,10 +994,18 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
                     </div>
 
                     {/* Episode Description */}
-                    {episode.description && (
+                    {(
+                      episodeDescriptionView === 'podly'
+                        ? (episode.podly_description_html || episode.description)
+                        : episode.description
+                    ) && (
                       <div className="text-left">
                         {(() => {
-                          const descriptionTokens = tokenizeDescription(episode.description);
+                          const descriptionHtml =
+                            episodeDescriptionView === 'podly'
+                              ? (episode.podly_description_html || episode.description)
+                              : episode.description;
+                          const descriptionTokens = tokenizeDescription(descriptionHtml);
                           const descriptionLength = descriptionTokens.reduce((total, token) => {
                             if (token.type === 'text') {
                               return total + token.value.length;
@@ -1236,6 +1247,8 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
         isOpen={showSettingsModal}
         onClose={() => setShowSettingsModal(false)}
         autoWhitelistGlobalDefault={appAutoWhitelistDefault}
+        episodeDescriptionView={episodeDescriptionView}
+        onEpisodeDescriptionViewChange={setEpisodeDescriptionView}
       />
     </div>
   );

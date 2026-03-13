@@ -111,9 +111,90 @@ def clear_post_processing_data_action(params: dict[str, Any]) -> dict[str, Any]:
     post.unprocessed_audio_path = None
     post.processed_audio_path = None
     post.duration = None
+    post.chapter_data = None
+    post.refined_ad_boundaries = None
+    post.refined_ad_boundaries_updated_at = None
 
     logger.info(
         "[WRITER] clear_post_processing_data_action: completed post_id=%s", post_id
+    )
+
+    return {"post_id": post.id}
+
+
+def clear_post_processing_data_keep_transcript_action(
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    """Clear processing outputs/classification state but preserve transcript rows."""
+    post_id = params.get("post_id")
+    post = db.session.get(Post, post_id)
+    if not post:
+        raise ValueError(f"Post {post_id} not found")
+
+    logger.info(
+        "[WRITER] clear_post_processing_data_keep_transcript_action: post_id=%s",
+        post_id,
+    )
+
+    # Remove identifications tied to this post's transcript segments, but keep the
+    # transcript segments themselves so the next run can reuse Whisper output.
+    total_identifications_deleted = 0
+    last_transcript_segment_id = 0
+    while True:
+        ids_batch = [
+            row[0]
+            for row in db.session.query(TranscriptSegment.id)
+            .filter(
+                TranscriptSegment.post_id == post.id,
+                TranscriptSegment.id > last_transcript_segment_id,
+            )
+            .order_by(TranscriptSegment.id.asc())
+            .limit(500)
+            .all()
+        ]
+        if not ids_batch:
+            logger.debug(
+                "[WRITER] clear_post_processing_data_keep_transcript_action: "
+                "no transcript segments for post_id=%s",
+                post_id,
+            )
+            break
+
+        deleted = (
+            db.session.query(Identification)
+            .filter(Identification.transcript_segment_id.in_(ids_batch))
+            .delete(synchronize_session=False)
+        )
+        total_identifications_deleted += int(deleted or 0)
+        last_transcript_segment_id = int(ids_batch[-1])
+
+    # Keep Whisper model calls so transcription can be reused; drop all others.
+    non_whisper_model_calls_deleted = (
+        db.session.query(ModelCall)
+        .filter(ModelCall.post_id == post.id)
+        .filter(~ModelCall.model_name.like("%whisper%"))
+        .delete(synchronize_session=False)
+    )
+
+    # Processing jobs should be regenerated for the new run.
+    db.session.query(ProcessingJob).filter_by(post_guid=post.guid).delete(
+        synchronize_session=False
+    )
+
+    # Reset output and derived processing fields, but preserve transcript/model calls.
+    post.unprocessed_audio_path = None
+    post.processed_audio_path = None
+    post.duration = None
+    post.chapter_data = None
+    post.refined_ad_boundaries = None
+    post.refined_ad_boundaries_updated_at = None
+
+    logger.info(
+        "[WRITER] clear_post_processing_data_keep_transcript_action: completed "
+        "post_id=%s identifications_deleted=%s non_whisper_model_calls_deleted=%s",
+        post_id,
+        total_identifications_deleted,
+        int(non_whisper_model_calls_deleted or 0),
     )
 
     return {"post_id": post.id}

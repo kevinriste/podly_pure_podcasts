@@ -12,6 +12,7 @@ from flask.typing import ResponseReturnValue
 from app.auth.guards import require_admin
 from app.auth.service import update_user_last_active
 from app.extensions import db
+from app.feeds import build_post_feed_description_html
 from app.jobs_manager import get_jobs_manager
 from app.models import (
     Feed,
@@ -20,7 +21,10 @@ from app.models import (
     Post,
     TranscriptSegment,
 )
-from app.posts import clear_post_processing_data
+from app.posts import (
+    clear_post_processing_data,
+    clear_post_processing_data_keep_transcript,
+)
 from app.routes.post_stats_utils import (
     count_model_calls,
     count_primary_labels,
@@ -149,6 +153,7 @@ def api_feed_posts(feed_id: int) -> flask.Response:
             "guid": post.guid,
             "title": post.title,
             "description": post.description,
+            "podly_description_html": build_post_feed_description_html(post),
             "release_date": (
                 post.release_date.isoformat() if post.release_date else None
             ),
@@ -923,6 +928,171 @@ def api_reprocess_post(p_guid: str) -> ResponseReturnValue:
                     "status": "error",
                     "error_code": "REPROCESS_FAILED",
                     "message": f"Failed to reprocess post: {e!s}",
+                }
+            ),
+            500,
+        )
+
+
+@post_bp.route(
+    "/api/posts/<string:p_guid>/reprocess/keep-transcript",
+    methods=["POST"],
+)
+def api_reprocess_post_keep_transcript(p_guid: str) -> ResponseReturnValue:
+    """Clear processing outputs but preserve transcript, then reprocess."""
+    logger.info(
+        "[API] Reprocess (keep transcript) requested for post_guid=%s",
+        p_guid,
+    )
+
+    post = Post.query.filter_by(guid=p_guid).first()
+    if not post:
+        logger.warning(
+            "[API] Reprocess (keep transcript): post not found for guid=%s", p_guid
+        )
+        return (
+            flask.jsonify(
+                {
+                    "status": "error",
+                    "error_code": "NOT_FOUND",
+                    "message": "Post not found",
+                }
+            ),
+            404,
+        )
+
+    feed = db.session.get(Feed, post.feed_id)
+    if feed is None:
+        logger.warning(
+            "[API] Reprocess (keep transcript): feed not found for guid=%s feed_id=%s",
+            p_guid,
+            getattr(post, "feed_id", None),
+        )
+        return (
+            flask.jsonify(
+                {
+                    "status": "error",
+                    "error_code": "FEED_NOT_FOUND",
+                    "message": "Feed not found",
+                }
+            ),
+            404,
+        )
+
+    user, error = require_admin("reprocess this episode (keep transcript)")
+    if error:
+        logger.warning(
+            "[API] Reprocess (keep transcript): auth error for guid=%s",
+            p_guid,
+        )
+        return error
+    if user and user.role != "admin":
+        return (
+            flask.jsonify(
+                {
+                    "status": "error",
+                    "error_code": "REPROCESS_FORBIDDEN",
+                    "message": "Only admins can reprocess episodes.",
+                }
+            ),
+            403,
+        )
+
+    if not post.whitelisted:
+        return (
+            flask.jsonify(
+                {
+                    "status": "error",
+                    "error_code": "NOT_WHITELISTED",
+                    "message": "Post not whitelisted",
+                }
+            ),
+            400,
+        )
+
+    transcript_count = (
+        db.session.query(TranscriptSegment.id).filter_by(post_id=post.id).count()
+    )
+    has_whisper_model_call = (
+        db.session.query(ModelCall.id)
+        .filter(
+            ModelCall.post_id == post.id,
+            ModelCall.model_name.like("%whisper%"),
+            ModelCall.status == "success",
+        )
+        .first()
+        is not None
+    )
+    if transcript_count <= 0 or not has_whisper_model_call:
+        logger.warning(
+            "[API] Reprocess (keep transcript): no reusable transcript for guid=%s "
+            "post_id=%s transcript_count=%s whisper_model_call=%s",
+            p_guid,
+            post.id,
+            transcript_count,
+            has_whisper_model_call,
+        )
+        return (
+            flask.jsonify(
+                {
+                    "status": "error",
+                    "error_code": "NO_REUSABLE_TRANSCRIPT",
+                    "message": (
+                        "No reusable transcript found for this episode. "
+                        "Use full reprocess instead."
+                    ),
+                }
+            ),
+            400,
+        )
+
+    billing_user_id = getattr(user, "id", None)
+
+    try:
+        logger.info(
+            "[API] Reprocess (keep transcript): cancelling jobs and clearing outputs "
+            "guid=%s post_id=%s",
+            p_guid,
+            post.id,
+        )
+        get_jobs_manager().cancel_post_jobs(p_guid)
+        clear_post_processing_data_keep_transcript(post)
+
+        logger.info(
+            "[API] Reprocess (keep transcript): starting post processing "
+            "guid=%s post_id=%s",
+            p_guid,
+            post.id,
+        )
+        result = get_jobs_manager().start_post_processing(
+            p_guid,
+            priority="interactive",
+            requested_by_user_id=billing_user_id,
+            billing_user_id=billing_user_id,
+        )
+        status_code = 200 if result.get("status") in ("started", "completed") else 400
+        if result.get("status") == "started":
+            result["message"] = "Post reprocessing started (keeping transcript)"
+        logger.info(
+            "[API] Reprocess (keep transcript): completed guid=%s status=%s code=%s",
+            p_guid,
+            result.get("status"),
+            status_code,
+        )
+        return flask.jsonify(result), status_code
+    except Exception as e:
+        logger.error(
+            "Failed to reprocess post (keep transcript) %s: %s",
+            p_guid,
+            e,
+            exc_info=True,
+        )
+        return (
+            flask.jsonify(
+                {
+                    "status": "error",
+                    "error_code": "REPROCESS_FAILED",
+                    "message": f"Failed to reprocess post (keep transcript): {e!s}",
                 }
             ),
             500,

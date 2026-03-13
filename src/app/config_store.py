@@ -111,6 +111,7 @@ def ensure_defaults() -> None:
             "llm_enable_token_rate_limiting": DEFAULTS.LLM_ENABLE_TOKEN_RATE_LIMITING,
             "enable_boundary_refinement": DEFAULTS.ENABLE_BOUNDARY_REFINEMENT,
             "enable_word_level_boundary_refinder": DEFAULTS.ENABLE_WORD_LEVEL_BOUNDARY_REFINDER,
+            "enable_llm_chapter_fallback_tagging": DEFAULTS.ENABLE_LLM_CHAPTER_FALLBACK_TAGGING,
         },
     )
 
@@ -450,6 +451,7 @@ def read_combined() -> dict[str, Any]:
             "llm_max_input_tokens_per_minute": llm.llm_max_input_tokens_per_minute,
             "enable_boundary_refinement": llm.enable_boundary_refinement,
             "enable_word_level_boundary_refinder": llm.enable_word_level_boundary_refinder,
+            "enable_llm_chapter_fallback_tagging": llm.enable_llm_chapter_fallback_tagging,
         },
         "whisper": whisper_payload,
         "processing": {
@@ -489,6 +491,7 @@ def _update_section_llm(data: dict[str, Any]) -> None:
         "llm_max_input_tokens_per_minute",
         "enable_boundary_refinement",
         "enable_word_level_boundary_refinder",
+        "enable_llm_chapter_fallback_tagging",
     ]:
         if key in data:
             new_val = data[key]
@@ -761,6 +764,12 @@ def to_pydantic_config() -> PydanticConfig:
             data["llm"].get(
                 "enable_word_level_boundary_refinder",
                 DEFAULTS.ENABLE_WORD_LEVEL_BOUNDARY_REFINDER,
+            )
+        ),
+        enable_llm_chapter_fallback_tagging=bool(
+            data["llm"].get(
+                "enable_llm_chapter_fallback_tagging",
+                DEFAULTS.ENABLE_LLM_CHAPTER_FALLBACK_TAGGING,
             )
         ),
         output=data["output"],

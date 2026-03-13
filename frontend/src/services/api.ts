@@ -179,6 +179,13 @@ export const feedsApi = {
     return response.data;
   },
 
+  reprocessPostKeepTranscript: async (
+    guid: string
+  ): Promise<{ status: string; job_id?: string; message: string; download_url?: string }> => {
+    const response = await api.post(`/api/posts/${guid}/reprocess/keep-transcript`);
+    return response.data;
+  },
+
   getPostStatus: async (guid: string): Promise<{
     status: string;
     step: number;

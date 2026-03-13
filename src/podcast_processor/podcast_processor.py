@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import shutil
@@ -20,8 +21,17 @@ from podcast_processor.chapter_ad_detector import (
     ChapterAdDetector,
     ChapterDetectionError,
 )
+from podcast_processor.chapter_fallback import (
+    generate_chapters_from_transcript,
+    generate_topic_chapters_from_transcript_with_llm,
+    refine_generated_chapter_titles_with_llm,
+    resolve_llm_path_chapters,
+)
 from podcast_processor.chapter_filter import parse_filter_strings
-from podcast_processor.chapter_writer import write_adjusted_chapters
+from podcast_processor.chapter_writer import (
+    recalculate_chapter_times,
+    write_adjusted_chapters,
+)
 from podcast_processor.podcast_downloader import PodcastDownloader, sanitize_title
 from podcast_processor.processing_status_manager import ProcessingStatusManager
 from podcast_processor.prompt import (
@@ -384,6 +394,10 @@ class PodcastProcessor:
         )
         transcript_segments = self.transcription_manager.transcribe(post)
         self._raise_if_cancelled(job, 2, cancel_callback)
+        unprocessed_audio_path = (
+            str(post.unprocessed_audio_path) if post.unprocessed_audio_path else None
+        )
+        post_description = post.description
 
         # Step 3: Classify ad segments
         self._classify_ad_segments(post, job, transcript_segments)
@@ -393,9 +407,170 @@ class PodcastProcessor:
         self.status_manager.update_job_status(
             job, "running", 4, "Processing audio", 90.0
         )
-        self.audio_processor.process_audio(post, processed_audio_path)
+        removed_segments_ms = self.audio_processor.process_audio(
+            post, processed_audio_path
+        )
+        removed_segments_sec = [
+            (start_ms / 1000.0, end_ms / 1000.0)
+            for start_ms, end_ms in removed_segments_ms
+        ]
 
-        self._finalize_processing(post, job, processed_audio_path)
+        chapters_for_output = []
+        chapter_source = "none"
+        if getattr(self.config, "enable_llm_chapter_fallback_tagging", False):
+            chapters_for_output, chapter_source = resolve_llm_path_chapters(
+                unprocessed_audio_path=unprocessed_audio_path,
+                description=post_description,
+                transcript_segments=transcript_segments,
+                logger_override=self.logger,
+            )
+            if chapter_source == "transcript" and chapters_for_output:
+                transcript_segments_for_chapters = (
+                    self._filter_transcript_segments_for_chapters(
+                        transcript_segments, removed_segments_ms
+                    )
+                )
+                if not transcript_segments_for_chapters:
+                    self.logger.warning(
+                        "All transcript segments overlap removed ad windows for post "
+                        "%s; retaining original transcript-derived chapters",
+                        post.id,
+                    )
+                    transcript_segments_for_chapters = transcript_segments
+
+                topic_chapters = generate_topic_chapters_from_transcript_with_llm(
+                    transcript_segments_for_chapters,
+                    llm_model=getattr(self.config, "llm_model", None),
+                    openai_timeout_sec=int(getattr(self.config, "openai_timeout", 300)),
+                    logger_override=self.logger,
+                )
+                if topic_chapters:
+                    self.logger.info(
+                        "Using %d topic-based transcript chapters from LLM",
+                        len(topic_chapters),
+                    )
+                    chapters_for_output = topic_chapters
+                else:
+                    self.logger.warning(
+                        "Topic-based transcript chapter generation returned no "
+                        "usable plan; falling back to heuristic transcript "
+                        "chapter boundaries for post %s",
+                        post.id,
+                    )
+                    fallback_chapters = generate_chapters_from_transcript(
+                        transcript_segments_for_chapters
+                    )
+                    if fallback_chapters:
+                        chapters_for_output = refine_generated_chapter_titles_with_llm(
+                            fallback_chapters,
+                            transcript_segments_for_chapters,
+                            llm_model=getattr(self.config, "llm_model", None),
+                            openai_timeout_sec=int(
+                                getattr(self.config, "openai_timeout", 300)
+                            ),
+                            logger_override=self.logger,
+                        )
+                        self.logger.info(
+                            "Heuristic transcript chapter boundaries retained after "
+                            "LLM title refinement (count=%d)",
+                            len(chapters_for_output),
+                        )
+                    else:
+                        self.logger.warning(
+                            "No usable non-ad transcript segments remained for "
+                            "chapter fallback on post %s; retaining original "
+                            "transcript-derived chapters",
+                            post.id,
+                        )
+            if chapters_for_output:
+                self.logger.info(
+                    "LLM path chapter fallback resolved %d chapters via %s",
+                    len(chapters_for_output),
+                    chapter_source,
+                )
+
+        chapter_data_json: str | None = None
+        if chapters_for_output:
+            write_adjusted_chapters(
+                audio_path=processed_audio_path,
+                chapters_to_keep=chapters_for_output,
+                removed_segments=removed_segments_sec,
+            )
+            adjusted_chapters = recalculate_chapter_times(
+                chapters_for_output, removed_segments_sec
+            )
+            chapter_data_json = json.dumps(
+                {
+                    "chapter_source": chapter_source,
+                    "chapters_for_output": [
+                        {
+                            "title": ch.title,
+                            "start_time": round(ch.start_time_ms / 1000.0, 1),
+                            "end_time": round(ch.end_time_ms / 1000.0, 1),
+                        }
+                        for ch in adjusted_chapters
+                    ],
+                }
+            )
+
+        self._finalize_processing(
+            post,
+            job,
+            processed_audio_path,
+            chapter_data=chapter_data_json,
+        )
+
+    @staticmethod
+    def _segment_overlaps_removed_audio(
+        segment_start_ms: int,
+        segment_end_ms: int,
+        removed_segments_ms: list[tuple[int, int]],
+    ) -> bool:
+        for removed_start_ms, removed_end_ms in removed_segments_ms:
+            if removed_end_ms <= segment_start_ms:
+                continue
+            if removed_start_ms >= segment_end_ms:
+                return False
+            return True
+        return False
+
+    def _filter_transcript_segments_for_chapters(
+        self,
+        transcript_segments: list[Any],
+        removed_segments_ms: list[tuple[int, int]],
+    ) -> list[Any]:
+        if not transcript_segments or not removed_segments_ms:
+            return transcript_segments
+
+        sorted_removed_segments = sorted(
+            removed_segments_ms, key=lambda window: window[0]
+        )
+        kept_segments: list[Any] = []
+
+        for segment in transcript_segments:
+            segment_start_ms = int(float(getattr(segment, "start_time", 0.0)) * 1000)
+            segment_end_ms = int(float(getattr(segment, "end_time", 0.0)) * 1000)
+            segment_end_ms = max(segment_start_ms, segment_end_ms)
+
+            if self._segment_overlaps_removed_audio(
+                segment_start_ms,
+                segment_end_ms,
+                sorted_removed_segments,
+            ):
+                continue
+
+            kept_segments.append(segment)
+
+        removed_count = len(transcript_segments) - len(kept_segments)
+        if removed_count > 0:
+            self.logger.info(
+                "Excluded %d/%d transcript segments from transcript chapter "
+                "generation because they overlap removed ad windows",
+                removed_count,
+                len(transcript_segments),
+            )
+
+        return kept_segments
 
     def _perform_chapter_based_processing(
         self,
@@ -463,10 +638,19 @@ class PodcastProcessor:
         )
 
         # Build chapter data for stats
-        import json
-
+        adjusted_kept_chapters = recalculate_chapter_times(
+            chapters_to_keep, ad_segments
+        )
         chapter_data = {
             "filter_strings": filter_strings,
+            "chapters_for_output": [
+                {
+                    "title": ch.title,
+                    "start_time": round(ch.start_time_ms / 1000.0, 1),
+                    "end_time": round(ch.end_time_ms / 1000.0, 1),
+                }
+                for ch in adjusted_kept_chapters
+            ],
             "chapters_kept": [
                 {
                     "title": ch.title,

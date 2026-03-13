@@ -157,6 +157,21 @@ export default function LLMSection() {
               }
             />
           </Field>
+          <Field
+            label="Enable Chapter Fallback Tagging (LLM)"
+            hint="Keep or auto-create chapter tags for LLM-processed MP3s from descriptions or transcripts."
+          >
+            <input
+              type="checkbox"
+              checked={!!pending?.llm?.enable_llm_chapter_fallback_tagging}
+              onChange={(e) =>
+                setField(
+                  ['llm', 'enable_llm_chapter_fallback_tagging'],
+                  e.target.checked
+                )
+              }
+            />
+          </Field>
           <Field label="Max Input Tokens Per Call (optional)">
             <input
               className="input"

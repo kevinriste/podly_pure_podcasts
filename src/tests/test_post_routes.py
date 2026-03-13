@@ -1,4 +1,5 @@
 import datetime
+import json
 from types import SimpleNamespace
 from unittest import mock
 
@@ -335,6 +336,48 @@ def test_feed_posts_pagination_and_filtering(app):
         assert filtered["total"] == 15
         assert filtered["whitelisted_total"] == 15
         assert all(item["whitelisted"] for item in filtered["items"])
+
+
+def test_feed_posts_include_podly_description_html(app):
+    app.testing = True
+    app.register_blueprint(post_bp)
+
+    with app.app_context():
+        feed = Feed(title="Chapter Feed", rss_url="https://example.com/feed.xml")
+        db.session.add(feed)
+        db.session.commit()
+
+        post = Post(
+            feed_id=feed.id,
+            guid="chapter-guid",
+            download_url="https://example.com/chapter.mp3",
+            title="Episode With Chapters",
+            description="<p>Original episode description</p>",
+            chapter_data=json.dumps(
+                {
+                    "chapters_for_output": [
+                        {"start_time": 0.0, "title": "Intro"},
+                        {"start_time": 485.0, "title": "Gold mission"},
+                    ]
+                }
+            ),
+        )
+        db.session.add(post)
+        db.session.commit()
+
+        client = app.test_client()
+        response = client.get(f"/api/feeds/{feed.id}/posts")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data is not None
+    item = data["items"][0]
+    assert item["description"] == "<p>Original episode description</p>"
+    assert "Original episode description" in item["podly_description_html"]
+    assert "Podly Chapters" in item["podly_description_html"]
+    assert "<li>00:00 Intro</li>" in item["podly_description_html"]
+    assert "<li>08:05 Gold mission</li>" in item["podly_description_html"]
+    assert "Podly Post JSON" in item["podly_description_html"]
 
 
 def test_post_stats_omits_debug_info_when_disabled(app):
