@@ -142,8 +142,17 @@ async fn cleanup_run(
         .await;
     }
 
+    // Count remaining candidates
+    let remaining: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM post WHERE processed_audio_path IS NOT NULL AND release_date < ?",
+    )
+    .bind(&cutoff_str)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or((0,));
+
     Ok(Json(json!({
         "status": "ok", "removed_posts": removed, "retention_days": days,
-        "cutoff_utc": cutoff_str,
+        "cutoff_utc": cutoff_str, "remaining_candidates": remaining.0,
     })))
 }

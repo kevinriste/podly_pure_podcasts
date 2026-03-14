@@ -13,11 +13,12 @@ mod transcription;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use axum::http::HeaderValue;
 use axum::middleware as axum_mw;
 use axum::Router;
 use sqlx::SqlitePool;
 use tokio::sync::Mutex;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tower_sessions::cookie::time::Duration;
@@ -84,6 +85,25 @@ async fn main() -> anyhow::Result<()> {
 
     let rate_limiter: SharedRateLimiter = Arc::new(Mutex::new(FailureRateLimiter::new()));
 
+    // Build CORS layer from CORS_ORIGINS env var (comma-separated) or default to permissive
+    let cors_layer = if let Some(origins) = &config.cors_origins {
+        let origin_list: Vec<HeaderValue> = origins
+            .split(',')
+            .filter_map(|o| o.trim().parse().ok())
+            .collect();
+        if origin_list.is_empty() {
+            CorsLayer::permissive()
+        } else {
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::list(origin_list))
+                .allow_methods(tower_http::cors::Any)
+                .allow_headers(tower_http::cors::Any)
+                .allow_credentials(true)
+        }
+    } else {
+        CorsLayer::permissive()
+    };
+
     let config = Arc::new(config);
     let jobs_manager = Arc::new(JobsManager::new(pool.clone(), Arc::clone(&config)));
 
@@ -97,8 +117,12 @@ async fn main() -> anyhow::Result<()> {
     // Start the jobs manager background worker
     jobs_manager.start();
 
-    // Start the periodic scheduler
-    jobs::scheduler::start_scheduler(jobs_manager.clone(), state.db.clone()).await;
+    // Start the periodic scheduler (unless disabled via PODLY_DISABLE_SCHEDULER)
+    if !config.disable_scheduler {
+        jobs::scheduler::start_scheduler(jobs_manager.clone(), state.db.clone()).await;
+    } else {
+        tracing::info!("Scheduler disabled via PODLY_DISABLE_SCHEDULER");
+    }
 
     // Build router
     let static_dir = config.static_dir.clone();
@@ -113,7 +137,7 @@ async fn main() -> anyhow::Result<()> {
             ServeDir::new(&static_dir).fallback(ServeFile::new(static_dir.join("index.html"))),
         )
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
+        .layer(cors_layer)
         .with_state(state);
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;

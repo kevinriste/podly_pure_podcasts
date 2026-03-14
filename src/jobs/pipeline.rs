@@ -65,6 +65,27 @@ pub async fn run_pipeline(
     .unwrap_or_else(|| "llm".into());
     let strategy = if feed_strategy == "inherit" { &app_strategy } else { &feed_strategy };
 
+    // Load chapter_filter_strings: per-feed override, or global default
+    let feed_filter: Option<String> = sqlx::query_as::<_, (Option<String>,)>(
+        "SELECT chapter_filter_strings FROM feed WHERE id = ?",
+    )
+    .bind(feed_id)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None)
+    .and_then(|(s,)| s);
+    let chapter_filter_strings = if feed_filter.is_some() {
+        feed_filter
+    } else {
+        sqlx::query_as::<_, (Option<String>,)>(
+            "SELECT default_filter_strings FROM chapter_filter_settings WHERE id = 1",
+        )
+        .fetch_optional(pool)
+        .await
+        .unwrap_or(None)
+        .and_then(|(s,)| s)
+    };
+
     // Step 1: Download
     update_step(pool, job_id, 1, "downloading", 0.0).await;
     let audio_path = if let Some(existing) = &existing_audio {
@@ -78,27 +99,40 @@ pub async fn run_pipeline(
     };
     update_step(pool, job_id, 1, "downloaded", 16.0).await;
 
-    // Step 2: Transcribe
-    update_step(pool, job_id, 2, "transcribing", 20.0).await;
-    let segments = transcribe(pool, config, post_id, &audio_path).await?;
-    update_step(pool, job_id, 2, "transcribed", 40.0).await;
+    // Strategy-dependent steps
+    let refined = match strategy.as_str() {
+        "chapter" => {
+            // Chapter-based: skip transcription + LLM, read chapters from audio
+            update_step(pool, job_id, 2, "reading_chapters", 20.0).await;
+            let chapter_ads = classify_chapters(&audio_path, chapter_filter_strings.as_deref()).await?;
+            update_step(pool, job_id, 2, "chapters_read", 40.0).await;
+            update_step(pool, job_id, 3, "chapters_filtered", 60.0).await;
+            update_step(pool, job_id, 4, "skipped", 70.0).await;
+            chapter_ads
+        }
+        _ => {
+            // LLM-based or oneshot: transcribe, classify, refine
+            update_step(pool, job_id, 2, "transcribing", 20.0).await;
+            let segments = transcribe(pool, config, post_id, &audio_path).await?;
+            update_step(pool, job_id, 2, "transcribed", 40.0).await;
 
-    // Step 3: Classify (strategy-dependent)
-    update_step(pool, job_id, 3, "classifying", 45.0).await;
-    let ad_segments = match strategy.as_str() {
-        "oneshot" => classify_oneshot(pool, config, post_id, &segments, &feed_title, &feed_description).await?,
-        _ => classify(pool, config, post_id, &segments, &feed_title, &feed_description).await?,
-    };
-    update_step(pool, job_id, 3, "classified", 60.0).await;
+            update_step(pool, job_id, 3, "classifying", 45.0).await;
+            let ad_segments = match strategy.as_str() {
+                "oneshot" => classify_oneshot(pool, config, post_id, &segments, &feed_title, &feed_description).await?,
+                _ => classify(pool, config, post_id, &segments, &feed_title, &feed_description).await?,
+            };
+            update_step(pool, job_id, 3, "classified", 60.0).await;
 
-    // Step 4: Refine (skip for oneshot — it returns precise boundaries)
-    update_step(pool, job_id, 4, "refining", 65.0).await;
-    let refined = if strategy.as_str() == "oneshot" {
-        ad_segments.iter().map(|a| (a.start_time, a.end_time)).collect()
-    } else {
-        refine(pool, config, post_id, &ad_segments, &segments).await
+            update_step(pool, job_id, 4, "refining", 65.0).await;
+            let refined = if strategy.as_str() == "oneshot" {
+                ad_segments.iter().map(|a| (a.start_time, a.end_time)).collect()
+            } else {
+                refine(pool, config, post_id, &ad_segments, &segments).await
+            };
+            update_step(pool, job_id, 4, "refined", 70.0).await;
+            refined
+        }
     };
-    update_step(pool, job_id, 4, "refined", 70.0).await;
 
     // Step 5: Cut
     update_step(pool, job_id, 5, "cutting", 75.0).await;
@@ -527,6 +561,89 @@ async fn classify_oneshot(
     )
     .await
     .map_err(|e| PipelineError::Classification(e.to_string()))
+}
+
+/// Chapter-based ad detection: read chapters from audio via ffprobe, filter by keywords.
+async fn classify_chapters(
+    audio_path: &Path,
+    filter_strings_csv: Option<&str>,
+) -> Result<Vec<(f64, f64)>, PipelineError> {
+    let default_filters = "sponsor,ad,advertisement,promo,commercial";
+    let filter_csv = filter_strings_csv.unwrap_or(default_filters);
+    let filters: Vec<String> = filter_csv
+        .split(',')
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    // Read chapters via ffprobe
+    let output = tokio::process::Command::new("ffprobe")
+        .args([
+            "-v", "quiet",
+            "-print_format", "json",
+            "-show_chapters",
+        ])
+        .arg(audio_path)
+        .output()
+        .await
+        .map_err(|e| PipelineError::Io(format!("ffprobe failed: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(PipelineError::Io(format!("ffprobe error: {stderr}")));
+    }
+
+    let probe: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|e| PipelineError::Io(format!("ffprobe JSON parse error: {e}")))?;
+
+    let chapters = probe.get("chapters").and_then(|c| c.as_array());
+    let Some(chapters) = chapters else {
+        tracing::warn!("No chapters found in audio — chapter strategy producing no ads");
+        return Ok(vec![]);
+    };
+
+    if chapters.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut ad_segments = Vec::new();
+    for ch in chapters {
+        let title = ch
+            .get("tags")
+            .and_then(|t| t.get("title"))
+            .and_then(|t| t.as_str())
+            .unwrap_or("");
+        let title_lower = title.to_lowercase();
+
+        let is_ad = filters.iter().any(|f| title_lower.contains(f.as_str()));
+        if is_ad {
+            let start = ch
+                .get("start_time")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            let end = ch
+                .get("end_time")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            if end > start {
+                tracing::info!("Chapter ad: \"{title}\" ({start:.1}s - {end:.1}s)");
+                ad_segments.push((start, end));
+            }
+        }
+    }
+
+    tracing::info!(
+        "Chapter-based detection: {}/{} chapters matched as ads",
+        ad_segments.len(),
+        chapters.len()
+    );
+
+    // Also load global defaults from DB if no per-feed filter was set
+    // (already handled via the fallback in filter_strings_csv)
+
+    Ok(ad_segments)
 }
 
 async fn refine(
