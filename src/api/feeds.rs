@@ -383,26 +383,29 @@ async fn refresh_feed(
     State(state): State<AppState>,
     Path(feed_id): Path<i64>,
     auth_user: Option<Extension<AuthenticatedUser>>,
-) -> AppResult<Json<Value>> {
+) -> AppResult<impl IntoResponse> {
     require_admin_user(&auth_user, state.config.require_auth)?;
 
     let feed = queries::get_feed_by_id(&state.db, feed_id)
         .await?
         .ok_or(AppError::NotFound)?;
 
-    let result = crate::feeds::refresh::refresh_feed(&state.db, feed_id, &feed.rss_url).await;
+    let feed_title = feed.title.clone();
 
-    match result {
-        Ok(r) => {
-            state.jobs_manager.enqueue_pending_jobs().await;
-            Ok(Json(json!({
-                "status": "ok",
-                "new_episodes": r.new_episodes,
-                "total_episodes": r.total_episodes,
-            })))
+    // Spawn background refresh (matches Python's Thread-based approach)
+    let db = state.db.clone();
+    let rss_url = feed.rss_url.clone();
+    let jobs = state.jobs_manager.clone();
+    tokio::spawn(async move {
+        if let Ok(_r) = crate::feeds::refresh::refresh_feed(&db, feed_id, &rss_url).await {
+            jobs.enqueue_pending_jobs().await;
         }
-        Err(e) => Err(AppError::Internal(anyhow::anyhow!("Refresh failed: {e}"))),
-    }
+    });
+
+    Ok((StatusCode::ACCEPTED, Json(json!({
+        "status": "accepted",
+        "message": format!("Feed \"{}\" refresh queued for processing", feed_title),
+    }))))
 }
 
 async fn refresh_all_feeds(
@@ -588,7 +591,7 @@ async fn toggle_whitelist_all(
     let whitelisted_count = if whitelist { total } else { 0 };
 
     Ok(Json(json!({
-        "message": if whitelist { "All episodes whitelisted" } else { "All episodes unwhitelisted" },
+        "message": if whitelist { "Whitelisted all posts" } else { "Unwhitelisted all posts" },
         "whitelisted_count": whitelisted_count,
         "total_count": total,
         "all_whitelisted": whitelist,

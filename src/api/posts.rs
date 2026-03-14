@@ -254,6 +254,7 @@ async fn post_stats(
         "model_calls": model_calls_json,
         "transcript_segments": transcript_segments_json,
         "identifications": identifications_json,
+        "chapters": Value::Null,
     })))
 }
 
@@ -305,7 +306,7 @@ async fn set_whitelist(
     let mut response = json!({
         "guid": p_guid,
         "whitelisted": whitelisted,
-        "message": if whitelisted { "Episode whitelisted" } else { "Episode removed from whitelist" },
+        "message": "Whitelist status updated successfully",
     });
 
     if whitelisted && body.trigger_processing.unwrap_or(false) {

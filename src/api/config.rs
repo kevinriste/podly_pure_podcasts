@@ -601,6 +601,20 @@ async fn update_config(
         }
     }
 
+    // Update processing settings
+    if let Some(p) = body.get("processing") {
+        if let Some(v) = p
+            .get("num_segments_to_input_to_prompt")
+            .and_then(|v| v.as_i64())
+        {
+            sqlx::query("UPDATE processing_settings SET num_segments_to_input_to_prompt = ?, updated_at = ? WHERE id = 1")
+                .bind(v)
+                .bind(&now)
+                .execute(&state.db)
+                .await?;
+        }
+    }
+
     // Update output settings
     if let Some(o) = body.get("output") {
         if let Some(v) = o.get("fade_ms").and_then(|v| v.as_i64()) {

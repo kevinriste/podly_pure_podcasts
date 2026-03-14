@@ -264,7 +264,25 @@ impl JobsManager {
 
     /// Get processing status for a specific post.
     pub async fn get_post_status(&self, post_guid: &str) -> Value {
-        // Check for active job first
+        // Check if post exists first
+        let post: Option<(String, Option<String>)> = sqlx::query_as(
+            "SELECT guid, processed_audio_path FROM post WHERE guid = ?",
+        )
+        .bind(post_guid)
+        .fetch_optional(&self.pool)
+        .await
+        .unwrap_or(None);
+
+        if post.is_none() {
+            return json!({
+                "status": "error",
+                "error_code": "NOT_FOUND",
+                "message": "Post not found",
+            });
+        }
+        let (_guid, processed_path) = post.unwrap();
+
+        // Check for processing job
         let job: Option<crate::db::models::ProcessingJob> = sqlx::query_as(
             "SELECT * FROM processing_job WHERE post_guid = ? ORDER BY created_at DESC LIMIT 1",
         )
@@ -274,50 +292,55 @@ impl JobsManager {
         .unwrap_or(None);
 
         if let Some(job) = job {
-            return json!({
+            let mut response = json!({
                 "status": job.status,
-                "post_guid": post_guid,
-                "job_id": job.id,
-                "progress": job.progress_percentage.unwrap_or(0.0),
-                "current_step": job.step_name,
-                "total_steps": job.total_steps,
-                "error_code": if job.status == "failed" { Some("PROCESSING_FAILED") } else { None::<&str> },
-                "message": job.error_message,
+                "step": job.current_step.unwrap_or(0),
+                "step_name": job.step_name.as_deref().unwrap_or("Unknown"),
+                "total_steps": job.total_steps.unwrap_or(4),
+                "progress_percentage": job.progress_percentage.unwrap_or(0.0),
+                "message": job.step_name.as_deref()
+                    .unwrap_or(&format!("Step {} of {}", job.current_step.unwrap_or(0), job.total_steps.unwrap_or(4))),
             });
+            if let Some(ref started_at) = job.started_at {
+                response["started_at"] = json!(started_at);
+            }
+            if (job.status == "completed" || job.status == "skipped") && processed_path.is_some() {
+                response["download_url"] = json!(format!("/api/posts/{post_guid}/download"));
+            }
+            if job.status == "failed" {
+                if let Some(ref err) = job.error_message {
+                    response["error"] = json!(err);
+                }
+            }
+            if job.status == "cancelled" {
+                if let Some(ref err) = job.error_message {
+                    response["step_name"] = json!(err);
+                    response["message"] = json!(err);
+                }
+            }
+            return response;
         }
 
-        // Check if post exists and has processed audio
-        let post: Option<(String, Option<String>)> = sqlx::query_as(
-            "SELECT guid, processed_audio_path FROM post WHERE guid = ?",
-        )
-        .bind(post_guid)
-        .fetch_optional(&self.pool)
-        .await
-        .unwrap_or(None);
-
-        match post {
-            Some((_guid, Some(_processed))) => json!({
-                "status": "completed",
-                "post_guid": post_guid,
-                "progress": 100,
-                "current_step": null,
-                "error_code": null,
-                "message": null,
-            }),
-            Some((_guid, None)) => json!({
-                "status": "idle",
-                "post_guid": post_guid,
-                "progress": 0,
-                "current_step": null,
-                "error_code": null,
-                "message": null,
-            }),
-            None => json!({
-                "status": "error",
-                "post_guid": post_guid,
-                "error_code": "NOT_FOUND",
-                "message": "Post not found",
-            }),
+        // No job found
+        if processed_path.is_some() {
+            json!({
+                "status": "skipped",
+                "step": 4,
+                "step_name": "Processing skipped",
+                "total_steps": 4,
+                "progress_percentage": 100.0,
+                "message": "Post already processed",
+                "download_url": format!("/api/posts/{post_guid}/download"),
+            })
+        } else {
+            json!({
+                "status": "not_started",
+                "step": 0,
+                "step_name": "Not started",
+                "total_steps": 4,
+                "progress_percentage": 0.0,
+                "message": "No processing job found",
+            })
         }
     }
 
