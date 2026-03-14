@@ -22,6 +22,10 @@ pub async fn start_scheduler(
 
                 tracing::info!("Scheduler: starting periodic feed refresh");
 
+                // Clean up stuck/stale jobs before refreshing
+                jobs_manager.cleanup_stuck_pending_jobs(10).await;
+                jobs_manager.cleanup_stale_jobs(24).await;
+
                 // Refresh all feeds
                 jobs_manager.start_refresh_all_feeds().await;
 

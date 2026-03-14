@@ -78,5 +78,5 @@ between Python (podly.klt.pw) and Rust (podly2.klt.pw).
 
 ### Operational Notes
 - **toggle-whitelist-all creates processing jobs**: When whitelisting all posts, the `enqueue_pending_jobs` call creates pending processing jobs for every newly whitelisted post. Be careful with this endpoint in testing — always unwhitelist-all to undo, AND clean up pending jobs from the DB.
-- **Python add_feed is broken**: As of 2026-03-14, Python's `POST /feed` returns 500. This is a Python bug, not a Rust issue.
+- **Python add_feed works**: Earlier test failure was due to wrong credentials. Python returns 302 redirect, Rust returns 201 JSON. Both correctly add the feed.
 - **Refresh feed is async**: Both backends now fire-and-forget the refresh. Python uses a background Thread, Rust uses `tokio::spawn`.

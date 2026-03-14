@@ -461,6 +461,90 @@ impl JobsManager {
         enqueued
     }
 
+    /// Clean up jobs on startup: mark zombie running jobs as failed, delete old
+    /// completed/failed/cancelled jobs. Mirrors Python's `clear_all_jobs()` on startup.
+    pub async fn cleanup_on_startup(&self) {
+        // Mark any "running" jobs as failed (they were interrupted by a restart)
+        let now = chrono::Utc::now().to_rfc3339();
+        let running = sqlx::query(
+            "UPDATE processing_job SET status = 'failed', completed_at = ?, error_message = 'Interrupted by server restart' WHERE status = 'running'",
+        )
+        .bind(&now)
+        .execute(&self.pool)
+        .await;
+        if let Ok(r) = &running {
+            if r.rows_affected() > 0 {
+                tracing::info!(
+                    "Startup cleanup: marked {} zombie running jobs as failed",
+                    r.rows_affected()
+                );
+            }
+        }
+
+        // Delete all completed/failed/cancelled/skipped jobs (clean slate like Python)
+        let old = sqlx::query(
+            "DELETE FROM processing_job WHERE status IN ('completed', 'failed', 'cancelled', 'skipped')",
+        )
+        .execute(&self.pool)
+        .await;
+        if let Ok(r) = &old {
+            if r.rows_affected() > 0 {
+                tracing::info!(
+                    "Startup cleanup: deleted {} old jobs",
+                    r.rows_affected()
+                );
+            }
+        }
+    }
+
+    /// Mark pending jobs older than `threshold_minutes` as failed.
+    /// Mirrors Python's `cleanup_stuck_pending_jobs`.
+    pub async fn cleanup_stuck_pending_jobs(&self, threshold_minutes: i64) {
+        let cutoff = (chrono::Utc::now()
+            - chrono::Duration::minutes(threshold_minutes))
+            .to_rfc3339();
+        let now = chrono::Utc::now().to_rfc3339();
+        let result = sqlx::query(
+            "UPDATE processing_job SET status = 'failed', completed_at = ?, error_message = 'Stuck in pending status' WHERE status = 'pending' AND created_at < ?",
+        )
+        .bind(&now)
+        .bind(&cutoff)
+        .execute(&self.pool)
+        .await;
+        if let Ok(r) = &result {
+            if r.rows_affected() > 0 {
+                tracing::warn!(
+                    "Cleaned up {} stuck pending jobs (older than {}min)",
+                    r.rows_affected(),
+                    threshold_minutes
+                );
+            }
+        }
+    }
+
+    /// Delete completed/failed/cancelled jobs older than `older_than_hours`.
+    /// Mirrors Python's `cleanup_stale_jobs`.
+    pub async fn cleanup_stale_jobs(&self, older_than_hours: i64) {
+        let cutoff = (chrono::Utc::now()
+            - chrono::Duration::hours(older_than_hours))
+            .to_rfc3339();
+        let result = sqlx::query(
+            "DELETE FROM processing_job WHERE status IN ('completed', 'failed', 'cancelled', 'skipped') AND created_at < ?",
+        )
+        .bind(&cutoff)
+        .execute(&self.pool)
+        .await;
+        if let Ok(r) = &result {
+            if r.rows_affected() > 0 {
+                tracing::info!(
+                    "Deleted {} stale jobs older than {}h",
+                    r.rows_affected(),
+                    older_than_hours
+                );
+            }
+        }
+    }
+
     /// Refresh all feeds and enqueue pending jobs.
     pub async fn start_refresh_all_feeds(&self) -> Value {
         let feeds: Vec<(i64, String)> =

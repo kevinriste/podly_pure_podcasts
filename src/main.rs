@@ -115,6 +115,9 @@ async fn main() -> anyhow::Result<()> {
         jobs_manager: jobs_manager.clone(),
     };
 
+    // Clean up stale/zombie jobs from previous run (matches Python's clear_all_jobs on startup)
+    jobs_manager.cleanup_on_startup().await;
+
     // Start the jobs manager background worker
     jobs_manager.start();
 
