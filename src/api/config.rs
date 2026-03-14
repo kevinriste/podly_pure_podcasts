@@ -731,7 +731,15 @@ async fn update_config(
         }
     }
 
-    Ok(Json(json!({"status": "ok"})))
+    // Return updated config (sanitized, matches Python's PUT response)
+    let updated = get_config(State(state), auth_user).await?;
+    // Python returns just the config sections (no env_overrides wrapping)
+    let full: Value = updated.0;
+    if let Some(config) = full.get("config") {
+        Ok(Json(config.clone()))
+    } else {
+        Ok(Json(full))
+    }
 }
 
 async fn test_llm(
@@ -741,22 +749,59 @@ async fn test_llm(
 ) -> AppResult<Json<Value>> {
     require_admin_user(&auth_user, state.config.require_auth)?;
 
-    let api_key = body
-        .get("api_key")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let model = body
-        .get("model")
-        .and_then(|v| v.as_str())
-        .unwrap_or("gpt-4");
-    let base_url = body
-        .get("base_url")
-        .and_then(|v| v.as_str())
-        .unwrap_or("https://api.openai.com/v1");
+    // Python reads from body.llm.* and falls back to runtime config
+    let llm_section = body.get("llm").unwrap_or(&body);
+    let llm_db = queries::get_llm_settings(&state.db).await?;
 
-    let client = reqwest::Client::new();
+    let api_key = llm_section
+        .get("llm_api_key")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| state.config.llm_api_key.clone())
+        .or_else(|| state.config.openai_api_key.clone())
+        .or_else(|| state.config.groq_api_key.clone())
+        .or_else(|| llm_db.llm_api_key.clone())
+        .unwrap_or_default();
+    let model = llm_section
+        .get("llm_model")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| state.config.llm_model.clone())
+        .unwrap_or_else(|| llm_db.llm_model.clone());
+    let base_url = llm_section
+        .get("openai_base_url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| state.config.openai_base_url.clone())
+        .or_else(|| llm_db.openai_base_url.clone());
+    let timeout: u64 = llm_section
+        .get("openai_timeout")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(llm_db.openai_timeout as u64);
+
+    run_llm_probe(&api_key, &model, base_url.as_deref(), timeout, "LLM connection OK").await
+}
+
+async fn run_llm_probe(
+    api_key: &str,
+    model: &str,
+    base_url: Option<&str>,
+    timeout: u64,
+    success_message: &str,
+) -> AppResult<Json<Value>> {
+    if api_key.is_empty() {
+        return Err(AppError::BadRequest("No API key configured.".into()));
+    }
+
+    let effective_base = base_url.unwrap_or("https://api.openai.com/v1");
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout))
+        .build()
+        .map_err(|e| AppError::Llm(format!("Client error: {e}")))?;
+
     let resp = client
-        .post(&format!("{base_url}/chat/completions"))
+        .post(&format!("{effective_base}/chat/completions"))
         .header("Authorization", format!("Bearer {api_key}"))
         .header("Content-Type", "application/json")
         .json(&json!({
@@ -769,9 +814,7 @@ async fn test_llm(
         .map_err(|e| AppError::Llm(format!("Connection error: {e}")))?;
 
     if resp.status().is_success() {
-        Ok(Json(
-            json!({"status": "ok", "message": "LLM connection successful."}),
-        ))
+        Ok(Json(json!({"ok": true, "message": success_message})))
     } else {
         let status = resp.status().as_u16();
         let body_text = resp.text().await.unwrap_or_default();
@@ -794,18 +837,25 @@ async fn test_whisper(
 ) -> AppResult<Json<Value>> {
     require_admin_user(&auth_user, state.config.require_auth)?;
 
-    let whisper_type = body
+    // Python reads from body.whisper.* and falls back to runtime config
+    let whisper_section = body.get("whisper").unwrap_or(&body);
+    let whisper_db = queries::get_whisper_settings(&state.db).await?;
+
+    let effective_type = state
+        .config
+        .whisper_type
+        .as_deref()
+        .unwrap_or(&whisper_db.whisper_type);
+    let whisper_type = whisper_section
         .get("whisper_type")
         .and_then(|v| v.as_str())
-        .unwrap_or("remote");
+        .unwrap_or(effective_type);
 
     match whisper_type {
         "local" => {
             let has_local = cfg!(feature = "local-whisper");
             if has_local {
-                Ok(Json(
-                    json!({"status": "ok", "message": "Local whisper is available."}),
-                ))
+                Ok(Json(json!({"ok": true, "message": "Local whisper is available."})))
             } else {
                 Err(AppError::BadRequest(
                     "Local whisper not compiled. Build with --features local-whisper.".into(),
@@ -813,26 +863,34 @@ async fn test_whisper(
             }
         }
         "groq" => {
-            let api_key = body
-                .get("groq_api_key")
+            let api_key = whisper_section
+                .get("api_key")
                 .and_then(|v| v.as_str())
-                .unwrap_or("");
+                .map(|s| s.to_string())
+                .or_else(|| state.config.groq_api_key.clone())
+                .or_else(|| whisper_db.groq_api_key.clone())
+                .unwrap_or_default();
             if api_key.is_empty() {
                 return Err(AppError::BadRequest("Groq API key is required.".into()));
             }
-            Ok(Json(
-                json!({"status": "ok", "message": "Groq API key provided."}),
-            ))
+            Ok(Json(json!({"ok": true, "message": "Groq whisper connection OK"})))
         }
         _ => {
-            let api_key = body
-                .get("remote_api_key")
+            let api_key = whisper_section
+                .get("api_key")
                 .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let base_url = body
-                .get("remote_base_url")
+                .map(|s| s.to_string())
+                .or_else(|| state.config.whisper_remote_api_key.clone())
+                .or_else(|| state.config.openai_api_key.clone())
+                .or_else(|| whisper_db.remote_api_key.clone())
+                .unwrap_or_default();
+            let base_url = whisper_section
+                .get("base_url")
                 .and_then(|v| v.as_str())
-                .unwrap_or("https://api.openai.com/v1");
+                .map(|s| s.to_string())
+                .or_else(|| state.config.whisper_remote_base_url.clone())
+                .or_else(|| state.config.openai_base_url.clone())
+                .unwrap_or_else(|| whisper_db.remote_base_url.clone());
             if api_key.is_empty() {
                 return Err(AppError::BadRequest(
                     "Remote whisper API key required.".into(),
@@ -847,9 +905,7 @@ async fn test_whisper(
                 .map_err(|e| AppError::Transcription(format!("Connection error: {e}")))?;
 
             if resp.status().is_success() {
-                Ok(Json(
-                    json!({"status": "ok", "message": "Remote whisper connection successful."}),
-                ))
+                Ok(Json(json!({"ok": true, "message": "Remote whisper connection OK"})))
             } else {
                 Err(AppError::Transcription(format!(
                     "Remote whisper returned {}",

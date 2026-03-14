@@ -94,13 +94,13 @@ async fn login(
                             retry_after: backoff,
                         });
                     }
-                    return Err(AppError::BadRequest("Invalid username or password.".into()));
+                    return Err(AppError::Unauthorized("Invalid username or password.".into()));
                 }
             }
         }
         None => {
             state.rate_limiter.lock().await.register_failure(&client_ip);
-            return Err(AppError::BadRequest("Invalid username or password.".into()));
+            return Err(AppError::Unauthorized("Invalid username or password.".into()));
         }
     };
 
@@ -135,7 +135,7 @@ async fn logout(
     }
     if auth_user.is_none() {
         session.clear().await;
-        return Err(AppError::Unauthorized);
+        return Err(AppError::Unauthorized("Authentication required.".into()));
     }
     session.clear().await;
     Ok(StatusCode::NO_CONTENT)
@@ -148,10 +148,10 @@ async fn me(
     if !state.config.require_auth {
         return Err(AppError::NotFound);
     }
-    let Extension(auth_user) = auth_user.ok_or(AppError::Unauthorized)?;
+    let Extension(auth_user) = auth_user.ok_or(AppError::Unauthorized("Authentication required.".into()))?;
     let user = queries::get_user_by_id(&state.db, auth_user.id)
         .await?
-        .ok_or(AppError::Unauthorized)?;
+        .ok_or(AppError::Unauthorized("Authentication required.".into()))?;
     let allowance = user.manual_feed_allowance.unwrap_or(user.feed_allowance);
     Ok(Json(json!({
         "user": {
@@ -178,10 +178,10 @@ async fn change_password(
     if !state.config.require_auth {
         return Err(AppError::NotFound);
     }
-    let Extension(auth_user) = auth_user.ok_or(AppError::Unauthorized)?;
+    let Extension(auth_user) = auth_user.ok_or(AppError::Unauthorized("Authentication required.".into()))?;
     let user = queries::get_user_by_id(&state.db, auth_user.id)
         .await?
-        .ok_or(AppError::Unauthorized)?;
+        .ok_or(AppError::Unauthorized("Authentication required.".into()))?;
 
     let current = body.current_password.as_deref().filter(|s| !s.is_empty())
         .ok_or_else(|| AppError::BadRequest("Current and new passwords are required.".into()))?;
@@ -189,7 +189,7 @@ async fn change_password(
         .ok_or_else(|| AppError::BadRequest("Current and new passwords are required.".into()))?;
 
     if matches!(crate::auth::verify_password(current, &user.password_hash), crate::auth::VerifyResult::Failed) {
-        return Err(AppError::Unauthorized);
+        return Err(AppError::Unauthorized("Current password is incorrect.".into()));
     }
     crate::auth::validate_password(new_pass).map_err(AppError::BadRequest)?;
 

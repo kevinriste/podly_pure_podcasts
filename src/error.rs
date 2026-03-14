@@ -11,8 +11,8 @@ pub enum AppError {
     #[error("not found")]
     NotFound,
 
-    #[error("unauthorized")]
-    Unauthorized,
+    #[error("unauthorized: {0}")]
+    Unauthorized(String),
 
     #[error("forbidden")]
     Forbidden,
@@ -56,7 +56,7 @@ impl IntoResponse for AppError {
                 )
             }
             AppError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
-            AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
+            AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg.clone()),
             AppError::Forbidden => (StatusCode::FORBIDDEN, "forbidden".to_string()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),

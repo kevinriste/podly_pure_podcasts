@@ -107,7 +107,7 @@ async fn list_feeds(
                 user_feeds
             }
         } else {
-            return Err(AppError::Unauthorized);
+            return Err(AppError::Unauthorized("Authentication required.".into()));
         }
     } else {
         queries::get_all_feeds(&state.db).await?
@@ -460,7 +460,7 @@ async fn join_feed(
     Path(feed_id): Path<i64>,
     auth_user: Option<Extension<AuthenticatedUser>>,
 ) -> AppResult<Json<Value>> {
-    let user = get_auth_user(&auth_user).ok_or(AppError::Unauthorized)?;
+    let user = get_auth_user(&auth_user).ok_or(AppError::Unauthorized("Authentication required.".into()))?;
 
     let feed = queries::get_feed_by_id(&state.db, feed_id)
         .await?
@@ -497,7 +497,7 @@ async fn leave_feed(
     Path(feed_id): Path<i64>,
     auth_user: Option<Extension<AuthenticatedUser>>,
 ) -> AppResult<Json<Value>> {
-    let user = get_auth_user(&auth_user).ok_or(AppError::Unauthorized)?;
+    let user = get_auth_user(&auth_user).ok_or(AppError::Unauthorized("Authentication required.".into()))?;
     queries::remove_feed_membership(&state.db, user.id, feed_id).await?;
     let feed = queries::get_feed_by_id(&state.db, feed_id)
         .await?
@@ -519,7 +519,7 @@ async fn create_share_link(
     Path(feed_id): Path<i64>,
     auth_user: Option<Extension<AuthenticatedUser>>,
 ) -> Result<Response, AppError> {
-    let user = get_auth_user(&auth_user).ok_or(AppError::Unauthorized)?;
+    let user = get_auth_user(&auth_user).ok_or(AppError::Unauthorized("Authentication required.".into()))?;
 
     let _feed = queries::get_feed_by_id(&state.db, feed_id)
         .await?
@@ -599,7 +599,7 @@ async fn toggle_whitelist_all(
 async fn aggregate_feed(
     auth_user: Option<Extension<AuthenticatedUser>>,
 ) -> AppResult<Json<Value>> {
-    let user = get_auth_user(&auth_user).ok_or(AppError::Unauthorized)?;
+    let user = get_auth_user(&auth_user).ok_or(AppError::Unauthorized("Authentication required.".into()))?;
     Ok(Json(json!({"redirect": format!("/feed/user/{}", user.id)})))
 }
 
@@ -660,7 +660,7 @@ async fn create_aggregate_link(
     State(state): State<AppState>,
     auth_user: Option<Extension<AuthenticatedUser>>,
 ) -> Result<Response, AppError> {
-    let user = get_auth_user(&auth_user).ok_or(AppError::Unauthorized)?;
+    let user = get_auth_user(&auth_user).ok_or(AppError::Unauthorized("Authentication required.".into()))?;
 
     let (token_id, secret) =
         crate::auth::feed_tokens::create_feed_access_token(&state.db, user.id, None)
@@ -708,7 +708,7 @@ fn base_url(state: &AppState) -> String {
 async fn user_feed_allowance(state: &AppState, user: &AuthenticatedUser) -> Result<i64, AppError> {
     let db_user = queries::get_user_by_id(&state.db, user.id)
         .await?
-        .ok_or(AppError::Unauthorized)?;
+        .ok_or(AppError::Unauthorized("Authentication required.".into()))?;
     Ok(db_user.manual_feed_allowance.unwrap_or(db_user.feed_allowance))
 }
 

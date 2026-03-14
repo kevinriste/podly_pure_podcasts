@@ -192,7 +192,7 @@ pub fn require_admin(
     let user = extensions
         .get::<AuthenticatedUser>()
         .cloned()
-        .ok_or(crate::error::AppError::Unauthorized)?;
+        .ok_or(crate::error::AppError::Unauthorized("Authentication required.".into()))?;
 
     if user.role != "admin" {
         return Err(crate::error::AppError::Forbidden);
@@ -210,7 +210,7 @@ pub fn require_admin_user(
     if !require_auth {
         return Ok(());
     }
-    let axum::Extension(user) = auth_user.as_ref().ok_or(crate::error::AppError::Unauthorized)?;
+    let axum::Extension(user) = auth_user.as_ref().ok_or(crate::error::AppError::Unauthorized("Authentication required.".into()))?;
     if user.role != "admin" {
         return Err(crate::error::AppError::Forbidden);
     }

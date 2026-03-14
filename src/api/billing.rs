@@ -41,9 +41,9 @@ async fn billing_summary(
         })));
     }
 
-    let Extension(auth) = auth_user.ok_or(AppError::Unauthorized)?;
+    let Extension(auth) = auth_user.ok_or(AppError::Unauthorized("Authentication required.".into()))?;
     let user = queries::get_user_by_id(&state.db, auth.id).await?
-        .ok_or(AppError::Unauthorized)?;
+        .ok_or(AppError::Unauthorized("Authentication required.".into()))?;
 
     let feeds_in_use = queries::count_user_feeds(&state.db, user.id).await?;
     let allowance = user.manual_feed_allowance.unwrap_or(user.feed_allowance);
@@ -88,9 +88,9 @@ async fn subscription(
     let stripe_key = state.config.stripe_secret_key.as_deref().unwrap();
     let product_id = state.config.stripe_product_id.as_deref().unwrap();
 
-    let Extension(auth) = auth_user.ok_or(AppError::Unauthorized)?;
+    let Extension(auth) = auth_user.ok_or(AppError::Unauthorized("Authentication required.".into()))?;
     let user = queries::get_user_by_id(&state.db, auth.id).await?
-        .ok_or(AppError::Unauthorized)?;
+        .ok_or(AppError::Unauthorized("Authentication required.".into()))?;
 
     // Cancel if amount is 0
     if body.amount_cents == 0 {
@@ -167,9 +167,9 @@ async fn portal_session(
 
     let stripe_key = state.config.stripe_secret_key.as_deref().unwrap();
 
-    let Extension(auth) = auth_user.ok_or(AppError::Unauthorized)?;
+    let Extension(auth) = auth_user.ok_or(AppError::Unauthorized("Authentication required.".into()))?;
     let user = queries::get_user_by_id(&state.db, auth.id).await?
-        .ok_or(AppError::Unauthorized)?;
+        .ok_or(AppError::Unauthorized("Authentication required.".into()))?;
 
     let customer_id = user.stripe_customer_id.as_deref()
         .filter(|s| !s.is_empty())
