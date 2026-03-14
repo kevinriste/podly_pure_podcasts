@@ -48,7 +48,7 @@ async fn list_posts(
     Query(q): Query<PostsQuery>,
 ) -> AppResult<Json<Value>> {
     let page = q.page.unwrap_or(1).max(1);
-    let page_size = q.page_size.unwrap_or(50).clamp(1, 200);
+    let page_size = q.page_size.unwrap_or(25).clamp(1, 200);
     let whitelisted_only = q.whitelisted_only.unwrap_or(false);
 
     let (posts, total) =
@@ -302,15 +302,22 @@ async fn set_whitelist(
     let whitelisted = body.whitelisted.unwrap_or(true);
     queries::set_post_whitelist(&state.db, post.id, whitelisted).await?;
 
+    let mut response = json!({
+        "guid": p_guid,
+        "whitelisted": whitelisted,
+        "message": if whitelisted { "Episode whitelisted" } else { "Episode removed from whitelist" },
+    });
+
     if whitelisted && body.trigger_processing.unwrap_or(false) {
         let user_id = get_auth_user_id(&auth_user);
-        state
+        let job_result = state
             .jobs_manager
             .start_post_processing(&p_guid, user_id, user_id)
             .await;
+        response["processing_job"] = job_result;
     }
 
-    Ok(Json(json!({"status": "ok", "whitelisted": whitelisted})))
+    Ok(Json(response))
 }
 
 async fn process_post(
@@ -335,7 +342,7 @@ async fn process_post(
 
 #[derive(Deserialize)]
 struct ReprocessRequest {
-    clear_mode: Option<String>,
+    force_retranscribe: Option<bool>,
 }
 
 async fn reprocess_post(
@@ -354,14 +361,12 @@ async fn reprocess_post(
     state.jobs_manager.cancel_post_jobs(&p_guid).await;
 
     // Clear processing data
-    let mode = body.clear_mode.as_deref().unwrap_or("full");
-    match mode {
-        "identifications" => {
-            queries::clear_post_identifications(&state.db, post.id).await?;
-        }
-        _ => {
-            queries::clear_post_processing_data(&state.db, post.id).await?;
-        }
+    if body.force_retranscribe.unwrap_or(false) {
+        // Full clear: transcript + identifications + model calls
+        queries::clear_post_processing_data(&state.db, post.id).await?;
+    } else {
+        // Only clear identifications and model calls (keep transcript)
+        queries::clear_post_identifications(&state.db, post.id).await?;
     }
 
     // Start reprocessing
@@ -381,6 +386,10 @@ async fn serve_audio(
     let post = queries::get_post_by_guid(&state.db, &p_guid)
         .await?
         .ok_or(AppError::NotFound)?;
+
+    if !post.whitelisted {
+        return Err(AppError::Forbidden);
+    }
 
     let audio_path = post
         .processed_audio_path
@@ -430,17 +439,23 @@ async fn download_original(
 async fn processing_estimate(
     State(state): State<AppState>,
     AxumPath(p_guid): AxumPath<String>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
 ) -> AppResult<Json<Value>> {
+    require_admin_user(&auth_user, state.config.require_auth)?;
+
     let post = queries::get_post_by_guid(&state.db, &p_guid)
         .await?
         .ok_or(AppError::NotFound)?;
 
     let duration_sec = post.duration.unwrap_or(0) as f64;
-    let estimate_sec = (duration_sec * 0.5).max(30.0);
+    // Python formula: max(1.0, duration / 60.0) → returns minutes
+    let estimated_minutes = (duration_sec / 60.0).max(1.0);
 
     Ok(Json(json!({
-        "estimate_seconds": estimate_sec,
-        "duration_seconds": duration_sec,
+        "post_guid": p_guid,
+        "estimated_minutes": estimated_minutes,
+        "can_process": true,
+        "reason": null,
     })))
 }
 
@@ -455,11 +470,11 @@ async fn post_json(
     let segment_count = queries::count_segments_by_post(&state.db, post.id).await?;
     let model_call_count = queries::count_model_calls_by_post(&state.db, post.id).await?;
 
-    // Get transcript sample (first 10 segments)
+    // Get transcript sample (first 5 segments, matching Python)
     let segments = queries::get_segments_by_post(&state.db, post.id).await?;
     let transcript_sample: Vec<Value> = segments
         .iter()
-        .take(10)
+        .take(5)
         .map(|s| {
             json!({
                 "id": s.id,
