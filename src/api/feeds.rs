@@ -23,6 +23,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/feeds/{feed_id}/settings", patch(update_feed_settings))
         .route("/api/feeds/{feed_id}/join", post(join_feed))
         .route("/api/feeds/{feed_id}/leave", post(leave_feed))
+        .route("/api/feeds/{feed_id}/exit", post(exit_feed))
         .route("/api/feeds/{feed_id}/share-link", post(create_share_link))
         .route(
             "/api/feeds/{feed_id}/whitelist-all",
@@ -31,6 +32,59 @@ pub fn router() -> Router<AppState> {
         .route("/api/feeds/aggregate", get(aggregate_feed))
         .route("/feed/user/{user_id}", get(user_feed))
         .route("/api/feeds/aggregate-link", post(create_aggregate_link))
+}
+
+async fn serialize_feed(
+    pool: &sqlx::SqlitePool,
+    feed: &crate::db::models::Feed,
+    user_id: Option<i64>,
+) -> Value {
+    let posts_count: i64 = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM post WHERE feed_id = ?",
+    )
+    .bind(feed.id)
+    .fetch_one(pool)
+    .await
+    .map(|(c,)| c)
+    .unwrap_or(0);
+
+    let member_count: i64 = sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM user_feed WHERE feed_id = ?",
+    )
+    .bind(feed.id)
+    .fetch_one(pool)
+    .await
+    .map(|(c,)| c)
+    .unwrap_or(0);
+
+    let is_member = if let Some(uid) = user_id {
+        sqlx::query_as::<_, (i64,)>(
+            "SELECT COUNT(*) FROM user_feed WHERE user_id = ? AND feed_id = ?",
+        )
+        .bind(uid)
+        .bind(feed.id)
+        .fetch_one(pool)
+        .await
+        .map(|(c,)| c > 0)
+        .unwrap_or(false)
+    } else {
+        false
+    };
+
+    json!({
+        "id": feed.id,
+        "title": feed.title,
+        "rss_url": feed.rss_url,
+        "description": feed.description,
+        "author": feed.author,
+        "image_url": feed.image_url,
+        "auto_whitelist_new_episodes_override": feed.auto_whitelist_new_episodes_override,
+        "posts_count": posts_count,
+        "member_count": member_count,
+        "is_member": is_member,
+        "ad_detection_strategy": &feed.ad_detection_strategy,
+        "chapter_filter_strings": feed.chapter_filter_strings,
+    })
 }
 
 async fn list_feeds(
@@ -339,7 +393,12 @@ async fn update_feed_settings(
         queries::update_feed_auto_whitelist(&state.db, feed_id, val).await?;
     }
 
-    Ok(Json(json!({"status": "ok"})))
+    // Re-fetch and return full feed object (Python parity)
+    let updated_feed = queries::get_feed_by_id(&state.db, feed_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let user_id = get_auth_user(&auth_user).map(|u| u.id);
+    Ok(Json(serialize_feed(&state.db, &updated_feed, user_id).await))
 }
 
 async fn join_feed(
@@ -349,22 +408,30 @@ async fn join_feed(
 ) -> AppResult<Json<Value>> {
     let user = get_auth_user(&auth_user).ok_or(AppError::Unauthorized)?;
 
-    let _feed = queries::get_feed_by_id(&state.db, feed_id)
+    let feed = queries::get_feed_by_id(&state.db, feed_id)
         .await?
         .ok_or(AppError::NotFound)?;
 
     if queries::is_feed_member(&state.db, user.id, feed_id).await? {
-        return Ok(Json(json!({"status": "already_member"})));
+        return Ok(Json(serialize_feed(&state.db, &feed, Some(user.id)).await));
     }
 
     let allowance = user_feed_allowance(&state, user).await?;
     let current = queries::count_user_feeds(&state.db, user.id).await?;
     if current >= allowance {
-        return Err(AppError::PaymentRequired("Feed limit reached.".into()));
+        return Err(AppError::PaymentRequired(
+            serde_json::to_string(&json!({
+                "error": "FEED_LIMIT_REACHED",
+                "message": format!("Your plan allows {} feeds. Increase your plan to add more.", allowance),
+                "feeds_in_use": current,
+                "feed_allowance": allowance,
+            }))
+            .unwrap_or_else(|_| "Feed limit reached.".into()),
+        ));
     }
 
     queries::ensure_feed_membership(&state.db, user.id, feed_id).await?;
-    Ok(Json(json!({"status": "ok"})))
+    Ok(Json(serialize_feed(&state.db, &feed, Some(user.id)).await))
 }
 
 async fn leave_feed(
@@ -374,7 +441,19 @@ async fn leave_feed(
 ) -> AppResult<Json<Value>> {
     let user = get_auth_user(&auth_user).ok_or(AppError::Unauthorized)?;
     queries::remove_feed_membership(&state.db, user.id, feed_id).await?;
-    Ok(Json(json!({"status": "ok"})))
+    let feed = queries::get_feed_by_id(&state.db, feed_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    Ok(Json(serialize_feed(&state.db, &feed, Some(user.id)).await))
+}
+
+/// Alias for leave_feed (Python has both /leave and /exit)
+async fn exit_feed(
+    state: State<AppState>,
+    path: Path<i64>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
+) -> AppResult<Json<Value>> {
+    leave_feed(state, path, auth_user).await
 }
 
 async fn create_share_link(

@@ -56,14 +56,18 @@ async fn list_posts(
 
     let total_pages = (total + page_size - 1) / page_size;
 
-    let posts_json: Vec<Value> = posts
+    // Count whitelisted posts for this feed
+    let whitelisted_total = queries::count_whitelisted_posts(&state.db, feed_id).await?;
+
+    let items: Vec<Value> = posts
         .iter()
         .map(|p| {
             json!({
-                "id": p.id, "feed_id": p.feed_id, "guid": p.guid,
+                "id": p.id, "guid": p.guid,
                 "title": p.title, "description": p.description,
                 "release_date": p.release_date, "duration": p.duration,
                 "whitelisted": p.whitelisted, "image_url": p.image_url,
+                "download_url": p.download_url,
                 "download_count": p.download_count,
                 "has_processed_audio": p.processed_audio_path.is_some(),
                 "has_unprocessed_audio": p.unprocessed_audio_path.is_some(),
@@ -72,11 +76,12 @@ async fn list_posts(
         .collect();
 
     Ok(Json(json!({
-        "posts": posts_json,
+        "items": items,
         "total": total,
         "page": page,
         "page_size": page_size,
         "total_pages": total_pages,
+        "whitelisted_total": whitelisted_total,
     })))
 }
 
@@ -93,38 +98,179 @@ async fn post_stats(
     let model_calls = queries::get_model_calls_by_post(&state.db, post.id).await?;
 
     let total_segments = segments.len();
-    let ad_count = identifications.iter().filter(|i| i.label == "ad").count();
-    let content_count = identifications
-        .iter()
-        .filter(|i| i.label == "content")
-        .count();
+    let ad_idents: Vec<_> = identifications.iter().filter(|i| i.label == "ad").collect();
+    let ad_count = ad_idents.len();
+    let content_count = total_segments.saturating_sub(ad_count);
 
-    // Calculate ad percentage based on time
+    // Calculate ad time
     let total_duration: f64 = segments.iter().map(|s| s.end_time - s.start_time).sum();
-    let ad_duration: f64 = identifications
+    let ad_duration: f64 = ad_idents
         .iter()
-        .filter(|i| i.label == "ad")
         .filter_map(|i| segments.iter().find(|s| s.id == i.transcript_segment_id))
         .map(|s| s.end_time - s.start_time)
         .sum();
-
     let ad_percentage = if total_duration > 0.0 {
-        (ad_duration / total_duration) * 100.0
+        ((ad_duration / total_duration) * 1000.0).round() / 10.0
     } else {
         0.0
     };
 
+    // Build ad blocks (merged time windows)
+    let mut ad_windows: Vec<(f64, f64)> = ad_idents
+        .iter()
+        .filter_map(|i| segments.iter().find(|s| s.id == i.transcript_segment_id))
+        .map(|s| (s.start_time, s.end_time))
+        .collect();
+    ad_windows.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    let ad_blocks = merge_time_windows(&ad_windows, 1.0);
+
+    // Model call status counts
+    let mut model_call_statuses = serde_json::Map::new();
+    let mut model_types = serde_json::Map::new();
+    for mc in &model_calls {
+        let counter = model_call_statuses.entry(mc.status.clone()).or_insert(json!(0));
+        *counter = json!(counter.as_i64().unwrap_or(0) + 1);
+        let counter = model_types.entry(mc.model_name.clone()).or_insert(json!(0));
+        *counter = json!(counter.as_i64().unwrap_or(0) + 1);
+    }
+
+    // Detect ad_detection_strategy
+    let feed_strategy: Option<String> = sqlx::query_as::<_, (String,)>(
+        "SELECT ad_detection_strategy FROM feed WHERE id = ?",
+    )
+    .bind(post.feed_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .map(|(s,)| s);
+    let ad_detection_strategy = feed_strategy.as_deref().unwrap_or("llm");
+
+    // Build model_calls detail array
+    let model_calls_json: Vec<Value> = model_calls
+        .iter()
+        .map(|mc| {
+            json!({
+                "id": mc.id,
+                "model_name": mc.model_name,
+                "status": mc.status,
+                "segment_range": format!("{}-{}", mc.first_segment_sequence_num, mc.last_segment_sequence_num),
+                "first_segment_sequence_num": mc.first_segment_sequence_num,
+                "last_segment_sequence_num": mc.last_segment_sequence_num,
+                "timestamp": mc.timestamp,
+                "retry_attempts": mc.retry_attempts,
+                "error_message": mc.error_message,
+                "prompt": mc.prompt,
+                "response": mc.response,
+            })
+        })
+        .collect();
+
+    // Build transcript segments with identifications
+    let transcript_segments_json: Vec<Value> = segments
+        .iter()
+        .map(|s| {
+            let seg_idents: Vec<Value> = identifications
+                .iter()
+                .filter(|i| i.transcript_segment_id == s.id)
+                .map(|i| {
+                    json!({
+                        "id": i.id,
+                        "label": i.label,
+                        "confidence": i.confidence.map(|c| (c * 100.0).round() / 100.0),
+                        "model_call_id": i.model_call_id,
+                    })
+                })
+                .collect();
+
+            let primary_label = seg_idents
+                .first()
+                .and_then(|i| i.get("label"))
+                .and_then(|l| l.as_str())
+                .unwrap_or("content");
+            let mixed = seg_idents.len() > 1
+                && seg_idents
+                    .iter()
+                    .any(|i| i.get("label").and_then(|l| l.as_str()) != Some(primary_label));
+
+            json!({
+                "id": s.id,
+                "sequence_num": s.sequence_num,
+                "start_time": (s.start_time * 10.0).round() / 10.0,
+                "end_time": (s.end_time * 10.0).round() / 10.0,
+                "text": s.text,
+                "primary_label": primary_label,
+                "mixed": mixed,
+                "identifications": seg_idents,
+            })
+        })
+        .collect();
+
+    // Build identifications array
+    let identifications_json: Vec<Value> = identifications
+        .iter()
+        .map(|i| {
+            let seg = segments.iter().find(|s| s.id == i.transcript_segment_id);
+            json!({
+                "id": i.id,
+                "transcript_segment_id": i.transcript_segment_id,
+                "label": i.label,
+                "confidence": i.confidence.map(|c| (c * 100.0).round() / 100.0),
+                "model_call_id": i.model_call_id,
+                "segment_sequence_num": seg.map(|s| s.sequence_num),
+                "segment_start_time": seg.map(|s| (s.start_time * 10.0).round() / 10.0),
+                "segment_end_time": seg.map(|s| (s.end_time * 10.0).round() / 10.0),
+                "segment_text": seg.map(|s| &s.text),
+            })
+        })
+        .collect();
+
     Ok(Json(json!({
-        "total_segments": total_segments,
-        "ad_segments": ad_count,
-        "content_segments": content_count,
-        "total_identifications": identifications.len(),
-        "model_calls": model_calls.len(),
-        "ad_percentage": ad_percentage,
-        "total_duration_seconds": total_duration,
-        "ad_duration_seconds": ad_duration,
-        "refined_boundaries": post.refined_ad_boundaries,
+        "post": {
+            "guid": post.guid,
+            "title": post.title,
+            "duration": post.duration,
+            "release_date": post.release_date,
+            "whitelisted": post.whitelisted,
+            "has_processed_audio": post.processed_audio_path.is_some(),
+            "download_count": post.download_count,
+        },
+        "ad_detection_strategy": ad_detection_strategy,
+        "processing_stats": {
+            "total_segments": total_segments,
+            "total_model_calls": model_calls.len(),
+            "total_identifications": identifications.len(),
+            "content_segments": content_count,
+            "ad_segments_count": ad_count,
+            "ad_percentage": ad_percentage,
+            "estimated_ad_time_seconds": (ad_duration * 10.0).round() / 10.0,
+            "ad_blocks": ad_blocks.iter().map(|(s, e)| json!({
+                "start_time": (*s * 10.0).round() / 10.0,
+                "end_time": (*e * 10.0).round() / 10.0,
+            })).collect::<Vec<_>>(),
+            "model_call_statuses": Value::Object(model_call_statuses),
+            "model_types": Value::Object(model_types),
+        },
+        "model_calls": model_calls_json,
+        "transcript_segments": transcript_segments_json,
+        "identifications": identifications_json,
     })))
+}
+
+fn merge_time_windows(windows: &[(f64, f64)], gap_seconds: f64) -> Vec<(f64, f64)> {
+    if windows.is_empty() {
+        return vec![];
+    }
+    let mut merged: Vec<(f64, f64)> = vec![windows[0]];
+    for &(start, end) in &windows[1..] {
+        let last = merged.last_mut().unwrap();
+        if start <= last.1 + gap_seconds {
+            last.1 = last.1.max(end);
+        } else {
+            merged.push((start, end));
+        }
+    }
+    merged
 }
 
 async fn post_status(
@@ -293,7 +439,6 @@ async fn processing_estimate(
         .ok_or(AppError::NotFound)?;
 
     let duration_sec = post.duration.unwrap_or(0) as f64;
-    // Rough estimate: ~0.5x realtime for transcription + classification
     let estimate_sec = (duration_sec * 0.5).max(30.0);
 
     Ok(Json(json!({
@@ -311,17 +456,36 @@ async fn post_json(
         .ok_or(AppError::NotFound)?;
 
     let segment_count = queries::count_segments_by_post(&state.db, post.id).await?;
+    let model_call_count = queries::count_model_calls_by_post(&state.db, post.id).await?;
+
+    // Get transcript sample (first 10 segments)
+    let segments = queries::get_segments_by_post(&state.db, post.id).await?;
+    let transcript_sample: Vec<Value> = segments
+        .iter()
+        .take(10)
+        .map(|s| {
+            json!({
+                "id": s.id,
+                "sequence_num": s.sequence_num,
+                "start_time": s.start_time,
+                "end_time": s.end_time,
+                "text": s.text,
+            })
+        })
+        .collect();
 
     Ok(Json(json!({
         "id": post.id, "feed_id": post.feed_id, "guid": post.guid,
-        "title": post.title, "description": post.description,
-        "download_url": post.download_url, "release_date": post.release_date,
-        "duration": post.duration, "whitelisted": post.whitelisted,
-        "image_url": post.image_url, "download_count": post.download_count,
+        "title": post.title,
+        "unprocessed_audio_path": post.unprocessed_audio_path,
+        "processed_audio_path": post.processed_audio_path,
         "has_processed_audio": post.processed_audio_path.is_some(),
         "has_unprocessed_audio": post.unprocessed_audio_path.is_some(),
-        "segment_count": segment_count,
-        "refined_ad_boundaries": post.refined_ad_boundaries,
+        "transcript_segment_count": segment_count,
+        "transcript_sample": transcript_sample,
+        "model_call_count": model_call_count,
+        "whitelisted": post.whitelisted,
+        "download_count": post.download_count,
     })))
 }
 

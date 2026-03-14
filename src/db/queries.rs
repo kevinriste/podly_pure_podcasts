@@ -852,6 +852,24 @@ pub async fn get_model_calls_by_post(pool: &SqlitePool, post_id: i64) -> AppResu
     Ok(calls)
 }
 
+pub async fn count_model_calls_by_post(pool: &SqlitePool, post_id: i64) -> AppResult<i64> {
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM model_call WHERE post_id = ?")
+        .bind(post_id)
+        .fetch_one(pool)
+        .await?;
+    Ok(count.0)
+}
+
+pub async fn count_whitelisted_posts(pool: &SqlitePool, feed_id: i64) -> AppResult<i64> {
+    let count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM post WHERE feed_id = ? AND whitelisted = 1",
+    )
+    .bind(feed_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(count.0)
+}
+
 // ── ProcessingJob queries ──
 
 pub async fn get_active_jobs(pool: &SqlitePool, limit: i64) -> AppResult<Vec<ProcessingJob>> {
