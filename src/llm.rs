@@ -1,5 +1,7 @@
+use genai::chat::{ChatResponseFormat, JsonSpec};
 use genai::resolver::AuthData;
 use genai::{Client, ServiceTarget};
+use serde_json::json;
 
 /// Convert litellm-style model names (e.g. "gemini/gemini-2.0-flash") to
 /// genai-style namespace (e.g. "gemini::gemini-2.0-flash").
@@ -51,6 +53,92 @@ pub fn build_genai_client(
     }
 
     Ok(builder.build())
+}
+
+/// Check if a model supports structured outputs (JSON schema response format).
+///
+/// Mirrors Python's `model_supports_structured_outputs()` which delegates to
+/// litellm's `supports_response_schema()`. Since we don't have litellm's model
+/// database, we check known provider/model patterns.
+pub fn model_supports_structured_outputs(model: &str) -> bool {
+    let lower = model.to_lowercase();
+
+    // Gemini models support responseJsonSchema
+    if lower.starts_with("gemini/") || lower.starts_with("gemini::") {
+        return true;
+    }
+
+    // OpenAI gpt-4o, gpt-5, o1, o3 families support json_schema
+    if lower.starts_with("openai/") || lower.starts_with("openai::") {
+        let model_part = lower.split(['/', ':']).last().unwrap_or("");
+        return model_part.starts_with("gpt-4o")
+            || model_part.starts_with("gpt-5")
+            || model_part.starts_with("o1")
+            || model_part.starts_with("o3");
+    }
+
+    // Models without a provider prefix — check the name directly
+    if !lower.contains('/') && !lower.contains("::") {
+        let starts_with_known = lower.starts_with("gpt-4o")
+            || lower.starts_with("gpt-5")
+            || lower.starts_with("o1")
+            || lower.starts_with("o3")
+            || lower.starts_with("gemini");
+        return starts_with_known;
+    }
+
+    false
+}
+
+/// Build the response format for oneshot classification.
+///
+/// Uses structured outputs (JsonSpec) when the model supports it,
+/// otherwise falls back to JsonMode.
+pub fn oneshot_response_format(model: &str) -> ChatResponseFormat {
+    if model_supports_structured_outputs(model) {
+        tracing::info!("Using structured outputs for model {model}");
+        ChatResponseFormat::JsonSpec(JsonSpec::new(
+            "oneshot_response",
+            json!({
+                "type": "object",
+                "properties": {
+                    "ad_segments": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "start_time": {
+                                    "type": "number",
+                                    "description": "Exact start time in seconds"
+                                },
+                                "end_time": {
+                                    "type": "number",
+                                    "description": "Exact end time in seconds"
+                                },
+                                "confidence": {
+                                    "type": "number",
+                                    "description": "Confidence score from 0.0 to 1.0"
+                                },
+                                "ad_type": {
+                                    "type": ["string", "null"],
+                                    "description": "Type of ad: sponsor, house_ad, or transition"
+                                },
+                                "reason": {
+                                    "type": ["string", "null"],
+                                    "description": "Brief explanation for why this segment is classified as an ad"
+                                }
+                            },
+                            "required": ["start_time", "end_time", "confidence", "ad_type", "reason"]
+                        }
+                    }
+                },
+                "required": ["ad_segments"]
+            }),
+        ))
+    } else {
+        tracing::info!("Using JSON mode fallback for model {model}");
+        ChatResponseFormat::JsonMode
+    }
 }
 
 /// Execute a chat completion and return the response text.

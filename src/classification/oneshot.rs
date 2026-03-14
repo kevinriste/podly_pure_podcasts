@@ -297,7 +297,7 @@ async fn call_oneshot_llm(
     config: &ClassifierConfig,
     user_prompt: &str,
 ) -> Result<String, OneShotError> {
-    use genai::chat::{ChatMessage, ChatOptions, ChatRequest, ChatResponseFormat};
+    use genai::chat::{ChatMessage, ChatOptions, ChatRequest};
 
     let genai_client = crate::llm::build_genai_client(
         &config.api_key,
@@ -313,10 +313,11 @@ async fn call_oneshot_llm(
     let chat_req = ChatRequest::new(messages);
 
     // Python doesn't set temperature (uses LLM default)
-    // Python uses structured outputs if supported, else JSON mode — we always use JSON mode
+    // Use structured outputs (JsonSpec) if the model supports it, else JSON mode
+    let response_format = crate::llm::oneshot_response_format(&config.model);
     let options = ChatOptions::default()
         .with_max_tokens(config.max_tokens as u32)
-        .with_response_format(ChatResponseFormat::JsonMode);
+        .with_response_format(response_format);
 
     let genai_model = crate::llm::to_genai_model(&config.model);
     let mut last_error = String::new();
