@@ -1,0 +1,83 @@
+[package]
+name = "podly"
+version = "0.1.0"
+edition = "2024"
+default-run = "podly"
+
+[[bin]]
+name = "podly"
+path = "src/main.rs"
+
+[[bin]]
+name = "migrate_legacy"
+path = "src/bin/migrate_legacy.rs"
+
+[dependencies]
+# Web framework
+axum = { version = "0.8", features = ["macros"] }
+axum-extra = { version = "0.10", features = ["cookie"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
+tower-sessions = "0.14"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono", "uuid"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "0.8"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# LLM
+async-openai = "0.27"
+
+# Local transcription (requires cmake + C++ toolchain)
+whisper-rs = { version = "0.14", optional = true }
+
+# Async trait (used by transcription trait)
+async-trait = "0.1"
+
+# Audio
+# (ffmpeg via tokio::process::Command)
+
+# Job scheduling (simple tokio::spawn loop, no external crate needed)
+
+# Auth
+argon2 = "0.5"
+jsonwebtoken = "9"
+
+# RSS
+feed-rs = "2"
+quick-xml = "0.37"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+dotenvy = "0.15"
+rand = "0.9"
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
+hex = "0.4"
+regex = "1"
+form_urlencoded = "1"
+tempfile = "3"
+validators = "0.25"
+
+[features]
+default = []
+local-whisper = ["whisper-rs"]

@@ -69,3 +69,9 @@ scripts/railway_command.sh
 # Claude local files
 .claude/
 CLAUDE.md
+
+# Rust build artifacts
+target/
+data/
+*.db-shm
+*.db-wal

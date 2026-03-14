@@ -1,0 +1,383 @@
+use std::path::Path;
+
+use axum::extract::{Path as AxumPath, Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Extension, Json, Router};
+use serde::Deserialize;
+use serde_json::{json, Value};
+
+use crate::auth::middleware::require_admin_user;
+use crate::auth::AuthenticatedUser;
+use crate::db::queries;
+use crate::error::{AppError, AppResult};
+use crate::AppState;
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/api/feeds/{feed_id}/posts", get(list_posts))
+        .route("/api/posts/{p_guid}/stats", get(post_stats))
+        .route("/api/posts/{p_guid}/status", get(post_status))
+        .route("/api/posts/{p_guid}/whitelist", post(set_whitelist))
+        .route("/api/posts/{p_guid}/process", post(process_post))
+        .route("/api/posts/{p_guid}/reprocess", post(reprocess_post))
+        .route("/api/posts/{p_guid}/audio", get(serve_audio))
+        .route("/api/posts/{p_guid}/download", get(download_audio))
+        .route(
+            "/api/posts/{p_guid}/download-original",
+            get(download_original),
+        )
+        .route("/api/posts/{p_guid}/estimate", get(processing_estimate))
+        .route("/api/posts/{p_guid}/json", get(post_json))
+        // Legacy routes
+        .route("/post/{p_guid}/mp3", get(serve_audio_legacy))
+        .route("/post/{p_guid}/original.mp3", get(download_original_legacy))
+}
+
+#[derive(Deserialize)]
+struct PostsQuery {
+    page: Option<i64>,
+    page_size: Option<i64>,
+    whitelisted_only: Option<bool>,
+}
+
+async fn list_posts(
+    State(state): State<AppState>,
+    AxumPath(feed_id): AxumPath<i64>,
+    Query(q): Query<PostsQuery>,
+) -> AppResult<Json<Value>> {
+    let page = q.page.unwrap_or(1).max(1);
+    let page_size = q.page_size.unwrap_or(50).clamp(1, 200);
+    let whitelisted_only = q.whitelisted_only.unwrap_or(false);
+
+    let (posts, total) =
+        queries::get_posts_by_feed(&state.db, feed_id, page, page_size, whitelisted_only).await?;
+
+    let total_pages = (total + page_size - 1) / page_size;
+
+    let posts_json: Vec<Value> = posts
+        .iter()
+        .map(|p| {
+            json!({
+                "id": p.id, "feed_id": p.feed_id, "guid": p.guid,
+                "title": p.title, "description": p.description,
+                "release_date": p.release_date, "duration": p.duration,
+                "whitelisted": p.whitelisted, "image_url": p.image_url,
+                "download_count": p.download_count,
+                "has_processed_audio": p.processed_audio_path.is_some(),
+                "has_unprocessed_audio": p.unprocessed_audio_path.is_some(),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "posts": posts_json,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+    })))
+}
+
+async fn post_stats(
+    State(state): State<AppState>,
+    AxumPath(p_guid): AxumPath<String>,
+) -> AppResult<Json<Value>> {
+    let post = queries::get_post_by_guid(&state.db, &p_guid)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    let segments = queries::get_segments_by_post(&state.db, post.id).await?;
+    let identifications = queries::get_identifications_by_post(&state.db, post.id).await?;
+    let model_calls = queries::get_model_calls_by_post(&state.db, post.id).await?;
+
+    let total_segments = segments.len();
+    let ad_count = identifications.iter().filter(|i| i.label == "ad").count();
+    let content_count = identifications
+        .iter()
+        .filter(|i| i.label == "content")
+        .count();
+
+    // Calculate ad percentage based on time
+    let total_duration: f64 = segments.iter().map(|s| s.end_time - s.start_time).sum();
+    let ad_duration: f64 = identifications
+        .iter()
+        .filter(|i| i.label == "ad")
+        .filter_map(|i| segments.iter().find(|s| s.id == i.transcript_segment_id))
+        .map(|s| s.end_time - s.start_time)
+        .sum();
+
+    let ad_percentage = if total_duration > 0.0 {
+        (ad_duration / total_duration) * 100.0
+    } else {
+        0.0
+    };
+
+    Ok(Json(json!({
+        "total_segments": total_segments,
+        "ad_segments": ad_count,
+        "content_segments": content_count,
+        "total_identifications": identifications.len(),
+        "model_calls": model_calls.len(),
+        "ad_percentage": ad_percentage,
+        "total_duration_seconds": total_duration,
+        "ad_duration_seconds": ad_duration,
+        "refined_boundaries": post.refined_ad_boundaries,
+    })))
+}
+
+async fn post_status(
+    State(state): State<AppState>,
+    AxumPath(p_guid): AxumPath<String>,
+) -> AppResult<Json<Value>> {
+    let result = state.jobs_manager.get_post_status(&p_guid).await;
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+struct WhitelistRequest {
+    whitelisted: Option<bool>,
+    trigger_processing: Option<bool>,
+}
+
+async fn set_whitelist(
+    State(state): State<AppState>,
+    AxumPath(p_guid): AxumPath<String>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
+    Json(body): Json<WhitelistRequest>,
+) -> AppResult<Json<Value>> {
+    require_admin_user(&auth_user, state.config.require_auth)?;
+
+    let post = queries::get_post_by_guid(&state.db, &p_guid)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    let whitelisted = body.whitelisted.unwrap_or(true);
+    queries::set_post_whitelist(&state.db, post.id, whitelisted).await?;
+
+    if whitelisted && body.trigger_processing.unwrap_or(false) {
+        let user_id = get_auth_user_id(&auth_user);
+        state
+            .jobs_manager
+            .start_post_processing(&p_guid, user_id, user_id)
+            .await;
+    }
+
+    Ok(Json(json!({"status": "ok", "whitelisted": whitelisted})))
+}
+
+async fn process_post(
+    State(state): State<AppState>,
+    AxumPath(p_guid): AxumPath<String>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
+) -> AppResult<Json<Value>> {
+    require_admin_user(&auth_user, state.config.require_auth)?;
+
+    let _post = queries::get_post_by_guid(&state.db, &p_guid)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    let user_id = get_auth_user_id(&auth_user);
+    let result = state
+        .jobs_manager
+        .start_post_processing(&p_guid, user_id, user_id)
+        .await;
+
+    Ok(Json(result))
+}
+
+#[derive(Deserialize)]
+struct ReprocessRequest {
+    clear_mode: Option<String>,
+}
+
+async fn reprocess_post(
+    State(state): State<AppState>,
+    AxumPath(p_guid): AxumPath<String>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
+    Json(body): Json<ReprocessRequest>,
+) -> AppResult<Json<Value>> {
+    require_admin_user(&auth_user, state.config.require_auth)?;
+
+    let post = queries::get_post_by_guid(&state.db, &p_guid)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    // Cancel existing jobs
+    state.jobs_manager.cancel_post_jobs(&p_guid).await;
+
+    // Clear processing data
+    let mode = body.clear_mode.as_deref().unwrap_or("full");
+    match mode {
+        "identifications" => {
+            queries::clear_post_identifications(&state.db, post.id).await?;
+        }
+        _ => {
+            queries::clear_post_processing_data(&state.db, post.id).await?;
+        }
+    }
+
+    // Start reprocessing
+    let user_id = get_auth_user_id(&auth_user);
+    let result = state
+        .jobs_manager
+        .start_post_processing(&p_guid, user_id, user_id)
+        .await;
+
+    Ok(Json(result))
+}
+
+async fn serve_audio(
+    State(state): State<AppState>,
+    AxumPath(p_guid): AxumPath<String>,
+) -> Result<Response, AppError> {
+    let post = queries::get_post_by_guid(&state.db, &p_guid)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    let audio_path = post
+        .processed_audio_path
+        .as_deref()
+        .filter(|p| Path::new(p).exists())
+        .ok_or(AppError::NotFound)?;
+
+    serve_file_response(audio_path, false).await
+}
+
+async fn download_audio(
+    State(state): State<AppState>,
+    AxumPath(p_guid): AxumPath<String>,
+) -> Result<Response, AppError> {
+    let post = queries::get_post_by_guid(&state.db, &p_guid)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    let audio_path = post
+        .processed_audio_path
+        .as_deref()
+        .filter(|p| Path::new(p).exists())
+        .ok_or(AppError::NotFound)?;
+
+    let _ = queries::increment_download_count(&state.db, post.id).await;
+
+    serve_file_response(audio_path, true).await
+}
+
+async fn download_original(
+    State(state): State<AppState>,
+    AxumPath(p_guid): AxumPath<String>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
+) -> Result<Response, AppError> {
+    require_admin_user(&auth_user, state.config.require_auth)?;
+
+    let post = queries::get_post_by_guid(&state.db, &p_guid)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    let audio_path = post
+        .unprocessed_audio_path
+        .as_deref()
+        .filter(|p| Path::new(p).exists())
+        .ok_or(AppError::NotFound)?;
+
+    serve_file_response(audio_path, true).await
+}
+
+async fn processing_estimate(
+    State(state): State<AppState>,
+    AxumPath(p_guid): AxumPath<String>,
+) -> AppResult<Json<Value>> {
+    let post = queries::get_post_by_guid(&state.db, &p_guid)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    let duration_sec = post.duration.unwrap_or(0) as f64;
+    // Rough estimate: ~0.5x realtime for transcription + classification
+    let estimate_sec = (duration_sec * 0.5).max(30.0);
+
+    Ok(Json(json!({
+        "estimate_seconds": estimate_sec,
+        "duration_seconds": duration_sec,
+    })))
+}
+
+async fn post_json(
+    State(state): State<AppState>,
+    AxumPath(p_guid): AxumPath<String>,
+) -> AppResult<Json<Value>> {
+    let post = queries::get_post_by_guid(&state.db, &p_guid)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    let segment_count = queries::count_segments_by_post(&state.db, post.id).await?;
+
+    Ok(Json(json!({
+        "id": post.id, "feed_id": post.feed_id, "guid": post.guid,
+        "title": post.title, "description": post.description,
+        "download_url": post.download_url, "release_date": post.release_date,
+        "duration": post.duration, "whitelisted": post.whitelisted,
+        "image_url": post.image_url, "download_count": post.download_count,
+        "has_processed_audio": post.processed_audio_path.is_some(),
+        "has_unprocessed_audio": post.unprocessed_audio_path.is_some(),
+        "segment_count": segment_count,
+        "refined_ad_boundaries": post.refined_ad_boundaries,
+    })))
+}
+
+// Legacy routes
+async fn serve_audio_legacy(
+    State(state): State<AppState>,
+    AxumPath(p_guid): AxumPath<String>,
+) -> Result<Response, AppError> {
+    serve_audio(State(state), AxumPath(p_guid)).await
+}
+
+async fn download_original_legacy(
+    State(state): State<AppState>,
+    AxumPath(p_guid): AxumPath<String>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
+) -> Result<Response, AppError> {
+    download_original(State(state), AxumPath(p_guid), auth_user).await
+}
+
+async fn serve_file_response(path: &str, as_attachment: bool) -> Result<Response, AppError> {
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|_| AppError::NotFound)?;
+
+    let filename = Path::new(path)
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("audio.mp3");
+
+    let content_type = if path.ends_with(".mp3") {
+        "audio/mpeg"
+    } else if path.ends_with(".ogg") {
+        "audio/ogg"
+    } else {
+        "application/octet-stream"
+    };
+
+    let mut builder = axum::http::Response::builder()
+        .status(StatusCode::OK)
+        .header(axum::http::header::CONTENT_TYPE, content_type)
+        .header(axum::http::header::ACCEPT_RANGES, "bytes")
+        .header(axum::http::header::CONTENT_LENGTH, bytes.len().to_string());
+
+    if as_attachment {
+        builder = builder.header(
+            axum::http::header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{filename}\""),
+        );
+    }
+
+    Ok(builder
+        .body(axum::body::Body::from(bytes))
+        .unwrap()
+        .into_response())
+}
+
+fn get_auth_user_id(auth_user: &Option<Extension<AuthenticatedUser>>) -> Option<i64> {
+    auth_user.as_ref().map(|Extension(u)| u.id)
+}
