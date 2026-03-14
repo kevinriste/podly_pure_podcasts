@@ -209,3 +209,57 @@
 **Python behavior:** `oneshot_classifier.py` with litellm.
 **Rust behavior:** `classification/oneshot.rs` with raw reqwest to OpenAI-compatible API. Skips boundary refinement step since one-shot returns precise timestamps.
 **Rationale:** Feature parity. One-shot is simpler and often better for models with large context windows.
+
+## DECISION-026: 12-factor env var model (PR #196 parity)
+**Date:** 2026-03-14
+**Category:** config
+**Context:** Python PR #196 established that env vars are authoritative over database config — they overlay at runtime but are never persisted to DB.
+**Decision:** `GET /api/config` returns DB values with env overlay + `env_overrides` metadata (with `read_only: true` and masked secrets) + `read_only_fields` list. `PUT /api/config` strips env-overridden fields before saving. Pipeline resolves env > DB at runtime.
+**Python behavior:** Same model from PR #196.
+**Rust behavior:** `build_env_override_metadata()` generates overlay map, `get_env_overridden_fields()` returns field paths for stripping.
+**Rationale:** Operator intent (env vars) must not be silently overwritten by UI saves. Frontend uses `read_only` metadata to disable editing of env-controlled fields.
+
+## DECISION-027: POST /feed accepts both FormData and JSON
+**Date:** 2026-03-14
+**Category:** api
+**Context:** Python Flask accepts form data (`request.form.get("url")`). The React frontend sends `FormData` with a `url` field. But API callers might send JSON.
+**Decision:** `add_feed` handler reads raw bytes, inspects `Content-Type` header, parses as JSON (`{"url": "..."}` or `{"rss_url": "..."}`) or URL-encoded/multipart form data with `url` field. Added `urlencoding` crate for form decoding.
+**Python behavior:** `request.form.get("url")` — form data only.
+**Rust behavior:** Dual format acceptance. JSON or FormData.
+**Rationale:** Frontend compatibility (FormData) plus API friendliness (JSON). Strictly better than Python.
+
+## DECISION-028: RSS feed refresh on every serve
+**Date:** 2026-03-14
+**Category:** behavior
+**Context:** Python calls `refresh_feed(feed)` on every `GET /feed/{id}` request to ensure fresh episodes.
+**Decision:** `serve_feed` handler calls `refresh_feed` before generating XML, matching Python behavior.
+**Python behavior:** Refresh on every serve.
+**Rust behavior:** Same — refresh before XML generation.
+**Rationale:** Podcast apps typically poll feeds infrequently. Refreshing on serve ensures users see new episodes without waiting for the scheduler.
+
+## DECISION-029: Feed #1 always visible to all users
+**Date:** 2026-03-14
+**Category:** behavior
+**Context:** Python hard-codes Feed #1 as always visible to non-admin users, even if they're not members.
+**Decision:** `list_feeds` appends Feed #1 to non-admin user results if not already present.
+**Python behavior:** `if feed.id == 1: is_member = True` and Feed 1 always included in feed list.
+**Rust behavior:** Same — Feed #1 injected into results if missing.
+**Rationale:** Feed #1 is the "default" feed. Breaking this would confuse existing users.
+
+## DECISION-030: Auto-whitelist latest episode on first member join
+**Date:** 2026-03-14
+**Category:** behavior
+**Context:** Python calls `whitelist_latest_for_first_member()` when a user joins a feed, so new feeds immediately have one episode ready to process.
+**Decision:** `whitelist_latest_for_first_member()` checks if any posts are whitelisted for the feed; if zero, whitelists the most recent episode by release_date. Called from both `add_feed` and `join_feed`.
+**Python behavior:** Same logic in `feed_utils.py`.
+**Rust behavior:** Inline helper in `feeds.rs`.
+**Rationale:** UX parity — users expect to see one episode ready after adding a feed.
+
+## DECISION-031: Feed token propagation in RSS URLs
+**Date:** 2026-03-14
+**Category:** api
+**Context:** Python's `_append_feed_token_params()` adds `feed_token` and `feed_secret` query params to all URLs in generated RSS XML (download URLs, post detail links, self-links). This enables authenticated podcast apps to access protected feeds.
+**Decision:** RSS generator accepts a `token_suffix` parameter (e.g. `?feed_token=...&feed_secret=...`). `serve_feed` and `user_feed` handlers extract token params from the incoming request and pass them through to the generator, which appends them to all URLs.
+**Python behavior:** Token params from `request.args` propagated to all RSS URLs.
+**Rust behavior:** `FeedTokenQuery` struct extracts params, `build_token_suffix()` formats them, generator's `append_token()` applies them.
+**Rationale:** Without this, authenticated RSS feeds would generate URLs that podcast apps can't access.
