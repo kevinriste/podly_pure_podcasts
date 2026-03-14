@@ -54,6 +54,7 @@ async-trait = "0.1"
 
 # Auth
 argon2 = "0.5"
+bcrypt = "0.17"
 jsonwebtoken = "9"
 
 # RSS

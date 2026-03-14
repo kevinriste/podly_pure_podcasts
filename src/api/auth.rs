@@ -77,18 +77,26 @@ async fn login(
     let user = queries::get_user_by_username(&state.db, username).await?;
     let user = match user {
         Some(u) => {
-            let valid =
-                crate::auth::verify_password(password, &u.password_hash).unwrap_or(false);
-            if !valid {
-                let backoff = state.rate_limiter.lock().await.register_failure(&client_ip);
-                if backoff > 0 {
-                    return Err(AppError::TooManyRequests {
-                        retry_after: backoff,
-                    });
+            match crate::auth::verify_password(password, &u.password_hash) {
+                crate::auth::VerifyResult::Ok => u,
+                crate::auth::VerifyResult::OkNeedsRehash => {
+                    // Transparently upgrade bcrypt → Argon2
+                    if let Ok(new_hash) = crate::auth::hash_password(password) {
+                        let _ = queries::update_user_password(&state.db, u.id, &new_hash).await;
+                        tracing::info!("Upgraded password hash from bcrypt to Argon2 for user '{}'", u.username);
+                    }
+                    u
                 }
-                return Err(AppError::BadRequest("Invalid username or password.".into()));
+                crate::auth::VerifyResult::Failed => {
+                    let backoff = state.rate_limiter.lock().await.register_failure(&client_ip);
+                    if backoff > 0 {
+                        return Err(AppError::TooManyRequests {
+                            retry_after: backoff,
+                        });
+                    }
+                    return Err(AppError::BadRequest("Invalid username or password.".into()));
+                }
             }
-            u
         }
         None => {
             state.rate_limiter.lock().await.register_failure(&client_ip);
@@ -180,7 +188,7 @@ async fn change_password(
     let new_pass = body.new_password.as_deref().filter(|s| !s.is_empty())
         .ok_or_else(|| AppError::BadRequest("Current and new passwords are required.".into()))?;
 
-    if !crate::auth::verify_password(current, &user.password_hash).unwrap_or(false) {
+    if matches!(crate::auth::verify_password(current, &user.password_hash), crate::auth::VerifyResult::Failed) {
         return Err(AppError::Unauthorized);
     }
     crate::auth::validate_password(new_pass).map_err(AppError::BadRequest)?;
