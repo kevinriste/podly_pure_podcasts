@@ -61,7 +61,7 @@ between Python (podly.klt.pw) and Rust (podly2.klt.pw).
 - **ad_detection_strategy**: Python resolves "inherit" to the actual strategy; Rust returns raw "inherit". Frontend handles this client-side.
 
 ### Architectural Limitations
-- **`POST /api/config/test-llm`**: Returns 500 for `gemini/*` models. Python routes these through `litellm` which handles the Gemini API natively. Rust uses raw OpenAI-compatible HTTP requests — needs a multi-provider LLM client (e.g. `genai` crate) to support non-OpenAI models.
+- **`POST /api/config/test-llm`**: Now uses `genai` crate which supports Gemini, Anthropic, Groq, etc. natively. Should match Python's `litellm` coverage for all major providers.
 - **`POST /feed` response format**: Python returns 302 redirect (server-rendered), Rust returns 201 JSON. Both correctly add the feed. Frontend handles both.
 - **`GET /api/auth/me` after logout**: Python doesn't actually clear the session on logout (returns user data). Rust correctly returns 401. This is a Python bug.
 

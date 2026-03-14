@@ -195,41 +195,29 @@ async fn call_refinement_llm(
     config: &ClassifierConfig,
     prompt: &str,
 ) -> Result<RefinedBoundary, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(config.timeout_sec))
-        .build()
-        .map_err(|e| e.to_string())?;
+    use genai::chat::{ChatMessage, ChatOptions, ChatRequest};
 
-    let base_url = config
-        .base_url
-        .as_deref()
-        .unwrap_or("https://api.openai.com/v1");
+    let genai_client = crate::llm::build_genai_client(
+        &config.api_key,
+        &config.model,
+        config.base_url.as_deref(),
+    )
+    .map_err(|e| e.to_string())?;
 
-    let body = serde_json::json!({
-        "model": config.model,
-        "messages": [
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": 0.1,
-        "max_tokens": 500,
-    });
+    let chat_req = ChatRequest::new(vec![ChatMessage::user(prompt)]);
 
-    let resp = client
-        .post(format!("{base_url}/chat/completions"))
-        .header("Authorization", format!("Bearer {}", config.api_key))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send()
+    let options = ChatOptions::default()
+        .with_temperature(0.1)
+        .with_max_tokens(500u32);
+
+    let response = genai_client
+        .exec_chat(&config.model, chat_req, Some(&options))
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("LLM error: {e}"))?;
 
-    if !resp.status().is_success() {
-        return Err(format!("LLM error: {}", resp.status()));
-    }
-
-    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    let content = json["choices"][0]["message"]["content"]
-        .as_str()
+    #[allow(deprecated)]
+    let content = response
+        .content_text_as_str()
         .unwrap_or("");
 
     // Parse JSON from response

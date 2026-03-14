@@ -297,80 +297,68 @@ async fn call_oneshot_llm(
     config: &ClassifierConfig,
     user_prompt: &str,
 ) -> Result<String, OneShotError> {
-    let base_url = config.base_url.as_deref().unwrap_or("https://api.openai.com/v1");
-    let url = format!("{base_url}/chat/completions");
+    use genai::chat::{ChatMessage, ChatOptions, ChatRequest, ChatResponseFormat};
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(config.timeout_sec))
-        .build()
-        .map_err(|e| OneShotError::Llm(e.to_string()))?;
+    let genai_client = crate::llm::build_genai_client(
+        &config.api_key,
+        &config.model,
+        config.base_url.as_deref(),
+    )
+    .map_err(|e| OneShotError::Llm(e.to_string()))?;
 
-    let body = serde_json::json!({
-        "model": config.model,
-        "messages": [
-            {"role": "system", "content": ONESHOT_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-        "max_tokens": config.max_tokens,
-        "temperature": 0.3,
-        "response_format": {"type": "json_object"},
-    });
+    let messages = vec![
+        ChatMessage::system(ONESHOT_SYSTEM_PROMPT),
+        ChatMessage::user(user_prompt),
+    ];
+    let chat_req = ChatRequest::new(messages);
+
+    let options = ChatOptions::default()
+        .with_temperature(0.3)
+        .with_max_tokens(config.max_tokens as u32)
+        .with_response_format(ChatResponseFormat::JsonMode);
 
     let mut last_error = String::new();
     for attempt in 0..config.max_retries {
-        let resp = client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", config.api_key))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await;
-
-        match resp {
-            Ok(r) => {
-                let status = r.status();
-                if status.is_success() {
-                    let data: serde_json::Value = r.json().await
-                        .map_err(|e| OneShotError::Llm(e.to_string()))?;
-
-                    let content = data["choices"][0]["message"]["content"]
-                        .as_str()
-                        .unwrap_or("")
-                        .to_string();
-
-                    return Ok(content);
-                }
-
-                let body_text = r.text().await.unwrap_or_default();
-
-                if status.as_u16() == 429 {
-                    let wait = 60u64 * 2u64.pow(attempt);
-                    tracing::warn!("Rate limited (429), waiting {wait}s before retry");
-                    tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
-                    last_error = format!("Rate limited: {body_text}");
-                    continue;
-                }
-
-                if status.is_server_error() {
-                    let wait = 1u64 * 2u64.pow(attempt);
-                    tracing::warn!("Server error ({status}), waiting {wait}s before retry");
-                    tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
-                    last_error = format!("Server error {status}: {body_text}");
-                    continue;
-                }
-
-                return Err(OneShotError::Llm(format!("HTTP {status}: {body_text}")));
+        match genai_client
+            .exec_chat(&config.model, chat_req.clone(), Some(&options))
+            .await
+        {
+            Ok(response) => {
+                #[allow(deprecated)]
+                let content = response
+                    .content_text_as_str()
+                    .unwrap_or("")
+                    .to_string();
+                return Ok(content);
             }
             Err(e) => {
-                let wait = 1u64 * 2u64.pow(attempt);
-                tracing::warn!("Request error: {e}, waiting {wait}s before retry");
-                tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
-                last_error = e.to_string();
+                let err_str = e.to_string();
+                let is_rate_limit = err_str.contains("429") || err_str.to_lowercase().contains("rate");
+                let is_server_error = err_str.contains("500")
+                    || err_str.contains("502")
+                    || err_str.contains("503");
+
+                if is_rate_limit {
+                    let wait = 60u64 * 2u64.pow(attempt);
+                    tracing::warn!("Rate limited, waiting {wait}s before retry (attempt {attempt})");
+                    tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+                    last_error = format!("Rate limited: {err_str}");
+                } else if is_server_error {
+                    let wait = 1u64 * 2u64.pow(attempt);
+                    tracing::warn!("Server error, waiting {wait}s before retry (attempt {attempt})");
+                    tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+                    last_error = format!("Server error: {err_str}");
+                } else {
+                    return Err(OneShotError::Llm(err_str));
+                }
             }
         }
     }
 
-    Err(OneShotError::Llm(format!("All {0} retries exhausted. Last error: {last_error}", config.max_retries)))
+    Err(OneShotError::Llm(format!(
+        "All {0} retries exhausted. Last error: {last_error}",
+        config.max_retries
+    )))
 }
 
 fn parse_oneshot_response(text: &str) -> Result<Vec<OneShotAdSegment>, OneShotError> {

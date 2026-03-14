@@ -800,39 +800,24 @@ async fn run_llm_probe(
     api_key: &str,
     model: &str,
     base_url: Option<&str>,
-    timeout: u64,
+    _timeout: u64,
     success_message: &str,
 ) -> AppResult<Json<Value>> {
     if api_key.is_empty() {
         return Err(AppError::BadRequest("No API key configured.".into()));
     }
 
-    let effective_base = base_url.unwrap_or("https://api.openai.com/v1");
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout))
-        .build()
+    // Use genai crate — handles OpenAI, Gemini, Anthropic, Groq, etc.
+    let client = crate::llm::build_genai_client(api_key, model, base_url)
         .map_err(|e| AppError::Llm(format!("Client error: {e}")))?;
 
-    let resp = client
-        .post(&format!("{effective_base}/chat/completions"))
-        .header("Authorization", format!("Bearer {api_key}"))
-        .header("Content-Type", "application/json")
-        .json(&json!({
-            "model": model,
-            "messages": [{"role": "user", "content": "Say 'hello' in one word."}],
-            "max_tokens": 10,
-        }))
-        .send()
-        .await
-        .map_err(|e| AppError::Llm(format!("Connection error: {e}")))?;
+    let chat_req = genai::chat::ChatRequest::new(vec![
+        genai::chat::ChatMessage::user("Say 'hello' in one word."),
+    ]);
 
-    if resp.status().is_success() {
-        Ok(Json(json!({"ok": true, "message": success_message})))
-    } else {
-        let status = resp.status().as_u16();
-        let body_text = resp.text().await.unwrap_or_default();
-        Err(AppError::Llm(format!("LLM returned {status}: {body_text}")))
+    match client.exec_chat(model, chat_req, None).await {
+        Ok(_) => Ok(Json(json!({"ok": true, "message": success_message}))),
+        Err(e) => Err(AppError::Llm(format!("LLM error: {e}"))),
     }
 }
 

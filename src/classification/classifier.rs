@@ -224,79 +224,46 @@ async fn call_llm_with_retries(
     user_prompt: &str,
     max_retries: u32,
 ) -> Result<LlmClassificationResponse, ClassificationError> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(config.timeout_sec))
-        .build()
-        .map_err(|e| ClassificationError::Api(e.to_string()))?;
-
-    let base_url = config
-        .base_url
-        .as_deref()
-        .unwrap_or("https://api.openai.com/v1");
+    let genai_client = crate::llm::build_genai_client(
+        &config.api_key,
+        &config.model,
+        config.base_url.as_deref(),
+    )
+    .map_err(|e| ClassificationError::Api(e.to_string()))?;
 
     for attempt in 0..=max_retries {
-        let body = serde_json::json!({
-            "model": config.model,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            "temperature": 0.1,
-            "max_tokens": config.max_tokens,
-        });
+        let result = crate::llm::chat_completion(
+            &genai_client,
+            &config.model,
+            Some(SYSTEM_PROMPT),
+            user_prompt,
+            Some(0.1),
+            Some(config.max_tokens as u32),
+        )
+        .await;
 
-        let resp = client
-            .post(format!("{base_url}/chat/completions"))
-            .header("Authorization", format!("Bearer {}", config.api_key))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await;
-
-        match resp {
-            Ok(r) if r.status().is_success() => {
-                let json: serde_json::Value = r
-                    .json()
-                    .await
-                    .map_err(|e| ClassificationError::Api(e.to_string()))?;
-
-                let content = json["choices"][0]["message"]["content"]
-                    .as_str()
-                    .unwrap_or("");
-
-                return parse_llm_response(content);
-            }
-            Ok(r) if r.status().as_u16() == 429 || r.status().as_u16() == 503 => {
-                // Rate limited or temporarily unavailable
-                let wait = std::time::Duration::from_secs(60 * 2u64.pow(attempt));
-                tracing::warn!(
-                    "LLM rate limited (attempt {}/{}), waiting {}s",
-                    attempt + 1,
-                    max_retries + 1,
-                    wait.as_secs()
-                );
-                tokio::time::sleep(wait).await;
-            }
-            Ok(r) => {
-                let status = r.status();
-                let body = r.text().await.unwrap_or_default();
-                if attempt < max_retries {
-                    let wait = std::time::Duration::from_secs(2u64.pow(attempt));
-                    tracing::warn!("LLM error {status} (attempt {}), retrying in {}s", attempt + 1, wait.as_secs());
-                    tokio::time::sleep(wait).await;
-                } else {
-                    return Err(ClassificationError::Api(format!(
-                        "LLM error {status}: {body}"
-                    )));
-                }
+        match result {
+            Ok(content) => {
+                return parse_llm_response(&content);
             }
             Err(e) => {
-                if attempt < max_retries {
+                let err_str = e.to_string();
+                let is_rate_limit = err_str.contains("429") || err_str.contains("rate");
+                if is_rate_limit {
+                    let wait = std::time::Duration::from_secs(60 * 2u64.pow(attempt));
+                    tracing::warn!(
+                        "LLM rate limited (attempt {}/{}), waiting {}s",
+                        attempt + 1,
+                        max_retries + 1,
+                        wait.as_secs()
+                    );
+                    tokio::time::sleep(wait).await;
+                } else if attempt < max_retries {
                     let wait = std::time::Duration::from_secs(2u64.pow(attempt));
-                    tracing::warn!("LLM request failed (attempt {}): {e}", attempt + 1);
+                    tracing::warn!("LLM error (attempt {}): {e}, retrying in {}s", attempt + 1, wait.as_secs());
                     tokio::time::sleep(wait).await;
                 } else {
-                    return Err(ClassificationError::Api(e.to_string()));
+                    return Err(ClassificationError::Api(err_str));
                 }
             }
         }

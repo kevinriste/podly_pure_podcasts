@@ -7,6 +7,7 @@ mod db;
 mod error;
 mod feeds;
 mod jobs;
+mod llm;
 mod refinement;
 mod transcription;
 
