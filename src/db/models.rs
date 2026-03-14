@@ -35,6 +35,9 @@ pub struct Post {
     pub chapter_data: Option<String>,
     pub refined_ad_boundaries: Option<String>,
     pub refined_ad_boundaries_updated_at: Option<String>,
+    /// Only populated for aggregate feed queries (joined from feed table)
+    #[sqlx(default)]
+    pub feed_title: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]

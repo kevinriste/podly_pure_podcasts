@@ -593,7 +593,7 @@ async fn user_feed(
     State(state): State<AppState>,
     Path(user_id): Path<i64>,
 ) -> Result<Response, AppError> {
-    let _user = queries::get_user_by_id(&state.db, user_id)
+    let user = queries::get_user_by_id(&state.db, user_id)
         .await?
         .ok_or(AppError::NotFound)?;
 
@@ -607,21 +607,29 @@ async fn user_feed(
 
     all_posts.sort_by(|a, b| b.release_date.cmp(&a.release_date));
 
-    let dummy_feed = crate::db::models::Feed {
-        id: 0,
-        alt_id: None,
-        title: "Podly Aggregate Feed".into(),
-        description: Some("Your combined ad-free podcast feed".into()),
-        author: None,
-        rss_url: String::new(),
-        image_url: None,
-        ad_detection_strategy: "llm".into(),
-        chapter_filter_strings: None,
-        auto_whitelist_new_episodes_override: None,
+    let (title, description) = if state.config.require_auth {
+        (
+            format!("Podly Podcasts - {}", user.username),
+            format!(
+                "Aggregate feed for {} - Last 3 processed episodes from each subscribed feed.",
+                user.username
+            ),
+        )
+    } else {
+        (
+            "Podly Podcasts".into(),
+            "Aggregate feed - Last 3 processed episodes from each subscribed feed.".into(),
+        )
     };
 
-    let xml = crate::feeds::generator::generate_rss_feed(&dummy_feed, &all_posts, &base_url(&state))
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("XML generation error: {e}")))?;
+    let xml = crate::feeds::generator::generate_aggregate_rss_feed(
+        &title,
+        &description,
+        user_id,
+        &all_posts,
+        &base_url(&state),
+    )
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("XML generation error: {e}")))?;
 
     Ok(Response::builder()
         .status(StatusCode::OK)

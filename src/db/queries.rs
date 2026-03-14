@@ -326,7 +326,7 @@ pub async fn increment_download_count(pool: &SqlitePool, post_id: i64) -> AppRes
 
 pub async fn get_recent_processed_posts(pool: &SqlitePool, feed_id: i64, limit: i64) -> AppResult<Vec<Post>> {
     let posts = sqlx::query_as::<_, Post>(
-        "SELECT * FROM post WHERE feed_id = ? AND processed_audio_path IS NOT NULL ORDER BY release_date DESC LIMIT ?",
+        "SELECT p.*, f.title as feed_title FROM post p JOIN feed f ON p.feed_id = f.id WHERE p.feed_id = ? AND p.whitelisted = 1 AND p.processed_audio_path IS NOT NULL ORDER BY p.release_date DESC LIMIT ?",
     )
     .bind(feed_id)
     .bind(limit)
