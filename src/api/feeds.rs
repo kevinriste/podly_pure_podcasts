@@ -266,7 +266,7 @@ async fn delete_feed(
     State(state): State<AppState>,
     Path(feed_id): Path<i64>,
     auth_user: Option<Extension<AuthenticatedUser>>,
-) -> Result<Json<Value>, AppError> {
+) -> Result<Response, AppError> {
     require_admin_user(&auth_user, state.config.require_auth)?;
 
     let _feed = queries::get_feed_by_id(&state.db, feed_id)
@@ -289,12 +289,12 @@ async fn delete_feed(
         }
     }
 
-    Ok(Json(json!({"status": "ok"})))
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 #[derive(Deserialize)]
 struct SearchQuery {
-    q: Option<String>,
+    term: Option<String>,
 }
 
 async fn search_feeds(
@@ -302,7 +302,7 @@ async fn search_feeds(
     Query(q): Query<SearchQuery>,
 ) -> AppResult<Json<Value>> {
     let query = q
-        .q
+        .term
         .as_deref()
         .filter(|s| !s.is_empty())
         .ok_or_else(|| AppError::BadRequest("Search query is required.".into()))?;
@@ -354,7 +354,8 @@ async fn search_feeds(
         })
         .unwrap_or_default();
 
-    Ok(Json(json!({"results": results})))
+    let total = results.len();
+    Ok(Json(json!({"results": results, "total": total})))
 }
 
 fn sha1_hex(input: &str) -> String {
@@ -503,7 +504,7 @@ async fn create_share_link(
     State(state): State<AppState>,
     Path(feed_id): Path<i64>,
     auth_user: Option<Extension<AuthenticatedUser>>,
-) -> AppResult<Json<Value>> {
+) -> Result<Response, AppError> {
     let user = get_auth_user(&auth_user).ok_or(AppError::Unauthorized)?;
 
     let _feed = queries::get_feed_by_id(&state.db, feed_id)
@@ -515,10 +516,24 @@ async fn create_share_link(
             .await
             .map_err(|e| AppError::Internal(anyhow::anyhow!("Token error: {e}")))?;
 
-    Ok(Json(json!({
-        "feed_token": token_id,
-        "feed_secret": secret,
-    })))
+    let url = format!(
+        "{}/feed/{}?feed_token={}&feed_secret={}",
+        base_url(&state),
+        feed_id,
+        token_id,
+        secret
+    );
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "url": url,
+            "feed_token": token_id,
+            "feed_secret": secret,
+            "feed_id": feed_id,
+        })),
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]
@@ -619,7 +634,7 @@ async fn user_feed(
 async fn create_aggregate_link(
     State(state): State<AppState>,
     auth_user: Option<Extension<AuthenticatedUser>>,
-) -> AppResult<Json<Value>> {
+) -> Result<Response, AppError> {
     let user = get_auth_user(&auth_user).ok_or(AppError::Unauthorized)?;
 
     let (token_id, secret) =
@@ -627,10 +642,23 @@ async fn create_aggregate_link(
             .await
             .map_err(|e| AppError::Internal(anyhow::anyhow!("Token error: {e}")))?;
 
-    Ok(Json(json!({
-        "feed_token": token_id,
-        "feed_secret": secret,
-    })))
+    let url = format!(
+        "{}/feed/user/{}?feed_token={}&feed_secret={}",
+        base_url(&state),
+        user.id,
+        token_id,
+        secret
+    );
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "url": url,
+            "feed_token": token_id,
+            "feed_secret": secret,
+        })),
+    )
+        .into_response())
 }
 
 fn base_url(state: &AppState) -> String {

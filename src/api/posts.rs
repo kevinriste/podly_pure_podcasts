@@ -413,10 +413,7 @@ async fn download_audio(
 async fn download_original(
     State(state): State<AppState>,
     AxumPath(p_guid): AxumPath<String>,
-    auth_user: Option<Extension<AuthenticatedUser>>,
 ) -> Result<Response, AppError> {
-    require_admin_user(&auth_user, state.config.require_auth)?;
-
     let post = queries::get_post_by_guid(&state.db, &p_guid)
         .await?
         .ok_or(AppError::NotFound)?;
@@ -500,9 +497,8 @@ async fn serve_audio_legacy(
 async fn download_original_legacy(
     State(state): State<AppState>,
     AxumPath(p_guid): AxumPath<String>,
-    auth_user: Option<Extension<AuthenticatedUser>>,
 ) -> Result<Response, AppError> {
-    download_original(State(state), AxumPath(p_guid), auth_user).await
+    download_original(State(state), AxumPath(p_guid)).await
 }
 
 async fn serve_file_response(path: &str, as_attachment: bool) -> Result<Response, AppError> {
