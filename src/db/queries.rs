@@ -307,13 +307,13 @@ pub async fn are_all_posts_whitelisted(pool: &SqlitePool, feed_id: i64) -> AppRe
     Ok(total.0 > 0 && total.0 == whitelisted.0)
 }
 
-pub async fn set_all_posts_whitelist(pool: &SqlitePool, feed_id: i64, whitelisted: bool) -> AppResult<()> {
-    sqlx::query("UPDATE post SET whitelisted = ? WHERE feed_id = ?")
+pub async fn set_all_posts_whitelist(pool: &SqlitePool, feed_id: i64, whitelisted: bool) -> AppResult<u64> {
+    let result = sqlx::query("UPDATE post SET whitelisted = ? WHERE feed_id = ?")
         .bind(whitelisted)
         .bind(feed_id)
         .execute(pool)
         .await?;
-    Ok(())
+    Ok(result.rows_affected())
 }
 
 pub async fn increment_download_count(pool: &SqlitePool, post_id: i64) -> AppResult<()> {

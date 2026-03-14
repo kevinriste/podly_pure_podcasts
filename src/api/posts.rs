@@ -25,7 +25,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/posts/{p_guid}/audio", get(serve_audio))
         .route("/api/posts/{p_guid}/download", get(download_audio))
         .route(
-            "/api/posts/{p_guid}/download-original",
+            "/api/posts/{p_guid}/download/original",
             get(download_original),
         )
         .route("/api/posts/{p_guid}/estimate", get(processing_estimate))
