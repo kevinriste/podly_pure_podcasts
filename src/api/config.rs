@@ -300,15 +300,16 @@ async fn get_config(
     // Add read_only_fields list for convenience
     let read_only_fields: Vec<&str> = get_env_overridden_fields(&state.config);
 
-    let mut result = data;
-    result
-        .as_object_mut()
-        .unwrap()
-        .insert("env_overrides".into(), env_overrides);
-    result
-        .as_object_mut()
+    // Insert read_only_fields into the config object
+    data.as_object_mut()
         .unwrap()
         .insert("read_only_fields".into(), json!(read_only_fields));
+
+    // Wrap under { config: ..., env_overrides: ... } to match Python response shape
+    let result = json!({
+        "config": data,
+        "env_overrides": env_overrides,
+    });
 
     Ok(Json(result))
 }
