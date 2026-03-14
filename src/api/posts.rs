@@ -28,7 +28,7 @@ pub fn router() -> Router<AppState> {
             "/api/posts/{p_guid}/download/original",
             get(download_original),
         )
-        .route("/api/posts/{p_guid}/estimate", get(processing_estimate))
+        .route("/api/posts/{p_guid}/processing-estimate", get(processing_estimate))
         .route("/api/posts/{p_guid}/json", get(post_json))
         // Legacy routes
         .route("/post/{p_guid}/mp3", get(serve_audio_legacy))

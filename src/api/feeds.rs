@@ -26,7 +26,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/feeds/{feed_id}/exit", post(exit_feed))
         .route("/api/feeds/{feed_id}/share-link", post(create_share_link))
         .route(
-            "/api/feeds/{feed_id}/whitelist-all",
+            "/api/feeds/{feed_id}/toggle-whitelist-all",
             post(toggle_whitelist_all),
         )
         .route("/api/feeds/aggregate", get(aggregate_feed))
