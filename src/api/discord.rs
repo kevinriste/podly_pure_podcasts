@@ -214,14 +214,62 @@ async fn discord_config(
     let db_settings = queries::get_discord_settings(&state.db).await?;
     let settings = load_discord_settings(&state).await?;
 
+    // Build env_overrides (matches Python discord_routes.py)
+    let mut env_overrides = serde_json::Map::new();
+    if state.config.discord_client_id.is_some() {
+        let mut e = serde_json::Map::new();
+        e.insert("env_var".into(), json!("DISCORD_CLIENT_ID"));
+        env_overrides.insert("client_id".into(), Value::Object(e));
+    }
+    if state.config.discord_client_secret.is_some() {
+        let mut e = serde_json::Map::new();
+        e.insert("env_var".into(), json!("DISCORD_CLIENT_SECRET"));
+        e.insert("is_secret".into(), json!("true"));
+        env_overrides.insert("client_secret".into(), Value::Object(e));
+    }
+    if let Some(ref uri) = state.config.discord_redirect_uri {
+        let mut e = serde_json::Map::new();
+        e.insert("env_var".into(), json!("DISCORD_REDIRECT_URI"));
+        e.insert("value".into(), json!(uri));
+        env_overrides.insert("redirect_uri".into(), Value::Object(e));
+    }
+    if let Some(ref gids) = state.config.discord_guild_ids {
+        let mut e = serde_json::Map::new();
+        e.insert("env_var".into(), json!("DISCORD_GUILD_IDS"));
+        e.insert("value".into(), json!(gids));
+        env_overrides.insert("guild_ids".into(), Value::Object(e));
+    }
+    if state.config.discord_allow_registration.is_some() {
+        let mut e = serde_json::Map::new();
+        e.insert("env_var".into(), json!("DISCORD_ALLOW_REGISTRATION"));
+        e.insert("value".into(), json!(std::env::var("DISCORD_ALLOW_REGISTRATION").unwrap_or_default()));
+        env_overrides.insert("allow_registration".into(), Value::Object(e));
+    }
+
+    // Mask client_secret like Python (client_secret_preview instead of client_secret_set)
+    let secret_preview: Option<String> = db_settings
+        .client_secret
+        .as_ref()
+        .and_then(|s| {
+            let s = s.trim();
+            if s.is_empty() { return None; }
+            if s.len() <= 8 { return Some("****".into()); }
+            Some(format!("{}...{}", &s[..4], &s[s.len() - 4..]))
+        });
+
+    // guild_ids: Python returns comma-joined string or ""
+    let guild_ids_str = db_settings.guild_ids.as_deref().unwrap_or("");
+
     Ok(Json(json!({
-        "enabled": settings.enabled,
-        "client_id": db_settings.client_id,
-        "redirect_uri": db_settings.redirect_uri,
-        "guild_ids": db_settings.guild_ids,
-        "allow_registration": db_settings.allow_registration,
-        // Never expose client_secret to the frontend
-        "client_secret_set": db_settings.client_secret.map(|s| !s.is_empty()).unwrap_or(false),
+        "config": {
+            "enabled": settings.enabled,
+            "client_id": db_settings.client_id,
+            "client_secret_preview": secret_preview,
+            "redirect_uri": db_settings.redirect_uri,
+            "guild_ids": guild_ids_str,
+            "allow_registration": db_settings.allow_registration,
+        },
+        "env_overrides": Value::Object(env_overrides),
     })))
 }
 
