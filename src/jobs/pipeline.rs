@@ -692,7 +692,7 @@ async fn refine(
         model,
         base_url,
         timeout_sec: timeout as u64,
-        max_tokens: 500,
+        max_tokens: 4096, // not used by refinement LLM (hardcoded there), but matches Python
         max_concurrent: 1,
         max_retries: 2,
         chunk_size: 60,
