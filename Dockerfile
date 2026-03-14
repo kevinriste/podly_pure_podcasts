@@ -1,10 +1,11 @@
 # Stage 1: Build Rust backend
-FROM rust:1.84-bookworm AS rust-builder
+FROM rust:1-bookworm AS rust-builder
 
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
 COPY migrations/ migrations/
+COPY prompts/ prompts/
 
 RUN cargo build --release
 
@@ -22,15 +23,17 @@ RUN npm run build
 FROM debian:bookworm-slim
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg ca-certificates && \
+    apt-get install -y --no-install-recommends ffmpeg ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r podly && useradd --no-log-init -r -g podly podly
 
 WORKDIR /app
 COPY --from=rust-builder /app/target/release/podly /app/podly
+COPY --from=rust-builder /app/target/release/migrate_legacy /app/migrate_legacy
 COPY --from=frontend-builder /app/dist /app/static
 COPY migrations/ /app/migrations/
+COPY prompts/ /app/prompts/
 
 RUN mkdir -p /app/data && chown -R podly:podly /app
 

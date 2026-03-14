@@ -169,7 +169,7 @@ async fn migrate_feeds(old: &SqlitePool, new: &SqlitePool, dry_run: bool) -> any
 
 async fn migrate_posts(old: &SqlitePool, new: &SqlitePool, dry_run: bool) -> anyhow::Result<()> {
     let rows: Vec<sqlx::sqlite::SqliteRow> =
-        sqlx::query("SELECT * FROM post ORDER BY id").fetch_all(old).await?;
+        sqlx::query("SELECT *, CAST(duration AS INTEGER) AS duration_int FROM post ORDER BY id").fetch_all(old).await?;
     let count = rows.len();
     println!("[post] Found {count} rows");
     if dry_run || count == 0 {
@@ -190,7 +190,7 @@ async fn migrate_posts(old: &SqlitePool, new: &SqlitePool, dry_run: bool) -> any
         .bind(row.get::<Option<String>, _>("processed_audio_path"))
         .bind(row.get::<Option<String>, _>("description"))
         .bind(row.get::<Option<String>, _>("release_date"))
-        .bind(row.get::<Option<i64>, _>("duration"))
+        .bind(row.get::<Option<i64>, _>("duration_int"))
         .bind(row.get::<bool, _>("whitelisted"))
         .bind(row.get::<Option<String>, _>("image_url"))
         .bind(row.get::<Option<i64>, _>("download_count"))
@@ -493,10 +493,12 @@ async fn migrate_settings_table(old: &SqlitePool, new: &SqlitePool, table: &str,
         return Ok(());
     }
 
-    // Read the single row from old
+    // Read the single row from old, casting all to TEXT so we can bind uniformly
     let col_list = common.join(", ");
+    let cast_list: Vec<String> = common.iter().map(|c| format!("CAST({c} AS TEXT) AS {c}")).collect();
+    let cast_select = cast_list.join(", ");
     let row: Option<sqlx::sqlite::SqliteRow> =
-        sqlx::query(&format!("SELECT {col_list} FROM {table} WHERE id = 1"))
+        sqlx::query(&format!("SELECT {cast_select} FROM {table} WHERE id = 1"))
             .fetch_optional(old)
             .await?;
 
