@@ -237,7 +237,7 @@ async fn call_llm_with_retries(
             &config.model,
             Some(SYSTEM_PROMPT),
             user_prompt,
-            Some(0.1),
+            None, // Python doesn't set temperature — uses LLM default
             Some(config.max_tokens as u32),
         )
         .await;

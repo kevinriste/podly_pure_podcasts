@@ -208,7 +208,7 @@ async fn call_refinement_llm(
 
     let options = ChatOptions::default()
         .with_temperature(0.1)
-        .with_max_tokens(500u32);
+        .with_max_tokens(4096u32);
 
     let response = genai_client
         .exec_chat(&config.model, chat_req, Some(&options))

@@ -812,10 +812,14 @@ async fn run_llm_probe(
         .map_err(|e| AppError::Llm(format!("Client error: {e}")))?;
 
     let chat_req = genai::chat::ChatRequest::new(vec![
-        genai::chat::ChatMessage::user("Say 'hello' in one word."),
+        genai::chat::ChatMessage::system("You are a healthcheck probe."),
+        genai::chat::ChatMessage::user("ping"),
     ]);
 
-    match client.exec_chat(model, chat_req, None).await {
+    let options = genai::chat::ChatOptions::default()
+        .with_max_tokens(1u32);
+
+    match client.exec_chat(model, chat_req, Some(&options)).await {
         Ok(_) => Ok(Json(json!({"ok": true, "message": success_message}))),
         Err(e) => Err(AppError::Llm(format!("LLM error: {e}"))),
     }
