@@ -31,7 +31,7 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/feeds/aggregate", get(aggregate_feed))
         .route("/feed/user/{user_id}", get(user_feed))
-        .route("/api/feeds/aggregate-link", post(create_aggregate_link))
+        .route("/api/user/aggregate-link", post(create_aggregate_link))
 }
 
 async fn serialize_feed(
