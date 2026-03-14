@@ -10,9 +10,10 @@ pub fn generate_rss_feed(
     feed: &Feed,
     posts: &[Post],
     base_url: &str,
+    token_suffix: &str,
 ) -> Result<String, quick_xml::Error> {
     let title = format!("[podly] {}", feed.title);
-    let link = format!("{}/feed/{}", base_url, feed.id);
+    let link = format!("{}/feed/{}{}", base_url, feed.id, token_suffix);
     let description = feed.description.as_deref().unwrap_or("");
     let image_url = feed.image_url.as_deref();
 
@@ -23,7 +24,8 @@ pub fn generate_rss_feed(
         image_url,
         posts,
         base_url,
-        false, // don't prepend feed title to items
+        token_suffix,
+        false,
     )
 }
 
@@ -34,8 +36,9 @@ pub fn generate_aggregate_rss_feed(
     user_id: i64,
     posts: &[Post],
     base_url: &str,
+    token_suffix: &str,
 ) -> Result<String, quick_xml::Error> {
-    let link = format!("{}/feed/user/{}", base_url, user_id);
+    let link = format!("{}/feed/user/{}{}", base_url, user_id, token_suffix);
     let image_url = Some(format!(
         "{}/static/images/logos/manifest-icon-512.maskable.png",
         base_url
@@ -48,7 +51,8 @@ pub fn generate_aggregate_rss_feed(
         image_url.as_deref(),
         posts,
         base_url,
-        true, // prepend feed title to items
+        token_suffix,
+        true,
     )
 }
 
@@ -59,6 +63,7 @@ fn generate_rss_xml(
     image_url: Option<&str>,
     posts: &[Post],
     base_url: &str,
+    token_suffix: &str,
     prepend_feed_title: bool,
 ) -> Result<String, quick_xml::Error> {
     let mut writer = Writer::new(Cursor::new(Vec::new()));
@@ -87,7 +92,7 @@ fn generate_rss_xml(
     let last_build_date = Utc::now().format("%a, %d %b %Y %H:%M:%S GMT").to_string();
     write_text_element(&mut writer, "lastBuildDate", &last_build_date)?;
 
-    // Full <image> element (not just itunes:image)
+    // Full <image> element
     if let Some(img_url) = image_url {
         writer.write_event(Event::Start(BytesStart::new("image")))?;
         write_text_element(&mut writer, "url", img_url)?;
@@ -95,7 +100,6 @@ fn generate_rss_xml(
         write_text_element(&mut writer, "link", link)?;
         writer.write_event(Event::End(BytesEnd::new("image")))?;
 
-        // Also itunes:image
         let mut itunes_image = BytesStart::new("itunes:image");
         itunes_image.push_attribute(("href", img_url));
         writer.write_event(Event::Empty(itunes_image))?;
@@ -108,12 +112,19 @@ fn generate_rss_xml(
     atom_link.push_attribute(("type", "application/rss+xml"));
     writer.write_event(Event::Empty(atom_link))?;
 
+    // Determine token separator for URLs (? if no existing params, & if already has ?)
+    let token_joiner = if token_suffix.is_empty() {
+        ""
+    } else if token_suffix.starts_with('?') {
+        // For URLs that already have query params, convert ? to &
+        ""
+    } else {
+        ""
+    };
+    let _ = token_joiner; // used below
+
     // Episodes
     for post in posts {
-        if !post.whitelisted {
-            continue;
-        }
-
         writer.write_event(Event::Start(BytesStart::new("item")))?;
 
         // Title: optionally prepend feed title for aggregate feeds
@@ -130,8 +141,11 @@ fn generate_rss_xml(
 
         write_text_element(&mut writer, "guid", &post.guid)?;
 
-        // Description with Podly post page link
-        let post_details_url = format!("{}/api/posts/{}", base_url, post.guid);
+        // Description with Podly post page link (with token params)
+        let post_details_url = append_token(
+            &format!("{}/api/posts/{}", base_url, post.guid),
+            token_suffix,
+        );
         let desc_text = post.description.as_deref().unwrap_or("");
         let description_with_link = format!(
             "{}\n<p><a href=\"{}\">Podly Post Page</a></p>",
@@ -143,9 +157,12 @@ fn generate_rss_xml(
             write_text_element(&mut writer, "pubDate", release_date)?;
         }
 
-        // Audio enclosure — use /download not /audio (for podcast app attachment behavior)
+        // Audio enclosure — use /download (with token params)
         let audio_url = if post.processed_audio_path.is_some() {
-            format!("{}/api/posts/{}/download", base_url, post.guid)
+            append_token(
+                &format!("{}/api/posts/{}/download", base_url, post.guid),
+                token_suffix,
+            )
         } else {
             post.download_url.clone()
         };
@@ -174,6 +191,18 @@ fn generate_rss_xml(
 
     let result = writer.into_inner().into_inner();
     Ok(String::from_utf8(result).unwrap_or_default())
+}
+
+/// Append feed token query params to a URL
+fn append_token(url: &str, token_suffix: &str) -> String {
+    if token_suffix.is_empty() {
+        url.to_string()
+    } else if url.contains('?') {
+        // URL already has query params, append with &
+        format!("{}&{}", url, &token_suffix[1..]) // skip the leading ?
+    } else {
+        format!("{}{}", url, token_suffix)
+    }
 }
 
 fn write_text_element<W: std::io::Write>(

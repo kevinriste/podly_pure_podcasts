@@ -244,14 +244,28 @@ async fn add_feed(
 async fn serve_feed(
     State(state): State<AppState>,
     Path(feed_id): Path<i64>,
+    Query(token_params): Query<FeedTokenQuery>,
 ) -> Result<Response, AppError> {
     let feed = queries::get_feed_by_id(&state.db, feed_id)
         .await?
         .ok_or(AppError::NotFound)?;
 
-    let posts = queries::get_whitelisted_posts_for_feed(&state.db, feed_id).await?;
+    // Refresh feed before serving (Python parity)
+    let _ = crate::feeds::refresh::refresh_feed(&state.db, feed_id, &feed.rss_url).await;
 
-    let xml = crate::feeds::generator::generate_rss_feed(&feed, &posts, &base_url(&state))
+    // Python: when autoprocess_on_download=true, include ALL posts (even non-whitelisted)
+    // Otherwise only include whitelisted + processed posts
+    let app = queries::get_app_settings(&state.db).await?;
+    let posts = if app.autoprocess_on_download {
+        queries::get_all_posts_for_feed(&state.db, feed_id).await?
+    } else {
+        queries::get_whitelisted_posts_for_feed(&state.db, feed_id).await?
+    };
+
+    let base = base_url(&state);
+    let token_suffix = build_token_suffix(&token_params);
+
+    let xml = crate::feeds::generator::generate_rss_feed(&feed, &posts, &base, &token_suffix)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("XML generation error: {e}")))?;
 
     Ok(Response::builder()
@@ -592,6 +606,7 @@ async fn aggregate_feed(
 async fn user_feed(
     State(state): State<AppState>,
     Path(user_id): Path<i64>,
+    Query(token_params): Query<FeedTokenQuery>,
 ) -> Result<Response, AppError> {
     let user = queries::get_user_by_id(&state.db, user_id)
         .await?
@@ -622,12 +637,14 @@ async fn user_feed(
         )
     };
 
+    let token_suffix = build_token_suffix(&token_params);
     let xml = crate::feeds::generator::generate_aggregate_rss_feed(
         &title,
         &description,
         user_id,
         &all_posts,
         &base_url(&state),
+        &token_suffix,
     )
     .map_err(|e| AppError::Internal(anyhow::anyhow!("XML generation error: {e}")))?;
 
@@ -667,6 +684,21 @@ async fn create_aggregate_link(
         })),
     )
         .into_response())
+}
+
+#[derive(Deserialize)]
+struct FeedTokenQuery {
+    feed_token: Option<String>,
+    feed_secret: Option<String>,
+}
+
+fn build_token_suffix(params: &FeedTokenQuery) -> String {
+    match (&params.feed_token, &params.feed_secret) {
+        (Some(token), Some(secret)) => {
+            format!("?feed_token={}&feed_secret={}", token, secret)
+        }
+        _ => String::new(),
+    }
 }
 
 fn base_url(state: &AppState) -> String {
