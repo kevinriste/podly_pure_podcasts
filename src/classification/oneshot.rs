@@ -312,8 +312,9 @@ async fn call_oneshot_llm(
     ];
     let chat_req = ChatRequest::new(messages);
 
+    // Python doesn't set temperature (uses LLM default)
+    // Python uses structured outputs if supported, else JSON mode — we always use JSON mode
     let options = ChatOptions::default()
-        .with_temperature(0.3)
         .with_max_tokens(config.max_tokens as u32)
         .with_response_format(ChatResponseFormat::JsonMode);
 
