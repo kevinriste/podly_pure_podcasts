@@ -32,6 +32,7 @@ pub struct AppConfig {
     pub whisper_remote_base_url: Option<String>,
     pub whisper_remote_model: Option<String>,
     pub whisper_local_model: Option<String>,
+    pub groq_max_retries: Option<String>,
 
     // CORS
     pub cors_origins: Option<String>,
@@ -107,6 +108,7 @@ impl AppConfig {
             whisper_remote_base_url: env::var("WHISPER_REMOTE_BASE_URL").ok(),
             whisper_remote_model: env::var("WHISPER_REMOTE_MODEL").ok(),
             whisper_local_model: env::var("WHISPER_LOCAL_MODEL").ok(),
+            groq_max_retries: env::var("GROQ_MAX_RETRIES").ok(),
 
             cors_origins: env::var("CORS_ORIGINS").ok(),
 

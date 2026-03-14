@@ -34,7 +34,7 @@ fn mask(val: &Option<String>) -> Option<String> {
         if s.len() <= 8 {
             return Some("****".into());
         }
-        Some(format!("{}****{}", &s[..4], &s[s.len() - 4..]))
+        Some(format!("{}...{}", &s[..4], &s[s.len() - 4..]))
     })
 }
 
@@ -43,7 +43,7 @@ fn mask(val: &Option<String>) -> Option<String> {
 fn build_env_override_metadata(config: &AppConfig, data: &Value) -> Value {
     let mut overrides = serde_json::Map::new();
 
-    // Helper to register an override
+    // Helper to register an override (matches Python shape — no read_only key)
     let mut register = |path: &str, env_var: &str, value: &Option<String>, secret: bool| {
         if let Some(val) = value {
             if val.is_empty() {
@@ -51,7 +51,6 @@ fn build_env_override_metadata(config: &AppConfig, data: &Value) -> Value {
             }
             let mut entry = serde_json::Map::new();
             entry.insert("env_var".into(), json!(env_var));
-            entry.insert("read_only".into(), json!(true));
             if secret {
                 entry.insert("is_secret".into(), json!(true));
                 entry.insert("value_preview".into(), json!(mask(value)));
@@ -76,6 +75,7 @@ fn build_env_override_metadata(config: &AppConfig, data: &Value) -> Value {
         false,
     );
     register("llm.llm_model", "LLM_MODEL", &config.llm_model, false);
+    register("llm.oneshot_model", "ONESHOT_MODEL", &config.oneshot_model, false);
 
     // Whisper overrides
     register(
@@ -118,11 +118,18 @@ fn build_env_override_metadata(config: &AppConfig, data: &Value) -> Value {
             );
         }
         "groq" => {
+            register("groq.api_key", "GROQ_API_KEY", &config.groq_api_key, true);
             register("whisper.api_key", "GROQ_API_KEY", &config.groq_api_key, true);
             register(
                 "whisper.model",
                 "GROQ_WHISPER_MODEL",
                 &config.groq_whisper_model,
+                false,
+            );
+            register(
+                "whisper.max_retries",
+                "GROQ_MAX_RETRIES",
+                &config.groq_max_retries.clone(),
                 false,
             );
         }
@@ -191,16 +198,90 @@ async fn get_config(
     let processing = queries::get_processing_settings(&state.db).await?;
     let output = queries::get_output_settings(&state.db).await?;
     let app = queries::get_app_settings(&state.db).await?;
-    let chapter = queries::get_chapter_filter_settings(&state.db).await?;
+    let _chapter = queries::get_chapter_filter_settings(&state.db).await?;
 
-    // Build base data from DB
-    let mut data = json!({
+    // Build whisper payload — flatten to type-specific fields (matches Python)
+    let effective_whisper_type = state
+        .config
+        .whisper_type
+        .as_deref()
+        .unwrap_or(&whisper.whisper_type);
+    let mut whisper_payload = json!({ "whisper_type": effective_whisper_type });
+    match effective_whisper_type {
+        "local" => {
+            whisper_payload
+                .as_object_mut()
+                .unwrap()
+                .insert("model".into(), json!(&whisper.local_model));
+        }
+        "remote" => {
+            let w = whisper_payload.as_object_mut().unwrap();
+            w.insert("model".into(), json!(&whisper.remote_model));
+            // Mask the api_key (Python pops api_key, inserts api_key_preview)
+            let effective_key = state
+                .config
+                .whisper_remote_api_key
+                .as_ref()
+                .or(state.config.openai_api_key.as_ref())
+                .cloned()
+                .or(whisper.remote_api_key.clone());
+            w.insert("api_key_preview".into(), json!(mask(&effective_key)));
+            let effective_base = state
+                .config
+                .whisper_remote_base_url
+                .as_deref()
+                .unwrap_or(&whisper.remote_base_url);
+            w.insert("base_url".into(), json!(effective_base));
+            w.insert("language".into(), json!(&whisper.remote_language));
+            w.insert("timeout_sec".into(), json!(whisper.remote_timeout_sec));
+            w.insert("chunksize_mb".into(), json!(whisper.remote_chunksize_mb));
+        }
+        "groq" => {
+            let w = whisper_payload.as_object_mut().unwrap();
+            let effective_model = state
+                .config
+                .groq_whisper_model
+                .as_deref()
+                .unwrap_or(&whisper.groq_model);
+            w.insert("model".into(), json!(effective_model));
+            let effective_key = state
+                .config
+                .groq_api_key
+                .clone()
+                .or(whisper.groq_api_key.clone());
+            w.insert("api_key_preview".into(), json!(mask(&effective_key)));
+            w.insert("language".into(), json!(&whisper.groq_language));
+            w.insert("max_retries".into(), json!(whisper.groq_max_retries));
+        }
+        _ => {}
+    }
+
+    // Build LLM section — mask api key like Python (pop llm_api_key, insert preview)
+    let effective_llm_key = state
+        .config
+        .llm_api_key
+        .as_ref()
+        .or(state.config.openai_api_key.as_ref())
+        .or(state.config.groq_api_key.as_ref())
+        .cloned()
+        .or(llm.llm_api_key.clone());
+    let effective_model = state
+        .config
+        .llm_model
+        .as_deref()
+        .unwrap_or(&llm.llm_model);
+    let effective_base_url = state
+        .config
+        .openai_base_url
+        .clone()
+        .or(llm.openai_base_url.clone());
+
+    let data = json!({
         "llm": {
-            "llm_api_key": "",
-            "llm_api_key_preview": mask(&llm.llm_api_key),
-            "llm_model": &llm.llm_model,
-            "oneshot_model": llm.oneshot_model.as_deref(),
-            "openai_base_url": llm.openai_base_url.as_deref(),
+            "llm_api_key_preview": mask(&effective_llm_key),
+            "llm_model": effective_model,
+            "oneshot_model": state.config.oneshot_model.as_deref().or(llm.oneshot_model.as_deref()),
+            "openai_base_url": effective_base_url,
             "openai_timeout": llm.openai_timeout,
             "openai_max_tokens": llm.openai_max_tokens,
             "llm_max_concurrent_calls": llm.llm_max_concurrent_calls,
@@ -213,30 +294,13 @@ async fn get_config(
             "oneshot_max_chunk_duration_seconds": llm.oneshot_max_chunk_duration_seconds,
             "oneshot_chunk_overlap_seconds": llm.oneshot_chunk_overlap_seconds,
         },
-        "whisper": {
-            "whisper_type": &whisper.whisper_type,
-            "local_model": &whisper.local_model,
-            "remote_model": &whisper.remote_model,
-            "remote_api_key": "",
-            "remote_api_key_preview": mask(&whisper.remote_api_key),
-            "remote_base_url": &whisper.remote_base_url,
-            "remote_language": &whisper.remote_language,
-            "remote_timeout_sec": whisper.remote_timeout_sec,
-            "remote_chunksize_mb": whisper.remote_chunksize_mb,
-            "groq_api_key": "",
-            "groq_api_key_preview": mask(&state.config.groq_api_key.clone().or(whisper.groq_api_key.clone())),
-            "groq_model": &whisper.groq_model,
-            "groq_language": &whisper.groq_language,
-            "groq_max_retries": whisper.groq_max_retries,
-        },
+        "whisper": whisper_payload,
         "processing": {
-            "system_prompt_path": &processing.system_prompt_path,
-            "user_prompt_template_path": &processing.user_prompt_template_path,
             "num_segments_to_input_to_prompt": processing.num_segments_to_input_to_prompt,
         },
         "output": {
             "fade_ms": output.fade_ms,
-            "min_ad_segment_separation_seconds": output.min_ad_segment_separation_seconds,
+            "min_ad_segement_separation_seconds": output.min_ad_segment_separation_seconds,
             "min_ad_segment_length_seconds": output.min_ad_segment_length_seconds,
             "min_confidence": output.min_confidence,
         },
@@ -250,60 +314,10 @@ async fn get_config(
             "user_limit_total": app.user_limit_total,
             "autoprocess_on_download": app.autoprocess_on_download,
         },
-        "chapter_filter": {
-            "default_filter_strings": &chapter.default_filter_strings,
-        },
     });
-
-    // Apply env var overlays on top of DB values (runtime only, never persisted)
-    if let Some(llm_section) = data.get_mut("llm").and_then(|v| v.as_object_mut()) {
-        if let Some(key) = state
-            .config
-            .llm_api_key
-            .as_ref()
-            .or(state.config.openai_api_key.as_ref())
-            .or(state.config.groq_api_key.as_ref())
-        {
-            llm_section.insert("llm_api_key_preview".into(), json!(mask(&Some(key.clone()))));
-        }
-        if let Some(model) = &state.config.llm_model {
-            llm_section.insert("llm_model".into(), json!(model));
-        }
-        if let Some(url) = &state.config.openai_base_url {
-            llm_section.insert("openai_base_url".into(), json!(url));
-        }
-    }
-
-    if let Some(w_section) = data.get_mut("whisper").and_then(|v| v.as_object_mut()) {
-        if let Some(wt) = &state.config.whisper_type {
-            w_section.insert("whisper_type".into(), json!(wt));
-        }
-        if let Some(key) = &state.config.groq_api_key {
-            w_section.insert("groq_api_key_preview".into(), json!(mask(&Some(key.clone()))));
-        }
-        if let Some(key) = state
-            .config
-            .whisper_remote_api_key
-            .as_ref()
-            .or(state.config.openai_api_key.as_ref())
-        {
-            w_section.insert(
-                "remote_api_key_preview".into(),
-                json!(mask(&Some(key.clone()))),
-            );
-        }
-    }
 
     // Build env_overrides metadata (tells frontend which fields are read-only)
     let env_overrides = build_env_override_metadata(&state.config, &data);
-
-    // Add read_only_fields list for convenience
-    let read_only_fields: Vec<&str> = get_env_overridden_fields(&state.config);
-
-    // Insert read_only_fields into the config object
-    data.as_object_mut()
-        .unwrap()
-        .insert("read_only_fields".into(), json!(read_only_fields));
 
     // Wrap under { config: ..., env_overrides: ... } to match Python response shape
     let result = json!({
@@ -457,79 +471,133 @@ async fn update_config(
         }
     }
 
-    // Update whisper settings
+    // Update whisper settings — frontend sends flat/generic keys (model, api_key, etc.)
+    // mapped to provider-specific DB columns based on whisper_type (matches Python)
     if let Some(w) = body.get("whisper") {
-        if let Some(v) = w.get("whisper_type").and_then(|v| v.as_str()) {
+        // Determine effective whisper type (from payload or current DB value)
+        let current_whisper = queries::get_whisper_settings(&state.db).await?;
+        let wtype = w
+            .get("whisper_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&current_whisper.whisper_type);
+
+        if w.get("whisper_type").is_some() {
             sqlx::query(
                 "UPDATE whisper_settings SET whisper_type = ?, updated_at = ? WHERE id = 1",
             )
-            .bind(v)
+            .bind(wtype)
             .bind(&now)
             .execute(&state.db)
             .await?;
         }
-        if let Some(v) = w.get("remote_model").and_then(|v| v.as_str()) {
-            sqlx::query(
-                "UPDATE whisper_settings SET remote_model = ?, updated_at = ? WHERE id = 1",
-            )
-            .bind(v)
-            .bind(&now)
-            .execute(&state.db)
-            .await?;
-        }
-        if let Some(v) = w.get("remote_api_key").and_then(|v| v.as_str()) {
-            if !v.contains("****") && !v.is_empty() {
-                sqlx::query("UPDATE whisper_settings SET remote_api_key = ?, updated_at = ? WHERE id = 1")
+
+        match wtype {
+            "local" => {
+                if let Some(v) = w.get("model").and_then(|v| v.as_str()) {
+                    sqlx::query(
+                        "UPDATE whisper_settings SET local_model = ?, updated_at = ? WHERE id = 1",
+                    )
                     .bind(v)
                     .bind(&now)
                     .execute(&state.db)
                     .await?;
+                }
             }
-        }
-        if let Some(v) = w.get("remote_base_url").and_then(|v| v.as_str()) {
-            sqlx::query(
-                "UPDATE whisper_settings SET remote_base_url = ?, updated_at = ? WHERE id = 1",
-            )
-            .bind(v)
-            .bind(&now)
-            .execute(&state.db)
-            .await?;
-        }
-        if let Some(v) = w.get("groq_api_key").and_then(|v| v.as_str()) {
-            if !v.contains("****") && !v.is_empty() {
-                sqlx::query("UPDATE whisper_settings SET groq_api_key = ?, updated_at = ? WHERE id = 1")
+            "remote" => {
+                if let Some(v) = w.get("model").and_then(|v| v.as_str()) {
+                    sqlx::query(
+                        "UPDATE whisper_settings SET remote_model = ?, updated_at = ? WHERE id = 1",
+                    )
                     .bind(v)
                     .bind(&now)
                     .execute(&state.db)
                     .await?;
+                }
+                if let Some(v) = w.get("api_key").and_then(|v| v.as_str()) {
+                    if !v.contains("****") && !v.contains("...") && !v.is_empty() {
+                        sqlx::query("UPDATE whisper_settings SET remote_api_key = ?, updated_at = ? WHERE id = 1")
+                            .bind(v)
+                            .bind(&now)
+                            .execute(&state.db)
+                            .await?;
+                    }
+                }
+                if let Some(v) = w.get("base_url").and_then(|v| v.as_str()) {
+                    sqlx::query(
+                        "UPDATE whisper_settings SET remote_base_url = ?, updated_at = ? WHERE id = 1",
+                    )
+                    .bind(v)
+                    .bind(&now)
+                    .execute(&state.db)
+                    .await?;
+                }
+                if let Some(v) = w.get("language").and_then(|v| v.as_str()) {
+                    sqlx::query(
+                        "UPDATE whisper_settings SET remote_language = ?, updated_at = ? WHERE id = 1",
+                    )
+                    .bind(v)
+                    .bind(&now)
+                    .execute(&state.db)
+                    .await?;
+                }
+                if let Some(v) = w.get("timeout_sec").and_then(|v| v.as_i64()) {
+                    sqlx::query(
+                        "UPDATE whisper_settings SET remote_timeout_sec = ?, updated_at = ? WHERE id = 1",
+                    )
+                    .bind(v)
+                    .bind(&now)
+                    .execute(&state.db)
+                    .await?;
+                }
+                if let Some(v) = w.get("chunksize_mb").and_then(|v| v.as_i64()) {
+                    sqlx::query(
+                        "UPDATE whisper_settings SET remote_chunksize_mb = ?, updated_at = ? WHERE id = 1",
+                    )
+                    .bind(v)
+                    .bind(&now)
+                    .execute(&state.db)
+                    .await?;
+                }
             }
-        }
-        if let Some(v) = w.get("groq_model").and_then(|v| v.as_str()) {
-            sqlx::query(
-                "UPDATE whisper_settings SET groq_model = ?, updated_at = ? WHERE id = 1",
-            )
-            .bind(v)
-            .bind(&now)
-            .execute(&state.db)
-            .await?;
-        }
-        if let Some(v) = w.get("remote_language").and_then(|v| v.as_str()) {
-            sqlx::query(
-                "UPDATE whisper_settings SET remote_language = ?, updated_at = ? WHERE id = 1",
-            )
-            .bind(v)
-            .bind(&now)
-            .execute(&state.db)
-            .await?;
-        }
-        if let Some(v) = w.get("groq_language").and_then(|v| v.as_str()) {
-            sqlx::query(
-                "UPDATE whisper_settings SET groq_language = ?, updated_at = ? WHERE id = 1",
-            )
-            .bind(v)
-            .bind(&now)
-            .execute(&state.db)
-            .await?;
+            "groq" => {
+                if let Some(v) = w.get("api_key").and_then(|v| v.as_str()) {
+                    if !v.contains("****") && !v.contains("...") && !v.is_empty() {
+                        sqlx::query("UPDATE whisper_settings SET groq_api_key = ?, updated_at = ? WHERE id = 1")
+                            .bind(v)
+                            .bind(&now)
+                            .execute(&state.db)
+                            .await?;
+                    }
+                }
+                if let Some(v) = w.get("model").and_then(|v| v.as_str()) {
+                    sqlx::query(
+                        "UPDATE whisper_settings SET groq_model = ?, updated_at = ? WHERE id = 1",
+                    )
+                    .bind(v)
+                    .bind(&now)
+                    .execute(&state.db)
+                    .await?;
+                }
+                if let Some(v) = w.get("language").and_then(|v| v.as_str()) {
+                    sqlx::query(
+                        "UPDATE whisper_settings SET groq_language = ?, updated_at = ? WHERE id = 1",
+                    )
+                    .bind(v)
+                    .bind(&now)
+                    .execute(&state.db)
+                    .await?;
+                }
+                if let Some(v) = w.get("max_retries").and_then(|v| v.as_i64()) {
+                    sqlx::query(
+                        "UPDATE whisper_settings SET groq_max_retries = ?, updated_at = ? WHERE id = 1",
+                    )
+                    .bind(v)
+                    .bind(&now)
+                    .execute(&state.db)
+                    .await?;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -543,7 +611,8 @@ async fn update_config(
                 .await?;
         }
         if let Some(v) = o
-            .get("min_ad_segment_separation_seconds")
+            .get("min_ad_segement_separation_seconds")
+            .or_else(|| o.get("min_ad_segment_separation_seconds"))
             .and_then(|v| v.as_i64())
         {
             sqlx::query("UPDATE output_settings SET min_ad_segement_separation_seconds = ?, updated_at = ? WHERE id = 1")
@@ -794,8 +863,6 @@ async fn test_whisper(
 async fn whisper_capabilities() -> AppResult<Json<Value>> {
     Ok(Json(json!({
         "local_available": cfg!(feature = "local-whisper"),
-        "remote_available": true,
-        "groq_available": true,
     })))
 }
 
