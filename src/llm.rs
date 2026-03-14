@@ -1,10 +1,30 @@
 use genai::resolver::AuthData;
 use genai::{Client, ServiceTarget};
 
+/// Convert litellm-style model names (e.g. "gemini/gemini-2.0-flash") to
+/// genai-style namespace (e.g. "gemini::gemini-2.0-flash").
+///
+/// genai uses "::" as the namespace separator, while litellm/Python uses "/".
+/// Only converts the FIRST "/" — model names like "meta-llama/Llama-3" keep
+/// their internal slashes.
+pub fn to_genai_model(model: &str) -> String {
+    if model.contains("::") {
+        // Already in genai format
+        return model.to_string();
+    }
+    if let Some(slash_pos) = model.find('/') {
+        let prefix = &model[..slash_pos];
+        let rest = &model[slash_pos + 1..];
+        format!("{prefix}::{rest}")
+    } else {
+        model.to_string()
+    }
+}
+
 /// Build a genai Client configured with the given API key and optional base URL.
 ///
-/// The model name can use litellm-style prefixes (e.g., "gemini/gemini-3.1-flash",
-/// "openai/gpt-4o") and genai will route to the correct provider automatically.
+/// The model name can use litellm-style prefixes (e.g., "gemini/gemini-2.0-flash",
+/// "openai/gpt-4o") — they are automatically converted to genai's "::" format.
 pub fn build_genai_client(
     api_key: &str,
     _model: &str,
@@ -45,6 +65,8 @@ pub async fn chat_completion(
 ) -> Result<String, genai::Error> {
     use genai::chat::{ChatMessage, ChatOptions, ChatRequest};
 
+    let genai_model = to_genai_model(model);
+
     let mut messages = Vec::new();
     if let Some(sys) = system_prompt {
         messages.push(ChatMessage::system(sys));
@@ -61,7 +83,7 @@ pub async fn chat_completion(
         options.max_tokens = Some(mt);
     }
 
-    let response = client.exec_chat(model, chat_req, Some(&options)).await?;
+    let response = client.exec_chat(&genai_model, chat_req, Some(&options)).await?;
     #[allow(deprecated)]
     let text = response
         .content_text_as_str()

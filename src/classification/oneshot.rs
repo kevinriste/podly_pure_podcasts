@@ -318,10 +318,11 @@ async fn call_oneshot_llm(
         .with_max_tokens(config.max_tokens as u32)
         .with_response_format(ChatResponseFormat::JsonMode);
 
+    let genai_model = crate::llm::to_genai_model(&config.model);
     let mut last_error = String::new();
     for attempt in 0..config.max_retries {
         match genai_client
-            .exec_chat(&config.model, chat_req.clone(), Some(&options))
+            .exec_chat(&genai_model, chat_req.clone(), Some(&options))
             .await
         {
             Ok(response) => {

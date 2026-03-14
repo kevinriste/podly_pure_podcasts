@@ -210,8 +210,9 @@ async fn call_refinement_llm(
         .with_temperature(0.1)
         .with_max_tokens(4096u32);
 
+    let genai_model = crate::llm::to_genai_model(&config.model);
     let response = genai_client
-        .exec_chat(&config.model, chat_req, Some(&options))
+        .exec_chat(&genai_model, chat_req, Some(&options))
         .await
         .map_err(|e| format!("LLM error: {e}"))?;
 

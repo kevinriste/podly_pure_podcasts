@@ -817,9 +817,10 @@ async fn run_llm_probe(
     ]);
 
     let options = genai::chat::ChatOptions::default()
-        .with_max_tokens(1u32);
+        .with_max_tokens(10u32);
 
-    match client.exec_chat(model, chat_req, Some(&options)).await {
+    let genai_model = crate::llm::to_genai_model(model);
+    match client.exec_chat(&genai_model, chat_req, Some(&options)).await {
         Ok(_) => Ok(Json(json!({"ok": true, "message": success_message}))),
         Err(e) => Err(AppError::Llm(format!("LLM error: {e}"))),
     }
