@@ -1,6 +1,6 @@
 # Python/Rust Backend Parity Status
 
-Last updated: 2026-03-14
+Last updated: 2026-03-15
 
 ## Verified Matching Endpoints
 
@@ -60,14 +60,24 @@ between Python (podly.klt.pw) and Rust (podly2.klt.pw).
 - **processing_job records**: Rust DB is missing historical `processing_job` records from Python's job system. This causes `GET /api/posts/{guid}/status` to return "skipped" (no job) instead of "completed" (with job + started_at). Code is correct for both states.
 - **ad_detection_strategy**: Python resolves "inherit" to the actual strategy; Rust returns raw "inherit". Frontend handles this client-side.
 
-### Architectural Limitations
-- **`POST /api/config/test-llm`**: Now uses `genai` crate which supports Gemini, Anthropic, Groq, etc. natively. Should match Python's `litellm` coverage for all major providers.
+### Architectural Choices (By Design)
+- **LLM provider**: `genai` crate (Rust) vs `litellm` (Python). Both support OpenAI, Anthropic, Gemini, Groq. See DECISION-020.
 - **`POST /feed` response format**: Python returns 302 redirect (server-rendered), Rust returns 201 JSON. Both correctly add the feed. Frontend handles both.
 - **`GET /api/auth/me` after logout**: Python doesn't actually clear the session on logout (returns user data). Rust correctly returns 401. This is a Python bug.
+- **`search_feeds`**: PodcastIndex API (Rust) vs iTunes (Python) — same result format.
+- **Ad merging**: Proximity-only (Rust) vs proximity + content-aware keyword extraction (Python). See DECISION-034.
+- **Session store**: Custom SQLite-backed (Rust) vs Flask server-side (Python). Both persist across restarts. See DECISION-032.
+- **Password hashing**: Argon2id (Rust) with bcrypt fallback for legacy hashes. See DECISION-015.
+
+### Pipeline Differences (Accepted)
+- Content-aware ad merging (keyword/sponsor/URL detection) — not implemented (DECISION-034)
+- No proactive token rate limiting (reactive 429 backoff only)
+- `max_tokens` instead of `max_completion_tokens` for newer OpenAI models (DECISION-036)
+- No pre-reprocess snapshot creation
+- No input token count validation/trimming for oversized prompts
 
 ### Environment Differences
 - **whisper-capabilities `local_available`**: Python has whisper installed, Rust compiled without `local-whisper` feature. Not a code issue.
-- **billing/status**: Both return 404 (billing not configured). Different HTML (Flask 404 vs SPA).
 
 ### Not Yet Tested
 - Full process/reprocess lifecycle (downloading audio, transcribing, running LLM, building output)
@@ -75,8 +85,3 @@ between Python (podly.klt.pw) and Rust (podly2.klt.pw).
 - Billing/Stripe webhook handling
 - Discord OAuth flow (tested config endpoint only)
 - Large file uploads/downloads under load
-
-### Operational Notes
-- **toggle-whitelist-all creates processing jobs**: When whitelisting all posts, the `enqueue_pending_jobs` call creates pending processing jobs for every newly whitelisted post. Be careful with this endpoint in testing — always unwhitelist-all to undo, AND clean up pending jobs from the DB.
-- **Python add_feed works**: Earlier test failure was due to wrong credentials. Python returns 302 redirect, Rust returns 201 JSON. Both correctly add the feed.
-- **Refresh feed is async**: Both backends now fire-and-forget the refresh. Python uses a background Thread, Rust uses `tokio::spawn`.

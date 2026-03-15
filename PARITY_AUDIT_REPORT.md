@@ -122,24 +122,27 @@
 59. **fade_ms from config** — Audio cutting now reads `fade_ms` from `output_settings` (was hardcoded 50ms, DB default is 3000ms)
 60. **user_feed auth check** — `/feed/user/{user_id}` now checks that requesting user is admin or same user (was unauthenticated — security vulnerability)
 
-## Remaining Known Pipeline Differences
+## Remaining Known Pipeline Differences (Updated 2026-03-15)
 
-- Audio fade applied at content-segment edges (Rust) vs ad boundaries (Python) — produces slightly different audio
-- No ad segment merging/filtering before audio cut (short/spurious segments not consolidated)
-- No heuristic fallback when LLM boundary refinement fails
+- ~~No ad segment merging/filtering~~ — **FIXED**: proximity merge + short-segment filter + last-segment extension
+- ~~No heuristic fallback when LLM boundary refinement fails~~ — **FIXED**: heuristic_refine() with intro/outro patterns
+- ~~Oneshot skipped boundary refinement~~ — **FIXED**: refine() called for all strategies
+- ~~ffmpeg fails hard on complex filter errors~~ — **FIXED**: simple fallback extracts segments individually
+- Content-aware ad merging (keyword/sponsor/URL detection) — NOT IMPLEMENTED (DECISION-034)
+- No proactive token rate limiting in Rust (reactive 429 backoff only)
+- `max_tokens` used instead of `max_completion_tokens` for newer models (DECISION-036)
+- No pre-reprocess snapshot creation
+- No input token count validation/trimming for oversized prompts
 - Refined boundaries stored as `[(start, end)]` tuples (Rust) vs `[{orig_start, orig_end, refined_start, refined_end}]` dicts (Python)
 - Transcript markers `=== TRANSCRIPT START ===` vs `[TRANSCRIPT START]`
-- No token rate limiting in Rust
-- No `max_completion_tokens` support for newer OpenAI models (uses `max_tokens` always)
-- No pre-reprocess snapshot creation
 
-## Remaining Known Differences (Database Layer)
+## Remaining Known Differences (Database Layer, Updated 2026-03-15)
 
 - DateTime format: Python stores naive datetimes, Rust stores RFC 3339 with timezone — functionally compatible in SQLite
 - `JobsManagerRun` orchestration not created by Rust (reads existing Python-era runs only)
 - Post cleanup doesn't remove orphaned transcript/identification data (audio files only)
 - Token ID format differs (Rust strips dashes) — existing Python tokens still work
-- Session store is in-memory (lost on restart) — needs SQLite-backed store for production
+- ~~Session store is in-memory~~ — **FIXED**: SQLite-backed session store (DECISION-032)
 
 ## Files Modified (16 files, ~1050 insertions, ~240 deletions)
 

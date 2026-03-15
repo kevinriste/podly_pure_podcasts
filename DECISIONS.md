@@ -158,14 +158,14 @@
 **Rust behavior:** `migrate_legacy` binary reads old DB (read-only) and writes to new DB with `INSERT OR IGNORE`.
 **Rationale:** Preserving IDs maintains foreign key integrity. `INSERT OR IGNORE` makes migration idempotent (safe to re-run). Column intersection handles minor schema differences between Python and Rust settings tables.
 
-## DECISION-020: LLM classification uses raw HTTP instead of litellm
-**Date:** 2026-03-14
+## DECISION-020: LLM calls via genai crate (multi-provider)
+**Date:** 2026-03-14 (updated 2026-03-15)
 **Category:** architecture
 **Context:** Python uses `litellm` for LLM calls, which abstracts OpenAI, Anthropic, Groq, etc. Rust has no litellm equivalent.
-**Decision:** Use raw HTTP calls to OpenAI-compatible `/chat/completions` endpoints via `reqwest`. The `openai_base_url` setting redirects to any compatible provider (Groq, Ollama, etc.).
-**Python behavior:** `litellm.completion()` with automatic provider detection from model name prefix.
-**Rust behavior:** Direct HTTP POST to `{base_url}/chat/completions` with Bearer auth.
-**Rationale:** Most LLM providers support the OpenAI chat completions API format. Using raw HTTP avoids adding a large dependency. The `openai_base_url` config handles provider switching.
+**Decision:** Initially used raw reqwest HTTP calls. Later replaced with `genai` crate which natively supports OpenAI, Anthropic, Gemini, Groq, and other providers. The `openai_base_url` setting redirects to any compatible provider.
+**Python behavior:** `litellm.completion()` with automatic provider detection from model name prefix (e.g., `gemini/...`, `anthropic/...`).
+**Rust behavior:** `genai` crate with model namespace conversion (`/` → `::`). Supports structured outputs (JsonSpec) for compatible models.
+**Rationale:** `genai` provides multi-provider abstraction closer to litellm's capabilities than raw HTTP, with native support for Gemini, Anthropic, etc.
 
 ## DECISION-021: System prompt embedded via include_str!
 **Date:** 2026-03-14
@@ -263,3 +263,44 @@
 **Python behavior:** Token params from `request.args` propagated to all RSS URLs.
 **Rust behavior:** `FeedTokenQuery` struct extracts params, `build_token_suffix()` formats them, generator's `append_token()` applies them.
 **Rationale:** Without this, authenticated RSS feeds would generate URLs that podcast apps can't access.
+
+## DECISION-032: Custom SQLite session store (not tower-sessions-sqlx-store)
+**Date:** 2026-03-15
+**Category:** architecture
+**Context:** `tower-sessions-sqlx-store 0.14` depends on `tower-sessions-core 0.13`, creating a version mismatch with `tower-sessions 0.14` (which uses core 0.14). DECISION-016 documented this as a temporary in-memory workaround.
+**Decision:** Implemented custom `SqliteSessionStore` in `src/db/session_store.rs` that directly implements the `SessionStore` trait using our existing sqlx pool. Sessions stored as `(id TEXT, data TEXT JSON, expiry_date INTEGER unix_timestamp)`.
+**Python behavior:** Flask server-side sessions persist across restarts.
+**Rust behavior:** Same — sessions in SQLite, survive restarts. Table auto-created on startup.
+**Rationale:** Avoids the version mismatch entirely. ~120 lines of code, no new dependencies.
+
+## DECISION-033: BASE_URL env var for RSS feed URLs
+**Date:** 2026-03-15
+**Category:** config
+**Context:** `base_url()` in feeds.rs hardcoded `http://{host}:{port}`. Behind a reverse proxy with HTTPS, RSS feed URLs would use wrong scheme. Python uses Flask's `request.host_url` which respects `X-Forwarded-Proto` via `ProxyFix`.
+**Decision:** Added `BASE_URL` / `PODLY_BASE_URL` env var to `AppConfig`. `base_url()` returns it if set, falls back to `http://{host}:{port}`.
+**Rationale:** Simpler than threading request headers through to every RSS generation call. Standard pattern for containerized apps.
+
+## DECISION-034: Proximity-only ad segment merging (no content-aware pass)
+**Date:** 2026-03-15
+**Category:** pipeline, accepted-difference
+**Context:** Python's `AdMerger` does 3 passes: proximity grouping, content-aware refinement (URL/promo/brand keyword extraction + shared-sponsor detection), and weak-group filtering. The content-aware pass requires transcript segment text with ORM relationships.
+**Decision:** Implement proximity merging + short-segment filtering + last-segment extension. Skip the content-aware keyword extraction pass.
+**Python behavior:** Extracts URLs (`.com/.net/.org`), promo codes (`code X`), phone numbers, brand names (capitalized words 2+ occurrences). Merges groups sharing keywords or with high confidence.
+**Rust behavior:** Proximity merge only (configurable gap threshold from DB). No keyword extraction.
+**Rationale:** The content-aware pass requires access to transcript segment text and ORM relationships that aren't easily available at the merge step. The proximity merge handles the common case (adjacent ad segments). The keyword pass is an optimization for multi-sponsor episodes — acceptable to defer.
+
+## DECISION-035: Refinement temperature 0.1 matches Python
+**Date:** 2026-03-15
+**Category:** pipeline
+**Context:** Audit flagged Rust's `with_temperature(0.1)` in refinement LLM calls as differing from Python. Verified by reading `_python_ref/podcast_processor/boundary_refiner.py:126`.
+**Decision:** Both use `temperature=0.1`. No change needed.
+**Rationale:** Confirmed by code inspection. Low temperature is appropriate for structured JSON output from refinement calls.
+
+## DECISION-036: max_tokens vs max_completion_tokens
+**Date:** 2026-03-15
+**Category:** pipeline, accepted-difference
+**Context:** Newer OpenAI models (o1, o3, etc.) use `max_completion_tokens` and ignore `max_tokens`. Python's litellm handles this transparently.
+**Decision:** Use `max_tokens` via genai crate. The genai crate may handle the parameter name translation for newer models; if not, this is a known gap.
+**Python behavior:** litellm automatically uses the correct parameter name per model.
+**Rust behavior:** Always sends `max_tokens`.
+**Rationale:** Acceptable for now. Most users use standard OpenAI/Anthropic models that accept `max_tokens`. genai crate updates may address this.
