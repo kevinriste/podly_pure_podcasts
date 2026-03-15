@@ -167,6 +167,10 @@ pub fn count_tokens(text: &str, model: &str) -> usize {
 }
 
 /// Execute a chat completion and return the response text.
+///
+/// For models requiring `max_completion_tokens` (gpt-4o, gpt-5, o1, etc.),
+/// bypasses genai and uses raw HTTP to the OpenAI API. This works around
+/// https://github.com/jeremychone/rust-genai/issues/139
 #[allow(dead_code)]
 pub async fn chat_completion(
     client: &Client,
@@ -176,6 +180,19 @@ pub async fn chat_completion(
     temperature: Option<f64>,
     max_tokens: Option<u32>,
 ) -> Result<String, genai::Error> {
+    // Workaround: models that need max_completion_tokens can't go through genai
+    // (genai sends max_tokens which newer OpenAI models reject).
+    // See: https://github.com/jeremychone/rust-genai/issues/139
+    if model_uses_max_completion_tokens(model) && max_tokens.is_some() {
+        match chat_completion_raw_openai(model, system_prompt, user_prompt, temperature, max_tokens).await {
+            Ok(text) => return Ok(text),
+            Err(e) => {
+                tracing::warn!("Raw OpenAI fallback failed: {e}, trying genai path");
+                // Fall through to genai — it might work if the model accepts max_tokens after all
+            }
+        }
+    }
+
     use genai::chat::{ChatMessage, ChatOptions, ChatRequest};
 
     let genai_model = to_genai_model(model);
@@ -203,4 +220,58 @@ pub async fn chat_completion(
         .unwrap_or("")
         .to_string();
     Ok(text)
+}
+
+/// Raw HTTP fallback for models that require max_completion_tokens.
+/// Uses OPENAI_API_KEY env var or the key from the genai client.
+async fn chat_completion_raw_openai(
+    model: &str,
+    system_prompt: Option<&str>,
+    user_prompt: &str,
+    temperature: Option<f64>,
+    max_tokens: Option<u32>,
+) -> anyhow::Result<String> {
+    let api_key = std::env::var("OPENAI_API_KEY")
+        .or_else(|_| std::env::var("LLM_API_KEY"))
+        .map_err(|_| anyhow::anyhow!("No API key for raw OpenAI fallback"))?;
+
+    let base_url = std::env::var("OPENAI_BASE_URL")
+        .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+
+    let mut messages = Vec::new();
+    if let Some(sys) = system_prompt {
+        messages.push(serde_json::json!({"role": "system", "content": sys}));
+    }
+    messages.push(serde_json::json!({"role": "user", "content": user_prompt}));
+
+    // Strip provider prefix (e.g., "openai/gpt-4o" → "gpt-4o")
+    let model_name = model.split(['/', ':']).last().unwrap_or(model);
+
+    let mut body = serde_json::json!({
+        "model": model_name,
+        "messages": messages,
+    });
+
+    if let Some(t) = temperature {
+        body["temperature"] = serde_json::json!(t);
+    }
+    if let Some(mt) = max_tokens {
+        body["max_completion_tokens"] = serde_json::json!(mt);
+    }
+
+    tracing::info!("Using raw OpenAI fallback for model {model_name} (max_completion_tokens)");
+
+    let resp = reqwest::Client::new()
+        .post(format!("{}/chat/completions", base_url.trim_end_matches('/')))
+        .bearer_auth(&api_key)
+        .json(&body)
+        .send()
+        .await?;
+
+    let data: serde_json::Value = resp.json().await?;
+
+    data["choices"][0]["message"]["content"]
+        .as_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow::anyhow!("No content in OpenAI response: {data}"))
 }
