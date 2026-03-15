@@ -153,7 +153,7 @@ Return JSON."#
                     Err(e) => {
                         tracing::error!("Failed to parse one-shot response: {e}");
                         let _ = sqlx::query(
-                            "UPDATE model_call SET status = 'error', error_message = ? WHERE id = ?",
+                            "UPDATE model_call SET status = 'failed_permanent', error_message = ? WHERE id = ?",
                         )
                         .bind(format!("Parse error: {e}"))
                         .bind(model_call_id)
@@ -165,7 +165,7 @@ Return JSON."#
             Err(e) => {
                 tracing::error!("One-shot LLM call failed: {e}");
                 let _ = sqlx::query(
-                    "UPDATE model_call SET status = 'error', error_message = ? WHERE id = ?",
+                    "UPDATE model_call SET status = 'failed_permanent', error_message = ? WHERE id = ?",
                 )
                 .bind(e.to_string())
                 .bind(model_call_id)

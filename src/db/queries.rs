@@ -376,7 +376,8 @@ pub async fn clear_post_identifications(pool: &SqlitePool, post_id: i64) -> AppR
     .execute(pool)
     .await?;
 
-    sqlx::query("DELETE FROM model_call WHERE post_id = ?")
+    // Python parity: preserve Whisper model calls so transcript can be reused
+    sqlx::query("DELETE FROM model_call WHERE post_id = ? AND model_name NOT LIKE '%whisper%'")
         .bind(post_id)
         .execute(pool)
         .await?;

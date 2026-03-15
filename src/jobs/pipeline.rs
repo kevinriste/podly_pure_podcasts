@@ -20,16 +20,16 @@ pub async fn run_pipeline(
     job_id: &str,
     post_guid: &str,
 ) -> Result<(), PipelineError> {
-    let post: Option<(i64, i64, String, Option<String>, Option<String>, Option<String>)> =
+    let post: Option<(i64, i64, String, Option<String>, Option<String>, Option<String>, Option<String>)> =
         sqlx::query_as(
-            "SELECT id, feed_id, title, download_url, unprocessed_audio_path, processed_audio_path FROM post WHERE guid = ?",
+            "SELECT id, feed_id, title, download_url, unprocessed_audio_path, processed_audio_path, description FROM post WHERE guid = ?",
         )
         .bind(post_guid)
         .fetch_optional(pool)
         .await
         .map_err(|e| PipelineError::Db(e.to_string()))?;
 
-    let Some((post_id, feed_id, post_title, download_url, existing_audio, processed_audio)) = post
+    let Some((post_id, feed_id, post_title, download_url, existing_audio, processed_audio, post_description)) = post
     else {
         return Err(PipelineError::NotFound("Post not found".into()));
     };
@@ -52,7 +52,7 @@ pub async fn run_pipeline(
             .unwrap_or(None);
     let (feed_title, feed_description, feed_strategy) = feed_info
         .unwrap_or_else(|| ("Unknown Podcast".into(), None, "inherit".into()));
-    let feed_description = feed_description.unwrap_or_else(|| feed_title.clone());
+    let _feed_description = feed_description.unwrap_or_else(|| feed_title.clone());
 
     // Determine ad detection strategy: feed-level overrides app-level
     let app_strategy: String = sqlx::query_as::<_, (String,)>(
@@ -123,9 +123,12 @@ pub async fn run_pipeline(
                 "Classifying ads"
             };
             update_step(pool, job_id, 3, step_name, 55.0).await;
+            // Python parity: classifiers use post title/description, not feed-level
+            let classify_title = &post_title;
+            let classify_desc = post_description.as_deref().unwrap_or("");
             let ad_segments = match strategy.as_str() {
-                "oneshot" => classify_oneshot(pool, config, post_id, &segments, &feed_title, &feed_description).await?,
-                _ => classify(pool, config, post_id, &segments, &feed_title, &feed_description).await?,
+                "oneshot" => classify_oneshot(pool, config, post_id, &segments, classify_title, classify_desc).await?,
+                _ => classify(pool, config, post_id, &segments, classify_title, classify_desc).await?,
             };
             update_step(pool, job_id, 3, step_name, 70.0).await;
 
@@ -140,7 +143,18 @@ pub async fn run_pipeline(
 
     // Step 4: Process audio (matches Python step 4 "Processing audio")
     update_step(pool, job_id, 4, "Processing audio", 75.0).await;
-    let output_path = cut_audio(&audio_path, &refined, &feed_title, &post_title).await?;
+
+    // Read fade_ms from output_settings (Python uses config.output.fade_ms, default 3000)
+    let fade_ms: i64 = sqlx::query_as::<_, (i64,)>(
+        "SELECT fade_ms FROM output_settings WHERE id = 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .unwrap_or(None)
+    .map(|(v,)| v)
+    .unwrap_or(3000);
+
+    let output_path = cut_audio(&audio_path, &refined, &feed_title, &post_title, fade_ms).await?;
     update_step(pool, job_id, 4, "Processing audio", 90.0).await;
 
     let _ = sqlx::query("UPDATE post SET processed_audio_path = ? WHERE id = ?")
@@ -211,7 +225,18 @@ async fn download_audio(
 
     tracing::info!("Downloading audio from {url} to {}", path.display());
 
-    let response = reqwest::get(url)
+    // Python parity: User-Agent header, Referer for acast, 60s timeout
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| PipelineError::Download(e.to_string()))?;
+    let mut req = client
+        .get(url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
+    if url.contains("acast.com") {
+        req = req.header("Referer", "https://www.acast.com/");
+    }
+    let mut response = req.send()
         .await
         .map_err(|e| PipelineError::Download(e.to_string()))?;
 
@@ -222,14 +247,17 @@ async fn download_audio(
         )));
     }
 
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| PipelineError::Download(e.to_string()))?;
-
-    tokio::fs::write(&path, &bytes)
+    // Stream to file instead of loading entirely into memory (Python parity)
+    let mut file = tokio::fs::File::create(&path)
         .await
         .map_err(|e| PipelineError::Io(e.to_string()))?;
+    use tokio::io::AsyncWriteExt;
+    while let Some(chunk) = response.chunk().await.map_err(|e| PipelineError::Download(e.to_string()))? {
+        file.write_all(&chunk)
+            .await
+            .map_err(|e| PipelineError::Io(e.to_string()))?;
+    }
+    file.flush().await.map_err(|e| PipelineError::Io(e.to_string()))?;
 
     let path_str = path.to_str().unwrap_or("");
     let _ = sqlx::query("UPDATE post SET unprocessed_audio_path = ? WHERE id = ?")
@@ -714,6 +742,7 @@ async fn cut_audio(
     ad_segments: &[(f64, f64)],
     feed_title: &str,
     post_title: &str,
+    fade_ms: i64,
 ) -> Result<PathBuf, PipelineError> {
     let sanitized_feed = sanitize_filename(feed_title);
     let sanitized_post = sanitize_filename(post_title);
@@ -736,7 +765,7 @@ async fn cut_audio(
                 .iter()
                 .map(|(s, e)| ((*s * 1000.0) as i64, (*e * 1000.0) as i64))
                 .collect::<Vec<_>>(),
-            50,
+            fade_ms,
             false,
         )
         .await
