@@ -6,342 +6,103 @@
 <title>Podly Rust Rewrite — Progress Report</title>
 <style>
   :root {
-    --bg: #0d1117;
-    --surface: #161b22;
-    --border: #30363d;
-    --text: #e6edf3;
-    --text-muted: #8b949e;
-    --accent: #58a6ff;
-    --green: #3fb950;
-    --red: #f85149;
-    --orange: #d29922;
-    --purple: #bc8cff;
-    --teal: #39d353;
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #e6edf3; --text-muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --red: #f85149; --orange: #d29922; --purple: #bc8cff;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    line-height: 1.6;
-    padding: 0;
-  }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
 
-  /* Hero */
-  .hero {
-    background: linear-gradient(135deg, #0d1117 0%, #1a1f36 50%, #0d1117 100%);
-    padding: 4rem 1.5rem 3rem;
-    text-align: center;
-    border-bottom: 1px solid var(--border);
-    position: relative;
-    overflow: hidden;
-  }
-  .hero::before {
-    content: '';
-    position: absolute;
-    top: -50%;
-    left: -50%;
-    width: 200%;
-    height: 200%;
-    background: radial-gradient(circle at 30% 50%, rgba(88,166,255,0.06) 0%, transparent 50%),
-                radial-gradient(circle at 70% 50%, rgba(188,140,255,0.04) 0%, transparent 50%);
-    pointer-events: none;
-  }
-  .hero h1 {
-    font-size: clamp(2rem, 5vw, 3.5rem);
-    font-weight: 800;
-    margin-bottom: 0.5rem;
-    position: relative;
-  }
+  .hero { background: linear-gradient(135deg, #0d1117 0%, #1a1f36 50%, #0d1117 100%); padding: 4rem 1.5rem 3rem; text-align: center; border-bottom: 1px solid var(--border); position: relative; overflow: hidden; }
+  .hero::before { content: ''; position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle at 30% 50%, rgba(88,166,255,0.06) 0%, transparent 50%), radial-gradient(circle at 70% 50%, rgba(188,140,255,0.04) 0%, transparent 50%); pointer-events: none; }
+  .hero h1 { font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 800; margin-bottom: 0.5rem; position: relative; }
   .hero h1 .rust { color: var(--orange); }
-  .hero p {
-    color: var(--text-muted);
-    font-size: 1.15rem;
-    max-width: 600px;
-    margin: 0 auto;
-    position: relative;
-  }
-  .hero-date {
-    color: var(--text-muted);
-    font-size: 0.9rem;
-    margin-top: 1rem;
-    position: relative;
-  }
+  .hero p { color: var(--text-muted); font-size: 1.15rem; max-width: 600px; margin: 0 auto; position: relative; }
+  .hero-date { color: var(--text-muted); font-size: 0.9rem; margin-top: 1rem; position: relative; }
+  .hero-date a { color: var(--accent); text-decoration: none; }
 
-  /* Container */
-  .container {
-    max-width: 1100px;
-    margin: 0 auto;
-    padding: 0 1.5rem;
-  }
+  .container { max-width: 1100px; margin: 0 auto; padding: 0 1.5rem; }
 
-  /* Metrics bar */
-  .metrics-bar {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 1px;
-    background: var(--border);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    overflow: hidden;
-    margin: -2rem auto 3rem;
-    max-width: 900px;
-    position: relative;
-    z-index: 1;
-  }
-  .metric {
-    background: var(--surface);
-    padding: 1.5rem;
-    text-align: center;
-  }
-  .metric-value {
-    font-size: 2.2rem;
-    font-weight: 800;
-    line-height: 1.1;
-  }
+  .metrics-bar { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin: -2rem auto 3rem; max-width: 900px; position: relative; z-index: 1; }
+  .metric { background: var(--surface); padding: 1.5rem; text-align: center; }
+  .metric-value { font-size: 2.2rem; font-weight: 800; line-height: 1.1; }
   .metric-value.green { color: var(--green); }
   .metric-value.orange { color: var(--orange); }
   .metric-value.purple { color: var(--purple); }
   .metric-value.accent { color: var(--accent); }
-  .metric-label {
-    color: var(--text-muted);
-    font-size: 0.85rem;
-    margin-top: 0.25rem;
-  }
+  .metric-label { color: var(--text-muted); font-size: 0.85rem; margin-top: 0.25rem; }
 
-  /* Section */
-  section {
-    margin-bottom: 3rem;
-  }
-  section h2 {
-    font-size: 1.6rem;
-    font-weight: 700;
-    margin-bottom: 1rem;
-    padding-bottom: 0.5rem;
-    border-bottom: 1px solid var(--border);
-  }
-  section h3 {
-    font-size: 1.1rem;
-    font-weight: 600;
-    color: var(--accent);
-    margin: 1.5rem 0 0.75rem;
-  }
+  section { margin-bottom: 3rem; }
+  section h2 { font-size: 1.6rem; font-weight: 700; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--border); }
+  section h3 { font-size: 1.1rem; font-weight: 600; color: var(--accent); margin: 1.5rem 0 0.75rem; }
 
-  /* Comparison cards */
-  .compare-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 1rem;
-  }
-  .compare-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 1.5rem;
-    position: relative;
-  }
-  .compare-card .label {
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-muted);
-    margin-bottom: 0.75rem;
-  }
-  .compare-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    padding: 0.5rem 0;
-    border-bottom: 1px solid var(--border);
-  }
+  .compare-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; }
+  .compare-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 1.5rem; position: relative; }
+  .compare-card .label { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); margin-bottom: 0.75rem; }
+  .compare-row { display: flex; justify-content: space-between; align-items: baseline; padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
   .compare-row:last-child { border: none; }
   .compare-row .tech { color: var(--text-muted); font-size: 0.9rem; }
   .compare-row .val { font-weight: 600; font-size: 1.1rem; }
   .compare-row .val.python { color: var(--red); }
   .compare-row .val.rust { color: var(--green); }
-  .ratio-badge {
-    position: absolute;
-    top: -10px;
-    right: 16px;
-    background: var(--green);
-    color: #000;
-    font-size: 0.75rem;
-    font-weight: 800;
-    padding: 2px 10px;
-    border-radius: 20px;
-  }
+  .ratio-badge { position: absolute; top: -10px; right: 16px; background: var(--green); color: #000; font-size: 0.75rem; font-weight: 800; padding: 2px 10px; border-radius: 20px; }
 
-  /* Bar chart */
-  .bar-chart {
-    margin: 1rem 0;
-  }
-  .bar-group {
-    margin-bottom: 1rem;
-  }
-  .bar-group .bar-label {
-    font-size: 0.85rem;
-    color: var(--text-muted);
-    margin-bottom: 0.25rem;
-  }
-  .bar-track {
-    background: var(--surface);
-    border-radius: 6px;
-    height: 32px;
-    position: relative;
-    overflow: hidden;
-    border: 1px solid var(--border);
-  }
-  .bar-fill {
-    height: 100%;
-    border-radius: 6px;
-    display: flex;
-    align-items: center;
-    padding: 0 12px;
-    font-size: 0.8rem;
-    font-weight: 600;
-    min-width: fit-content;
-    white-space: nowrap;
-    transition: width 1s ease;
-  }
+  .bar-chart { margin: 1rem 0; }
+  .bar-group { margin-bottom: 1rem; }
+  .bar-group .bar-label { font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.25rem; }
+  .bar-track { background: var(--surface); border-radius: 6px; height: 32px; position: relative; overflow: hidden; border: 1px solid var(--border); }
+  .bar-fill { height: 100%; border-radius: 6px; display: flex; align-items: center; padding: 0 12px; font-size: 0.8rem; font-weight: 600; min-width: fit-content; white-space: nowrap; }
   .bar-fill.python { background: linear-gradient(90deg, #da3633, #f85149); }
   .bar-fill.rust { background: linear-gradient(90deg, #238636, #3fb950); }
 
-  /* Audit table */
-  .audit-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.9rem;
-  }
-  .audit-table th, .audit-table td {
-    padding: 0.75rem 1rem;
-    text-align: left;
-    border-bottom: 1px solid var(--border);
-  }
-  .audit-table th {
-    background: var(--surface);
-    color: var(--text-muted);
-    font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    position: sticky;
-    top: 0;
-  }
+  .audit-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  .audit-table th, .audit-table td { padding: 0.75rem 1rem; text-align: left; border-bottom: 1px solid var(--border); }
+  .audit-table th { background: var(--surface); color: var(--text-muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
   .audit-table tr:hover td { background: rgba(88,166,255,0.04); }
-  .badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 12px;
-    font-size: 0.75rem;
-    font-weight: 600;
-  }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; }
   .badge.critical { background: rgba(248,81,73,0.15); color: var(--red); }
   .badge.moderate { background: rgba(210,153,34,0.15); color: var(--orange); }
   .badge.minor { background: rgba(139,148,158,0.15); color: var(--text-muted); }
   .badge.fixed { background: rgba(63,185,80,0.15); color: var(--green); }
 
-  /* Timeline */
-  .timeline {
-    position: relative;
-    padding-left: 2rem;
-  }
-  .timeline::before {
-    content: '';
-    position: absolute;
-    left: 7px;
-    top: 0;
-    bottom: 0;
-    width: 2px;
-    background: var(--border);
-  }
-  .timeline-item {
-    position: relative;
-    margin-bottom: 1.5rem;
-    padding-left: 1rem;
-  }
-  .timeline-item::before {
-    content: '';
-    position: absolute;
-    left: -2rem;
-    top: 6px;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: var(--accent);
-    border: 2px solid var(--bg);
-  }
+  .timeline { position: relative; padding-left: 2rem; }
+  .timeline::before { content: ''; position: absolute; left: 7px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+  .timeline-item { position: relative; margin-bottom: 1.5rem; padding-left: 1rem; }
+  .timeline-item::before { content: ''; position: absolute; left: -2rem; top: 6px; width: 12px; height: 12px; border-radius: 50%; background: var(--accent); border: 2px solid var(--bg); }
   .timeline-item.done::before { background: var(--green); }
   .timeline-item.pending::before { background: var(--orange); }
-  .timeline-date {
-    font-size: 0.8rem;
-    color: var(--text-muted);
-  }
-  .timeline-title {
-    font-weight: 600;
-    margin-bottom: 0.25rem;
-  }
-  .timeline-desc {
-    color: var(--text-muted);
-    font-size: 0.9rem;
-  }
+  .timeline-date { font-size: 0.8rem; color: var(--text-muted); }
+  .timeline-title { font-weight: 600; margin-bottom: 0.25rem; }
+  .timeline-desc { color: var(--text-muted); font-size: 0.9rem; }
 
-  /* Fixes list */
-  .fixes-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 0.75rem;
-  }
-  .fix-item {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 0.75rem 1rem;
-    font-size: 0.85rem;
-    display: flex;
-    gap: 0.5rem;
-    align-items: flex-start;
-  }
-  .fix-item .icon { flex-shrink: 0; }
+  .fixes-list { list-style: none; padding: 0; columns: 2; column-gap: 1.5rem; }
+  .fixes-list li { break-inside: avoid; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.6rem 0.75rem; font-size: 0.85rem; margin-bottom: 0.5rem; line-height: 1.4; }
+  .fixes-list li code { background: rgba(88,166,255,0.1); padding: 1px 4px; border-radius: 3px; font-size: 0.8rem; }
 
-  /* Footer */
-  footer {
-    text-align: center;
-    padding: 3rem 1rem;
-    border-top: 1px solid var(--border);
-    color: var(--text-muted);
-    font-size: 0.85rem;
-  }
+  .remaining-list { list-style: none; padding: 0; }
+  .remaining-list li { padding: 0.5rem 0; border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 0.9rem; padding-left: 1.5rem; position: relative; }
+  .remaining-list li::before { content: '>'; position: absolute; left: 0; color: var(--orange); font-weight: bold; }
+
+  .decision-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  .decision-table th, .decision-table td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+  .decision-table th { background: var(--surface); color: var(--text-muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  .decision-table tr:hover td { background: rgba(88,166,255,0.04); }
+  .decision-table td:first-child { white-space: nowrap; color: var(--accent); font-weight: 600; }
+
+  .info-box { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; font-size: 0.9rem; margin: 1rem 0; }
+
+  footer { text-align: center; padding: 3rem 1rem; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 0.85rem; }
   footer a { color: var(--accent); text-decoration: none; }
   footer a:hover { text-decoration: underline; }
 
-  /* Responsive */
-  @media (max-width: 600px) {
+  @media (max-width: 700px) {
     .hero { padding: 3rem 1rem 2rem; }
     .metrics-bar { grid-template-columns: repeat(2, 1fr); margin-top: -1.5rem; }
     .compare-grid { grid-template-columns: 1fr; }
-    .fixes-grid { grid-template-columns: 1fr; }
+    .fixes-list { columns: 1; }
     .audit-table { font-size: 0.8rem; }
-    .audit-table th, .audit-table td { padding: 0.5rem 0.5rem; }
-  }
-
-  /* Remaining items */
-  .remaining-list {
-    list-style: none;
-    padding: 0;
-  }
-  .remaining-list li {
-    padding: 0.5rem 0;
-    border-bottom: 1px solid var(--border);
-    color: var(--text-muted);
-    font-size: 0.9rem;
-    padding-left: 1.5rem;
-    position: relative;
-  }
-  .remaining-list li::before {
-    content: '>';
-    position: absolute;
-    left: 0;
-    color: var(--orange);
-    font-weight: bold;
+    .audit-table th, .audit-table td { padding: 0.5rem; }
+    .decision-table { font-size: 0.8rem; }
   }
 </style>
 </head>
@@ -349,338 +110,214 @@
 
 <div class="hero">
   <h1>Podly <span class="rust">Rust</span> Rewrite</h1>
-  <p>Complete Python/Flask to Rust/Axum backend migration with full API parity — 75x less memory, 14x smaller image</p>
-  <div class="hero-date">March 2026 &middot; 610 commits &middot; 11,394 lines of Rust</div>
+  <p>Complete Python/Flask to Rust/Axum backend rewrite with full API parity</p>
+  <div class="hero-date">March 2026 &middot; 11,884 lines of Rust &middot; 90 commits &middot; 8 audit cycles</div>
 </div>
 
 <div class="container">
 
   <div class="metrics-bar">
-    <div class="metric">
-      <div class="metric-value green">75x</div>
-      <div class="metric-label">Less Memory</div>
-    </div>
-    <div class="metric">
-      <div class="metric-value orange">14x</div>
-      <div class="metric-label">Smaller Image</div>
-    </div>
-    <div class="metric">
-      <div class="metric-value purple">105+</div>
-      <div class="metric-label">Parity Fixes</div>
-    </div>
-    <div class="metric">
-      <div class="metric-value accent">60</div>
-      <div class="metric-label">Critical Issues Resolved</div>
-    </div>
+    <div class="metric"><div class="metric-value green">19x</div><div class="metric-label">Less Memory</div></div>
+    <div class="metric"><div class="metric-value orange">14x</div><div class="metric-label">Smaller Image</div></div>
+    <div class="metric"><div class="metric-value purple">110+</div><div class="metric-label">Parity Fixes</div></div>
+    <div class="metric"><div class="metric-value accent">36</div><div class="metric-label">Architectural Decisions</div></div>
   </div>
 
-  <!-- Performance Section -->
+  <!-- Performance -->
   <section>
     <h2>Performance: Python vs Rust</h2>
-    <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Measured on the production server (23.3 GiB RAM, Linux 6.8). Both backends serving the same 25 GB podcast library with 311 MB SQLite database.</p>
-
+    <p style="color: var(--text-muted); margin-bottom: 1.5rem;">Measured at steady state on the production server (23.3 GiB RAM, Linux 6.8). Both backends serving the same 25 GB podcast library with 311 MB SQLite database.</p>
     <div class="compare-grid">
       <div class="compare-card">
-        <div class="ratio-badge">75x less</div>
-        <div class="label">Memory Usage (Idle)</div>
-        <div class="compare-row">
-          <span class="tech">Python (Flask + Gunicorn)</span>
-          <span class="val python">1.333 GiB</span>
-        </div>
-        <div class="compare-row">
-          <span class="tech">Rust (Axum + Tokio)</span>
-          <span class="val rust">17.8 MiB</span>
-        </div>
+        <div class="ratio-badge">19x less</div>
+        <div class="label">Memory (Steady-State RSS)</div>
+        <div class="compare-row"><span class="tech">Python (2 processes)</span><span class="val python">1,412 MiB</span></div>
+        <div class="compare-row"><span class="tech">Rust (1 process)</span><span class="val rust">82 MiB</span></div>
       </div>
-
       <div class="compare-card">
         <div class="ratio-badge">14x smaller</div>
         <div class="label">Docker Image Size</div>
-        <div class="compare-row">
-          <span class="tech">Python</span>
-          <span class="val python">8.66 GB</span>
-        </div>
-        <div class="compare-row">
-          <span class="tech">Rust</span>
-          <span class="val rust">603 MB</span>
-        </div>
+        <div class="compare-row"><span class="tech">Python</span><span class="val python">8.66 GB</span></div>
+        <div class="compare-row"><span class="tech">Rust</span><span class="val rust">603 MB</span></div>
       </div>
-
       <div class="compare-card">
-        <div class="ratio-badge">~0%</div>
-        <div class="label">CPU Usage (Idle)</div>
-        <div class="compare-row">
-          <span class="tech">Python</span>
-          <span class="val python">0.01–1.50%</span>
-        </div>
-        <div class="compare-row">
-          <span class="tech">Rust</span>
-          <span class="val rust">0.00%</span>
-        </div>
+        <div class="ratio-badge">49x less</div>
+        <div class="label">Block I/O Written</div>
+        <div class="compare-row"><span class="tech">Python (6 days)</span><span class="val python">3.1 GB</span></div>
+        <div class="compare-row"><span class="tech">Rust (1 hour)</span><span class="val rust">63 MB</span></div>
       </div>
-
+      <div class="compare-card">
+        <div class="label">Process Details</div>
+        <div class="compare-row"><span class="tech">Python main.py</span><span class="val python">653 MiB, 9 threads</span></div>
+        <div class="compare-row"><span class="tech">Python writer</span><span class="val python">759 MiB, 5 threads</span></div>
+        <div class="compare-row"><span class="tech">Rust binary</span><span class="val rust">82 MiB, 9 threads</span></div>
+      </div>
       <div class="compare-card">
         <div class="label">Binary / Runtime</div>
-        <div class="compare-row">
-          <span class="tech">Python</span>
-          <span class="val python">Full Python 3.12 + deps</span>
-        </div>
-        <div class="compare-row">
-          <span class="tech">Rust</span>
-          <span class="val rust">21 MB single binary</span>
-        </div>
+        <div class="compare-row"><span class="tech">Python</span><span class="val python">Full Python 3.12 + deps</span></div>
+        <div class="compare-row"><span class="tech">Rust</span><span class="val rust">21 MB single binary</span></div>
       </div>
-
       <div class="compare-card">
-        <div class="label">Process Architecture</div>
-        <div class="compare-row">
-          <span class="tech">Python</span>
-          <span class="val python">3 processes, 15 PIDs</span>
-        </div>
-        <div class="compare-row">
-          <span class="tech">Rust</span>
-          <span class="val rust">1 async binary, 10 PIDs</span>
-        </div>
-      </div>
-
-      <div class="compare-card">
-        <div class="label">Codebase Size</div>
-        <div class="compare-row">
-          <span class="tech">Python</span>
-          <span class="val python">27,616 lines</span>
-        </div>
-        <div class="compare-row">
-          <span class="tech">Rust</span>
-          <span class="val rust">11,394 lines</span>
-        </div>
+        <div class="label">Codebase</div>
+        <div class="compare-row"><span class="tech">Python</span><span class="val python">27,616 lines</span></div>
+        <div class="compare-row"><span class="tech">Rust</span><span class="val rust">11,884 lines</span></div>
       </div>
     </div>
-
-    <h3>Memory Usage Visualization</h3>
+    <h3>Memory Visualization</h3>
     <div class="bar-chart">
-      <div class="bar-group">
-        <div class="bar-label">Python (Flask + Gunicorn)</div>
-        <div class="bar-track">
-          <div class="bar-fill python" style="width: 100%;">1,365 MiB</div>
-        </div>
-      </div>
-      <div class="bar-group">
-        <div class="bar-label">Rust (Axum + Tokio)</div>
-        <div class="bar-track">
-          <div class="bar-fill rust" style="width: 1.3%;">17.8 MiB</div>
-        </div>
-      </div>
+      <div class="bar-group"><div class="bar-label">Python (Flask + Gunicorn) &mdash; 2 processes</div><div class="bar-track"><div class="bar-fill python" style="width: 100%;">1,412 MiB</div></div></div>
+      <div class="bar-group"><div class="bar-label">Rust (Axum + Tokio) &mdash; single async binary</div><div class="bar-track"><div class="bar-fill rust" style="width: 5.8%;">82 MiB</div></div></div>
     </div>
-    <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.5rem;">Memory measurements taken 5 times at 3-second intervals. Both backends showed rock-stable memory with &lt;0.01 MiB variance. Note: performance under real processing load (transcription, LLM classification, audio cutting) is dominated by external services (Whisper API, LLM API) and ffmpeg, so backend language has minimal impact on processing throughput.</p>
+    <p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 0.5rem;">Steady-state VmRSS from <code>/proc/[pid]/status</code> after 1+ hours uptime. Python runs main.py (653 MiB) + writer (759 MiB) as separate processes. Processing throughput is dominated by external API calls (Whisper, LLM) and ffmpeg &mdash; backend language has minimal impact on job time.</p>
   </section>
 
-  <!-- Parity Audit Section -->
+  <!-- Parity Audit -->
   <section>
     <h2>Parity Audit Results</h2>
-    <p style="color: var(--text-muted); margin-bottom: 1.5rem;">5 independent sub-agents performed function-by-function audits across 7 domains, each naive of prior work. 177 total findings identified; 105+ fixes applied.</p>
-
+    <p style="color: var(--text-muted); margin-bottom: 1.5rem;">8 audit cycles with independent agents across 7 domains. 177+ findings identified; 110+ fixes applied.</p>
     <div style="overflow-x: auto;">
     <table class="audit-table">
-      <thead>
-        <tr>
-          <th>Domain</th>
-          <th>Critical</th>
-          <th>Moderate</th>
-          <th>Minor</th>
-          <th>Status</th>
-        </tr>
-      </thead>
+      <thead><tr><th>Domain</th><th>Critical</th><th>Moderate</th><th>Minor</th><th>Status</th></tr></thead>
       <tbody>
-        <tr>
-          <td>Auth (login, users, discord)</td>
-          <td><span class="badge critical">7</span></td>
-          <td><span class="badge moderate">11</span></td>
-          <td><span class="badge minor">5</span></td>
-          <td><span class="badge fixed">All critical + moderate</span></td>
-        </tr>
-        <tr>
-          <td>Billing (stripe, subscriptions)</td>
-          <td><span class="badge critical">8</span></td>
-          <td><span class="badge moderate">12</span></td>
-          <td><span class="badge minor">8</span></td>
-          <td><span class="badge fixed">All critical + moderate</span></td>
-        </tr>
-        <tr>
-          <td>Jobs (manager, pipeline, status)</td>
-          <td><span class="badge critical">5</span></td>
-          <td><span class="badge moderate">8</span></td>
-          <td><span class="badge minor">4</span></td>
-          <td><span class="badge fixed">All critical + moderate</span></td>
-        </tr>
-        <tr>
-          <td>Config (settings, test endpoints)</td>
-          <td><span class="badge critical">8</span></td>
-          <td><span class="badge moderate">12</span></td>
-          <td><span class="badge minor">12</span></td>
-          <td><span class="badge fixed">All critical, most moderate</span></td>
-        </tr>
-        <tr>
-          <td>Feeds + Posts (CRUD, RSS, audio)</td>
-          <td><span class="badge critical">14</span></td>
-          <td><span class="badge moderate">21</span></td>
-          <td><span class="badge minor">8</span></td>
-          <td><span class="badge fixed">All critical, most moderate</span></td>
-        </tr>
-        <tr>
-          <td>DB / Queries</td>
-          <td><span class="badge critical">2</span></td>
-          <td><span class="badge moderate">3</span></td>
-          <td><span class="badge minor">5</span></td>
-          <td><span class="badge fixed">All critical</span></td>
-        </tr>
-        <tr>
-          <td>Processing Pipeline</td>
-          <td><span class="badge critical">7</span></td>
-          <td><span class="badge moderate">8</span></td>
-          <td><span class="badge minor">9</span></td>
-          <td><span class="badge fixed">All critical + high</span></td>
-        </tr>
-        <tr style="font-weight: 700;">
-          <td>Total</td>
-          <td><span class="badge critical">51</span></td>
-          <td><span class="badge moderate">75</span></td>
-          <td><span class="badge minor">51</span></td>
-          <td><span class="badge fixed">~105 fixes applied</span></td>
-        </tr>
+        <tr><td>Auth (login, users, discord)</td><td><span class="badge critical">7</span></td><td><span class="badge moderate">11</span></td><td><span class="badge minor">5</span></td><td><span class="badge fixed">All resolved</span></td></tr>
+        <tr><td>Billing (stripe, subscriptions)</td><td><span class="badge critical">8</span></td><td><span class="badge moderate">12</span></td><td><span class="badge minor">8</span></td><td><span class="badge fixed">All resolved</span></td></tr>
+        <tr><td>Jobs (manager, pipeline, status)</td><td><span class="badge critical">5</span></td><td><span class="badge moderate">8</span></td><td><span class="badge minor">4</span></td><td><span class="badge fixed">All resolved</span></td></tr>
+        <tr><td>Config (settings, test endpoints)</td><td><span class="badge critical">8</span></td><td><span class="badge moderate">12</span></td><td><span class="badge minor">12</span></td><td><span class="badge fixed">All critical + moderate</span></td></tr>
+        <tr><td>Feeds + Posts (CRUD, RSS, audio)</td><td><span class="badge critical">14</span></td><td><span class="badge moderate">21</span></td><td><span class="badge minor">8</span></td><td><span class="badge fixed">All critical + moderate</span></td></tr>
+        <tr><td>DB / Queries</td><td><span class="badge critical">7</span></td><td><span class="badge moderate">3</span></td><td><span class="badge minor">5</span></td><td><span class="badge fixed">All resolved</span></td></tr>
+        <tr><td>Processing Pipeline</td><td><span class="badge critical">7</span></td><td><span class="badge moderate">8</span></td><td><span class="badge minor">9</span></td><td><span class="badge fixed">All critical</span></td></tr>
+        <tr style="font-weight: 700;"><td>Total</td><td><span class="badge critical">56</span></td><td><span class="badge moderate">75</span></td><td><span class="badge minor">51</span></td><td><span class="badge fixed">110+ fixes</span></td></tr>
       </tbody>
     </table>
     </div>
   </section>
 
-  <!-- Key Fixes Section -->
+  <!-- Notable Fixes -->
   <section>
     <h2>Notable Fixes</h2>
-
     <h3>Security</h3>
-    <div class="fixes-grid">
-      <div class="fix-item"><span class="icon" style="color:var(--red);">&#9888;</span> Aggregate feed endpoint had no auth check — any user could access another user's RSS feed</div>
-      <div class="fix-item"><span class="icon" style="color:var(--red);">&#9888;</span> SQL table name mismatch (<code>user_feed</code> vs <code>feed_supporter</code>) would have caused runtime crashes</div>
-      <div class="fix-item"><span class="icon" style="color:var(--red);">&#9888;</span> RSS feed served unprocessed posts (missing <code>processed_audio_path IS NOT NULL</code> filter)</div>
-    </div>
-
+    <ul class="fixes-list">
+      <li>Aggregate feed endpoint had no auth check &mdash; any user could access another user's RSS feed</li>
+      <li>SQL table name mismatch (<code>user_feed</code> vs <code>feed_supporter</code>) would cause runtime crashes</li>
+      <li>RSS feed served unprocessed posts (missing <code>processed_audio_path IS NOT NULL</code> filter)</li>
+      <li><code>password_hash</code> excluded from JSON serialization via <code>#[serde(skip_serializing)]</code></li>
+    </ul>
     <h3>Processing Pipeline</h3>
-    <div class="fixes-grid">
-      <div class="fix-item"><span class="icon" style="color:var(--green);">&#10003;</span> Streaming download — prevents OOM on large podcast episodes (was loading entire file into memory)</div>
-      <div class="fix-item"><span class="icon" style="color:var(--green);">&#10003;</span> User-Agent + Referer headers — fixes downloads from CDNs that reject bare requests</div>
-      <div class="fix-item"><span class="icon" style="color:var(--green);">&#10003;</span> Post-level metadata in classifiers — was using feed title/description instead of episode title/description</div>
-      <div class="fix-item"><span class="icon" style="color:var(--green);">&#10003;</span> fade_ms from config — was hardcoded 50ms, DB default is 3000ms (60x difference!)</div>
-      <div class="fix-item"><span class="icon" style="color:var(--green);">&#10003;</span> Whisper model call preservation — reprocessing now reuses existing transcripts correctly</div>
-    </div>
+    <ul class="fixes-list">
+      <li>Streaming download prevents OOM on large episodes (was loading entire file into memory)</li>
+      <li>User-Agent + Referer headers for CDN compatibility (acast, etc.)</li>
+      <li>Post-level metadata in classifiers (was using feed title instead of episode title)</li>
+      <li><code>fade_ms</code> from DB config (was hardcoded 50ms, default is 3000ms)</li>
+      <li>Ad segment merging with configurable gap threshold from DB</li>
+      <li>Short-segment filtering with configurable min length from DB</li>
+      <li>Last-segment extension to audio end when within gap threshold</li>
+      <li>Heuristic refinement fallback when LLM parsing fails</li>
+      <li>ffmpeg simple fallback when complex filter graph fails</li>
+      <li>Boundary refinement applied to all strategies including oneshot</li>
+    </ul>
+    <h3>Infrastructure</h3>
+    <ul class="fixes-list">
+      <li>SQLite-backed session store (sessions persist across restarts)</li>
+      <li>5 queries fixed: PostgreSQL-only <code>NULLS LAST</code> replaced with SQLite-compatible ordering</li>
+      <li><code>BASE_URL</code> env var for RSS URLs behind HTTPS reverse proxy</li>
+      <li>bcrypt fallback with transparent Argon2 re-hash on login</li>
+      <li>90+ API response shape, status code, and error message fixes</li>
+      <li>Config PUT handles all 16 LLM/processing fields</li>
+    </ul>
+  </section>
 
-    <h3>API Compatibility</h3>
-    <div class="fixes-grid">
-      <div class="fix-item"><span class="icon" style="color:var(--green);">&#10003;</span> Discord OAuth consent prompt retry logic with <code>interaction_required</code> handling</div>
-      <div class="fix-item"><span class="icon" style="color:var(--green);">&#10003;</span> Stripe checkout URL field renamed from <code>"url"</code> to <code>"checkout_url"</code></div>
-      <div class="fix-item"><span class="icon" style="color:var(--green);">&#10003;</span> Job priority computed dynamically (running=2, pending=1) instead of hardcoded 0</div>
-      <div class="fix-item"><span class="icon" style="color:var(--green);">&#10003;</span> bcrypt fallback with transparent Argon2 re-hash on login (Python password compatibility)</div>
-      <div class="fix-item"><span class="icon" style="color:var(--green);">&#10003;</span> 90+ API response shape, status code, and error message fixes across all endpoints</div>
-      <div class="fix-item"><span class="icon" style="color:var(--green);">&#10003;</span> Config PUT now handles all 16 LLM/processing fields (was missing 6)</div>
+  <!-- Architecture Decisions -->
+  <section>
+    <h2>Key Decisions &amp; Replacements</h2>
+    <p style="color: var(--text-muted); margin-bottom: 1rem;">Every Python dependency/pattern was mapped to a Rust equivalent. Decisions documented in <code>DECISIONS.md</code> (36 entries).</p>
+    <div style="overflow-x: auto;">
+    <table class="decision-table">
+      <thead><tr><th>Component</th><th>Python</th><th>Rust</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Web framework</td><td>Flask + Gunicorn</td><td>Axum + Tokio</td><td>Async, single binary</td></tr>
+        <tr><td>Database</td><td>SQLAlchemy ORM</td><td>sqlx (no ORM)</td><td>Runtime-checked queries</td></tr>
+        <tr><td>LLM integration</td><td>litellm</td><td>genai crate</td><td>Multi-provider: OpenAI, Anthropic, Gemini, Groq</td></tr>
+        <tr><td>Auth</td><td>Flask-Login + sessions</td><td>tower-sessions + middleware</td><td>Custom SQLite session store</td></tr>
+        <tr><td>Password hashing</td><td>bcrypt (Flask-Bcrypt)</td><td>Argon2id + bcrypt fallback</td><td>Transparent re-hash on login</td></tr>
+        <tr><td>Payments</td><td>stripe Python SDK</td><td>Raw HTTP + HMAC-SHA256</td><td>Full Stripe integration, no SDK dep</td></tr>
+        <tr><td>Discord OAuth</td><td>httpx</td><td>reqwest</td><td>Full OAuth2 flow with guild checks</td></tr>
+        <tr><td>Scheduler</td><td>APScheduler (cron)</td><td>tokio::spawn loop</td><td>Reads interval from DB each cycle</td></tr>
+        <tr><td>RSS parsing</td><td>feedparser</td><td>feed-rs</td><td>RSS + Atom + JSON Feed</td></tr>
+        <tr><td>RSS generation</td><td>Jinja2 templates</td><td>quick-xml</td><td>Programmatic XML building</td></tr>
+        <tr><td>Podcast search</td><td>iTunes API</td><td>PodcastIndex API</td><td>Same result format</td></tr>
+        <tr><td>Prompts</td><td>Jinja2 + file reads</td><td>include_str! + format!</td><td>Compile-time embedded</td></tr>
+        <tr><td>Config model</td><td>Pydantic + SQLAlchemy</td><td>AppConfig + sqlx queries</td><td>12-factor env var precedence</td></tr>
+        <tr><td>Audio processing</td><td>ffmpeg-python</td><td>tokio::process::Command</td><td>Complex filter + simple fallback</td></tr>
+        <tr><td>Transcription</td><td>openai-whisper / groq / remote</td><td>whisper-rs / groq / remote</td><td>Local behind feature flag</td></tr>
+      </tbody>
+    </table>
     </div>
   </section>
 
-  <!-- Architecture Section -->
+  <!-- Accepted Differences -->
   <section>
-    <h2>Architecture</h2>
-    <div class="compare-grid">
-      <div class="compare-card">
-        <div class="label">Web Framework</div>
-        <div class="compare-row"><span class="tech">Python</span><span class="val">Flask + Gunicorn</span></div>
-        <div class="compare-row"><span class="tech">Rust</span><span class="val">Axum + Tokio</span></div>
-      </div>
-      <div class="compare-card">
-        <div class="label">Database</div>
-        <div class="compare-row"><span class="tech">Python</span><span class="val">SQLAlchemy ORM</span></div>
-        <div class="compare-row"><span class="tech">Rust</span><span class="val">sqlx (async, no ORM)</span></div>
-      </div>
-      <div class="compare-card">
-        <div class="label">LLM Integration</div>
-        <div class="compare-row"><span class="tech">Python</span><span class="val">litellm (multi-provider)</span></div>
-        <div class="compare-row"><span class="tech">Rust</span><span class="val">genai crate (multi-provider)</span></div>
-      </div>
-      <div class="compare-card">
-        <div class="label">Auth</div>
-        <div class="compare-row"><span class="tech">Python</span><span class="val">Flask-Login + sessions</span></div>
-        <div class="compare-row"><span class="tech">Rust</span><span class="val">tower-sessions + middleware</span></div>
-      </div>
-      <div class="compare-card">
-        <div class="label">Payments</div>
-        <div class="compare-row"><span class="tech">Python</span><span class="val">stripe SDK</span></div>
-        <div class="compare-row"><span class="tech">Rust</span><span class="val">Raw HTTP + HMAC-SHA256</span></div>
-      </div>
-      <div class="compare-card">
-        <div class="label">Scheduler</div>
-        <div class="compare-row"><span class="tech">Python</span><span class="val">APScheduler (cron)</span></div>
-        <div class="compare-row"><span class="tech">Rust</span><span class="val">tokio::spawn loop</span></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Timeline Section -->
-  <section>
-    <h2>Project Timeline</h2>
-    <div class="timeline">
-      <div class="timeline-item done">
-        <div class="timeline-date">Day 1 — March 13</div>
-        <div class="timeline-title">Core Backend Scaffold</div>
-        <div class="timeline-desc">Axum server, SQLite schema, auth middleware, session management, RSS feed generation, podcast search, and the full processing pipeline (download, transcribe, classify, audio cut).</div>
-      </div>
-      <div class="timeline-item done">
-        <div class="timeline-date">Day 2 — March 14</div>
-        <div class="timeline-title">Feature Completion</div>
-        <div class="timeline-desc">Discord OAuth, Stripe billing, one-shot classifier, env var precedence model, bcrypt compatibility, legacy data migration tool, Docker production deployment.</div>
-      </div>
-      <div class="timeline-item done">
-        <div class="timeline-date">Day 3 — March 15</div>
-        <div class="timeline-title">Parity Audit & Hardening</div>
-        <div class="timeline-desc">5 independent audit agents found 177 differences across 7 domains. 105+ fixes applied covering auth, billing, jobs, config, feeds, posts, DB queries, and the processing pipeline. Security vulnerabilities patched.</div>
-      </div>
-      <div class="timeline-item pending">
-        <div class="timeline-date">Remaining</div>
-        <div class="timeline-title">Known Deferred Items</div>
-        <div class="timeline-desc">SQLite-backed session store, ad segment merging before audio cut, heuristic boundary refinement fallback, pre-reprocess snapshots, <code>max_completion_tokens</code> for newer models.</div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Remaining Section -->
-  <section>
-    <h2>Known Remaining Differences</h2>
-    <p style="color: var(--text-muted); margin-bottom: 1rem;">These are documented, accepted differences — either architectural choices or deferred low-impact items.</p>
+    <h2>Accepted Differences &amp; Remaining Gaps</h2>
+    <p style="color: var(--text-muted); margin-bottom: 1rem;">These are documented, reasoned choices &mdash; either architectural improvements or deferred low-impact items. See <code>DECISIONS.md</code> for rationale.</p>
 
     <h3>Architectural (By Design)</h3>
     <ul class="remaining-list">
-      <li><code>post_debug</code> returns JSON (Python returns HTML) — frontend prefers JSON</li>
-      <li><code>add_feed</code> returns JSON (Python returns 302 redirect) — frontend sends AJAX</li>
-      <li><code>search_feeds</code> uses PodcastIndex API (Python uses iTunes) — same result format</li>
+      <li><code>POST /feed</code> returns 201 JSON (Python returns 302 redirect) &mdash; frontend sends AJAX</li>
+      <li><code>search_feeds</code> uses PodcastIndex API (Python uses iTunes) &mdash; same result format</li>
+      <li><code>post_debug</code> returns JSON (Python returns HTML) &mdash; frontend prefers JSON</li>
+      <li>Ad merging is proximity-only; Python adds keyword/sponsor content analysis (DECISION-034)</li>
+      <li>LLM calls use <code>genai</code> crate; Python uses <code>litellm</code> (DECISION-020)</li>
     </ul>
 
     <h3>Pipeline (Deferred)</h3>
     <ul class="remaining-list">
-      <li>Audio fade applied at content-segment edges vs ad boundaries — slightly different audio output</li>
-      <li>No ad segment merging/filtering before audio cut</li>
-      <li>No heuristic fallback when LLM boundary refinement fails</li>
-      <li>No token rate limiting</li>
-      <li>No <code>max_completion_tokens</code> for newer OpenAI models</li>
+      <li>No proactive token rate limiting (reactive 429 backoff only)</li>
+      <li><code>max_tokens</code> used instead of <code>max_completion_tokens</code> for newer OpenAI models (DECISION-036)</li>
       <li>No pre-reprocess snapshot creation</li>
+      <li>No input token count validation/trimming for oversized prompts</li>
     </ul>
 
-    <h3>Infrastructure (TODO)</h3>
+    <h3>Infrastructure</h3>
     <ul class="remaining-list">
-      <li>Session store is in-memory — needs SQLite-backed store for production persistence</li>
-      <li>JobsManagerRun lifecycle not created by Rust (reads existing Python-era runs)</li>
+      <li><code>JobsManagerRun</code> lifecycle not created by Rust (reads existing Python-era runs)</li>
     </ul>
+
+    <h3>Not Yet Tested End-to-End</h3>
+    <ul class="remaining-list">
+      <li>Full process/reprocess lifecycle (download, transcribe, classify, refine, merge, cut)</li>
+      <li>Scheduler/background job execution</li>
+      <li>Billing/Stripe webhook handling</li>
+      <li>Discord OAuth flow (config endpoint tested only)</li>
+    </ul>
+  </section>
+
+  <!-- Performance Assessment -->
+  <section>
+    <h2>Performance Assessment</h2>
+    <div class="info-box">
+      <p><strong>Memory (19x less):</strong> Expected. Python runs 2 processes (Flask app + background writer), each loading the full Python runtime, SQLAlchemy ORM, and dependency tree. Rust runs one async binary with zero-copy deserialization. 82 MiB steady-state includes SQLite page cache, connection pools, and session data &mdash; reasonable for a 311 MB database.</p>
+      <p style="margin-top: 0.5rem;"><strong>Image (14x smaller):</strong> Expected. Python image includes Python runtime, pip packages, whisper models, ffmpeg, and ML dependencies. Rust produces a single statically-linked binary (~21 MB) in a minimal container.</p>
+      <p style="margin-top: 0.5rem;"><strong>CPU (both ~0% idle):</strong> Expected. Processing throughput is dominated by Whisper API, LLM API, and ffmpeg &mdash; backend language has minimal impact on total job time.</p>
+      <p style="margin-top: 0.5rem;"><strong>I/O (49x less):</strong> Python's 3.1 GB over 6 days reflects ORM journaling, logging, and separate writer process. Rust's 63 MB in ~1 hour suggests minimal write amplification from direct SQL.</p>
+    </div>
+  </section>
+
+  <!-- Timeline -->
+  <section>
+    <h2>Project Timeline</h2>
+    <div class="timeline">
+      <div class="timeline-item done"><div class="timeline-date">Day 1 &mdash; March 13</div><div class="timeline-title">Core Backend Scaffold</div><div class="timeline-desc">Axum server, SQLite schema, auth middleware, session management, RSS feed generation, podcast search, and full processing pipeline (download, transcribe, classify, audio cut).</div></div>
+      <div class="timeline-item done"><div class="timeline-date">Day 2 &mdash; March 14</div><div class="timeline-title">Feature Completion</div><div class="timeline-desc">Discord OAuth, Stripe billing, one-shot classifier, genai multi-provider LLM, env var precedence model, bcrypt compatibility, legacy data migration tool, Docker production deployment.</div></div>
+      <div class="timeline-item done"><div class="timeline-date">Day 3 &mdash; March 15 (AM)</div><div class="timeline-title">Parity Audit &amp; Hardening</div><div class="timeline-desc">5 independent audit agents found 177 differences across 7 domains. 105+ fixes applied covering auth, billing, jobs, config, feeds, posts, DB queries, and the processing pipeline. Security vulnerabilities patched.</div></div>
+      <div class="timeline-item done"><div class="timeline-date">Day 3 &mdash; March 15 (PM)</div><div class="timeline-title">Deferred Items &amp; Deep Audit</div><div class="timeline-desc">SQLite session store, ad segment merging, heuristic refinement fallback, ffmpeg simple fallback, short-segment filtering, last-segment extension, oneshot refinement, BASE_URL support. 3 additional audit cycles. Steady-state performance analysis.</div></div>
+      <div class="timeline-item pending"><div class="timeline-date">Next</div><div class="timeline-title">End-to-End Testing</div><div class="timeline-desc">Process a real podcast episode through the Rust pipeline. Token rate limiting. Content-aware ad merging.</div></div>
+    </div>
   </section>
 
 </div>
 
 <footer>
   <p>Built with Rust + Axum &middot; <a href="https://github.com/kevinriste/podly_pure_podcasts">GitHub</a></p>
-  <p style="margin-top: 0.5rem;">Generated March 15, 2026 by Claude Code</p>
+  <p style="margin-top: 0.5rem;">Last updated March 15, 2026 &middot; Generated by Claude Code</p>
 </footer>
 
 </body>
