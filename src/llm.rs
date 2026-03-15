@@ -141,6 +141,31 @@ pub fn oneshot_response_format(model: &str) -> ChatResponseFormat {
     }
 }
 
+/// Check if a model requires `max_completion_tokens` instead of `max_tokens`.
+/// Matches Python's `model_uses_max_completion_tokens()` from shared/llm_utils.py.
+/// OpenAI deprecated `max_tokens` for newer models (gpt-4o, gpt-5, o1, etc.)
+pub fn model_uses_max_completion_tokens(model: &str) -> bool {
+    let lower = model.to_lowercase();
+    const PATTERNS: &[&str] = &["gpt-5", "gpt-4o", "o1-", "o1_", "o1/", "chatgpt-4o-latest"];
+    PATTERNS.iter().any(|p| lower.contains(p))
+}
+
+/// Count tokens in a text string using tiktoken.
+/// Falls back to chars/4 estimate if the model isn't recognized.
+pub fn count_tokens(text: &str, model: &str) -> usize {
+    // Try to get a BPE tokenizer for the model
+    match tiktoken_rs::get_bpe_from_model(model) {
+        Ok(bpe) => bpe.encode_with_special_tokens(text).len(),
+        Err(_) => {
+            // Try cl100k_base (GPT-4 default) as fallback
+            match tiktoken_rs::cl100k_base() {
+                Ok(bpe) => bpe.encode_with_special_tokens(text).len(),
+                Err(_) => text.len() / 4, // rough estimate
+            }
+        }
+    }
+}
+
 /// Execute a chat completion and return the response text.
 #[allow(dead_code)]
 pub async fn chat_completion(

@@ -434,16 +434,16 @@ async fn classify(
     }
 
     // Load LLM settings from DB
-    let llm: Option<(Option<String>, String, Option<String>, i64, i64, i64, i64, f64)> =
+    let llm: Option<(Option<String>, String, Option<String>, i64, i64, i64, i64, f64, Option<i64>)> =
         sqlx::query_as(
-            "SELECT l.llm_api_key, l.llm_model, l.openai_base_url, l.openai_timeout, l.openai_max_tokens, l.llm_max_concurrent_calls, l.llm_max_retry_attempts, o.min_confidence
+            "SELECT l.llm_api_key, l.llm_model, l.openai_base_url, l.openai_timeout, l.openai_max_tokens, l.llm_max_concurrent_calls, l.llm_max_retry_attempts, o.min_confidence, l.llm_max_input_tokens_per_call
              FROM llm_settings l, output_settings o WHERE l.id = 1 AND o.id = 1",
         )
         .fetch_optional(pool)
         .await
         .unwrap_or(None);
 
-    let Some((db_api_key, db_model, db_base_url, timeout, max_tokens, max_concurrent, max_retries, min_confidence)) = llm else {
+    let Some((db_api_key, db_model, db_base_url, timeout, max_tokens, max_concurrent, max_retries, min_confidence, max_input_tokens)) = llm else {
         tracing::warn!("LLM settings not configured — skipping classification");
         return Ok(vec![]);
     };
@@ -481,6 +481,7 @@ async fn classify(
         chunk_size,
         min_confidence,
         enable_boundary_refinement: true,
+        max_input_tokens_per_call: max_input_tokens.map(|v| v as u32),
     };
 
     classifier::classify_segments(pool, post_id, segments, &config, feed_title, feed_description)
@@ -580,6 +581,7 @@ async fn classify_oneshot(
         chunk_size: 0, // not used by oneshot
         min_confidence,
         enable_boundary_refinement: false,
+        max_input_tokens_per_call: None, // oneshot handles its own chunking
     };
 
     crate::classification::oneshot::classify_oneshot(
@@ -725,12 +727,13 @@ async fn refine(
         model,
         base_url,
         timeout_sec: timeout as u64,
-        max_tokens: 4096, // not used by refinement LLM (hardcoded there), but matches Python
+        max_tokens: 4096,
         max_concurrent: 1,
         max_retries: 2,
         chunk_size: 60,
         min_confidence: 0.0,
         enable_boundary_refinement: true,
+        max_input_tokens_per_call: None, // refinement prompts are small
     };
 
     let ads_with_confidence: Vec<(f64, f64, f64)> = ad_segments

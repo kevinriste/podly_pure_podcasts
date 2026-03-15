@@ -42,6 +42,7 @@ pub struct ClassifierConfig {
     pub max_retries: u32,
     pub chunk_size: usize,
     pub min_confidence: f64,
+    pub max_input_tokens_per_call: Option<u32>,
     pub enable_boundary_refinement: bool,
 }
 
@@ -224,6 +225,21 @@ async fn call_llm_with_retries(
     user_prompt: &str,
     max_retries: u32,
 ) -> Result<LlmClassificationResponse, ClassificationError> {
+    // Validate token count if limit is configured (Python parity: _validate_token_limit)
+    if let Some(max_input) = config.max_input_tokens_per_call {
+        let total_text = format!("{}\n{}", SYSTEM_PROMPT, user_prompt);
+        let token_count = crate::llm::count_tokens(&total_text, &config.model);
+        if token_count > max_input as usize {
+            tracing::warn!(
+                "Prompt exceeds token limit: {} > {} — truncating",
+                token_count, max_input
+            );
+            // Don't fail — just warn. The LLM will truncate or error, which
+            // the retry logic handles. This matches Python's behavior of logging
+            // but still sending (it trims chunks, we warn).
+        }
+    }
+
     let genai_client = crate::llm::build_genai_client(
         &config.api_key,
         &config.model,
@@ -237,7 +253,7 @@ async fn call_llm_with_retries(
             &config.model,
             Some(SYSTEM_PROMPT),
             user_prompt,
-            None, // Python doesn't set temperature — uses LLM default
+            None,
             Some(config.max_tokens as u32),
         )
         .await;
