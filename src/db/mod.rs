@@ -47,6 +47,15 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         sqlx::query(trimmed).execute(pool).await?;
     }
 
+    // Schema evolution: add columns that may not exist in older databases
+    let alter_statements = [
+        "ALTER TABLE processing_settings ADD COLUMN max_overlap_segments INTEGER NOT NULL DEFAULT 30",
+    ];
+    for stmt in alter_statements {
+        // SQLite returns an error if column already exists — ignore it
+        let _ = sqlx::query(stmt).execute(pool).await;
+    }
+
     tracing::info!("Database migrations complete");
     Ok(())
 }

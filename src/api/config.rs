@@ -297,6 +297,7 @@ async fn get_config(
         "whisper": whisper_payload,
         "processing": {
             "num_segments_to_input_to_prompt": processing.num_segments_to_input_to_prompt,
+            "max_overlap_segments": processing.max_overlap_segments,
         },
         "output": {
             "fade_ms": output.fade_ms,
@@ -469,6 +470,48 @@ async fn update_config(
             .execute(&state.db)
             .await?;
         }
+        if let Some(v) = llm.get("llm_max_input_tokens_per_call").and_then(|v| v.as_i64()) {
+            sqlx::query("UPDATE llm_settings SET llm_max_input_tokens_per_call = ?, updated_at = ? WHERE id = 1")
+                .bind(v)
+                .bind(&now)
+                .execute(&state.db)
+                .await?;
+        }
+        if let Some(v) = llm.get("llm_enable_token_rate_limiting").and_then(|v| v.as_bool()) {
+            sqlx::query("UPDATE llm_settings SET llm_enable_token_rate_limiting = ?, updated_at = ? WHERE id = 1")
+                .bind(v)
+                .bind(&now)
+                .execute(&state.db)
+                .await?;
+        }
+        if let Some(v) = llm.get("llm_max_input_tokens_per_minute").and_then(|v| v.as_i64()) {
+            sqlx::query("UPDATE llm_settings SET llm_max_input_tokens_per_minute = ?, updated_at = ? WHERE id = 1")
+                .bind(v)
+                .bind(&now)
+                .execute(&state.db)
+                .await?;
+        }
+        if let Some(v) = llm.get("enable_word_level_boundary_refinder").and_then(|v| v.as_bool()) {
+            sqlx::query("UPDATE llm_settings SET enable_word_level_boundary_refinder = ?, updated_at = ? WHERE id = 1")
+                .bind(v)
+                .bind(&now)
+                .execute(&state.db)
+                .await?;
+        }
+        if let Some(v) = llm.get("oneshot_max_chunk_duration_seconds").and_then(|v| v.as_f64()) {
+            sqlx::query("UPDATE llm_settings SET oneshot_max_chunk_duration_seconds = ?, updated_at = ? WHERE id = 1")
+                .bind(v)
+                .bind(&now)
+                .execute(&state.db)
+                .await?;
+        }
+        if let Some(v) = llm.get("oneshot_chunk_overlap_seconds").and_then(|v| v.as_f64()) {
+            sqlx::query("UPDATE llm_settings SET oneshot_chunk_overlap_seconds = ?, updated_at = ? WHERE id = 1")
+                .bind(v)
+                .bind(&now)
+                .execute(&state.db)
+                .await?;
+        }
     }
 
     // Update whisper settings — frontend sends flat/generic keys (model, api_key, etc.)
@@ -608,6 +651,13 @@ async fn update_config(
             .and_then(|v| v.as_i64())
         {
             sqlx::query("UPDATE processing_settings SET num_segments_to_input_to_prompt = ?, updated_at = ? WHERE id = 1")
+                .bind(v)
+                .bind(&now)
+                .execute(&state.db)
+                .await?;
+        }
+        if let Some(v) = p.get("max_overlap_segments").and_then(|v| v.as_i64()) {
+            sqlx::query("UPDATE processing_settings SET max_overlap_segments = ?, updated_at = ? WHERE id = 1")
                 .bind(v)
                 .bind(&now)
                 .execute(&state.db)

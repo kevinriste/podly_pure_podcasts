@@ -200,6 +200,7 @@ pub struct ProcessingSettings {
     pub system_prompt_path: String,
     pub user_prompt_template_path: String,
     pub num_segments_to_input_to_prompt: i64,
+    pub max_overlap_segments: i64,
     pub created_at: String,
     pub updated_at: String,
 }

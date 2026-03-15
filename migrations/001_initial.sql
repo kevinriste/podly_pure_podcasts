@@ -202,6 +202,7 @@ CREATE TABLE IF NOT EXISTS processing_settings (
     system_prompt_path TEXT NOT NULL DEFAULT 'src/system_prompt.txt',
     user_prompt_template_path TEXT NOT NULL DEFAULT 'src/user_prompt.jinja',
     num_segments_to_input_to_prompt INTEGER NOT NULL DEFAULT 60,
+    max_overlap_segments INTEGER NOT NULL DEFAULT 30,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
