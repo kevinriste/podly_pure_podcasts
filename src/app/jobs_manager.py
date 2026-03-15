@@ -751,6 +751,10 @@ class JobsManager:
                     finally:
                         # Always clean up session state after job processing to release any locks
                         try:
+                            _db.session.expire_all()
+                        except Exception:  # noqa: BLE001
+                            pass
+                        try:
                             _db.session.rollback()
                         except Exception:  # noqa: BLE001
                             pass
