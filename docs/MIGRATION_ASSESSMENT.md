@@ -12,6 +12,8 @@ This is a full backend rewrite of a podcast ad-removal application. The Rust ver
 
 The rewrite is **not yet production-ready**. It has never processed a real podcast episode end-to-end, has essentially zero test coverage, and several architectural decisions trade long-term maintainability for development speed. These are addressable issues, not fundamental problems.
 
+**Important note on scope:** The Rust rewrite includes features from unmerged Python feature branches — notably the oneshot classifier (`kevin/feat/oneshot-llm-strategy`), 12-factor env var precedence (`kevin/feat/env-vars-authoritative`), and chapter-based ad detection (in `origin/preview` but not `origin/main`). See [NON_UPSTREAM_FEATURES.md](NON_UPSTREAM_FEATURES.md) for the full breakdown.
+
 ---
 
 ## Is This Migration a Good Idea?
@@ -147,11 +149,13 @@ The Python backend's `AdMerger` does three passes: proximity grouping, content-a
 
 **Practical impact:** In multi-sponsor episodes where ad segments from the same sponsor appear with content gaps, Python may merge them into one cut while Rust treats them as separate cuts. This produces slightly different output audio but both are valid ad removals.
 
-### Migration Tool Has No Transaction Safety (MEDIUM RISK)
+### No Data Migration Needed (CORRECTED)
 
-The `migrate_legacy` binary copies data table-by-table without wrapping in a transaction. If it fails midway (e.g., disk full, schema mismatch), the destination database is in an inconsistent state with no rollback.
+The Rust binary can use the existing Python SQLite database file directly. SQLite column types (`DateTime` vs `TEXT`, `JSON` vs `TEXT`) are just type affinities — the stored bytes are identical between the two backends.
 
-Mitigation: `--dry-run` mode exists. Users should back up the destination database before running.
+The Rust schema adds a few columns that don't exist in upstream Python (`oneshot_model`, `oneshot_max_chunk_duration_seconds`, etc.). These are from unmerged feature branches, not schema incompatibilities. They are added automatically via `ALTER TABLE ... ADD COLUMN` on startup.
+
+A `migrate_legacy` binary exists for copying data between separate database files, but it is unnecessary for the standard deployment path. Just point the Rust binary at the same `.db` file the Python backend uses.
 
 ### Error Context is Sometimes Lost (LOW RISK)
 
