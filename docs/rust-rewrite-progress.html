@@ -358,13 +358,16 @@
   <!-- === UPDATE: March 15 2026 (Session 2) === -->
   <section style="margin-top: 2rem; border: 1px solid var(--green); border-radius: 12px; padding: 1.5rem; background: rgba(63,185,80,0.04);">
     <h2 style="border-bottom: none; padding-bottom: 0;">Update &mdash; March 15, 2026 (Session 2)</h2>
-    <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">Fixes applied, performance re-measured at steady state, audit cycle 6 completed.</p>
+    <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 1rem;">8 fixes applied, 2 audit cycles completed, performance re-measured at steady state. Ad merging, heuristic refinement, and oneshot refinement all implemented.</p>
 
     <h3>Bugs Fixed This Session</h3>
     <div class="fixes-grid">
       <div class="fix-item"><span class="icon" style="color:var(--red);">&#9888;</span> <strong>SQLite session store</strong> &mdash; replaced in-memory <code>MemoryStore</code> with SQLite-backed store. Sessions now persist across container restarts.</div>
       <div class="fix-item"><span class="icon" style="color:var(--red);">&#9888;</span> <strong>NULLS LAST (5 queries)</strong> &mdash; replaced PostgreSQL-only <code>NULLS LAST</code> with SQLite-compatible <code>ORDER BY release_date IS NULL, release_date DESC</code> in all post-ordering queries.</div>
       <div class="fix-item"><span class="icon" style="color:var(--green);">&#10003;</span> <strong>base_url HTTPS support</strong> &mdash; added <code>BASE_URL</code> / <code>PODLY_BASE_URL</code> env var support so RSS feed URLs use the correct scheme behind a reverse proxy (was hardcoded <code>http://</code>).</div>
+      <div class="fix-item"><span class="icon" style="color:var(--green);">&#10003;</span> <strong>Ad segment merging</strong> &mdash; added proximity-based merging using <code>min_ad_segment_separation_seconds</code> from DB settings. Segments within the gap threshold are merged into groups before audio cutting.</div>
+      <div class="fix-item"><span class="icon" style="color:var(--green);">&#10003;</span> <strong>Heuristic refinement fallback</strong> &mdash; when LLM boundary refinement fails, falls back to pattern-based refinement using intro/outro keywords ("brought to you", "sponsor", ".com", "use code", etc.).</div>
+      <div class="fix-item"><span class="icon" style="color:var(--green);">&#10003;</span> <strong>Oneshot refinement</strong> &mdash; boundary refinement now applies to all ad detection strategies including oneshot (was previously skipped).</div>
     </div>
 
     <h3>Steady-State Performance (Corrected)</h3>
@@ -431,9 +434,11 @@
         <tr><td>5 queries using <code>NULLS LAST</code> or missing NULL ordering</td><td><span class="badge critical">Critical</span></td><td><span class="badge fixed">Fixed</span></td></tr>
         <tr><td>In-memory session store &mdash; sessions lost on restart</td><td><span class="badge critical">Critical</span></td><td><span class="badge fixed">Fixed</span></td></tr>
         <tr><td>RSS feed URLs hardcoded <code>http://</code></td><td><span class="badge critical">Critical</span></td><td><span class="badge fixed">Fixed</span></td></tr>
-        <tr><td>No ad segment merging before audio cut</td><td><span class="badge critical">Critical</span></td><td><span class="badge moderate">Deferred</span></td></tr>
-        <tr><td>No heuristic fallback when LLM refinement fails</td><td><span class="badge critical">Critical</span></td><td><span class="badge moderate">Deferred</span></td></tr>
-        <tr><td>Refinement temperature 0.1 vs Python default (unset)</td><td><span class="badge moderate">Moderate</span></td><td><span class="badge minor">Accepted</span></td></tr>
+        <tr><td>No ad segment merging before audio cut</td><td><span class="badge critical">Critical</span></td><td><span class="badge fixed">Fixed</span></td></tr>
+        <tr><td>No heuristic fallback when LLM refinement fails</td><td><span class="badge critical">Critical</span></td><td><span class="badge fixed">Fixed</span></td></tr>
+        <tr><td>Oneshot strategy skipped boundary refinement</td><td><span class="badge moderate">Moderate</span></td><td><span class="badge fixed">Fixed</span></td></tr>
+        <tr><td>Refinement temperature 0.1 (verified: matches Python)</td><td><span class="badge moderate">Moderate</span></td><td><span class="badge fixed">Not a bug</span></td></tr>
+        <tr><td>Content-aware merge (keyword/sponsor detection)</td><td><span class="badge moderate">Moderate</span></td><td><span class="badge minor">Accepted simplification</span></td></tr>
         <tr><td>Missing <code>updated_at</code> in some feed update queries</td><td><span class="badge minor">Minor</span></td><td><span class="badge minor">Noted</span></td></tr>
       </tbody>
     </table>
@@ -741,7 +746,7 @@
       <div class="timeline-item pending">
         <div class="timeline-date">Remaining</div>
         <div class="timeline-title">Known Deferred Items</div>
-        <div class="timeline-desc">Ad segment merging before audio cut, heuristic boundary refinement fallback, pre-reprocess snapshots, <code>max_completion_tokens</code> for newer models.</div>
+        <div class="timeline-desc">Content-aware ad merging (keyword/sponsor detection), pre-reprocess snapshots, <code>max_completion_tokens</code> for newer models, token rate limiting.</div>
       </div>
     </div>
   </section>
@@ -758,11 +763,9 @@
       <li><code>search_feeds</code> uses PodcastIndex API (Python uses iTunes) — same result format</li>
     </ul>
 
-    <h3>Pipeline (Deferred)</h3>
+    <h3>Pipeline (Remaining)</h3>
     <ul class="remaining-list">
-      <li>Audio fade applied at content-segment edges vs ad boundaries — slightly different audio output</li>
-      <li>No ad segment merging/filtering before audio cut</li>
-      <li>No heuristic fallback when LLM boundary refinement fails</li>
+      <li>Content-aware ad merging (keyword/sponsor detection) — Rust uses proximity-only merging</li>
       <li>No token rate limiting</li>
       <li>No <code>max_completion_tokens</code> for newer OpenAI models</li>
       <li>No pre-reprocess snapshot creation</li>
