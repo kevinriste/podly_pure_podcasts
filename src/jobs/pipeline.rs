@@ -140,18 +140,23 @@ pub async fn run_pipeline(
     // Step 4: Process audio (matches Python step 4 "Processing audio")
     update_step(pool, job_id, 4, "Processing audio", 75.0).await;
 
-    // Read output settings (fade_ms, min_ad_segment_separation)
-    let (fade_ms, min_sep): (i64, i64) = sqlx::query_as::<_, (i64, i64)>(
-        "SELECT fade_ms, min_ad_segement_separation_seconds FROM output_settings WHERE id = 1",
+    // Read output settings (fade_ms, min_ad_segment_separation, min_ad_segment_length)
+    let (fade_ms, min_sep, min_len): (i64, i64, i64) = sqlx::query_as::<_, (i64, i64, i64)>(
+        "SELECT fade_ms, min_ad_segement_separation_seconds, min_ad_segment_length_seconds FROM output_settings WHERE id = 1",
     )
     .fetch_optional(pool)
     .await
     .unwrap_or(None)
-    .unwrap_or((3000, 8));
+    .unwrap_or((3000, 8, 3));
+
+    // Get audio duration for last-segment extension
+    let audio_duration = crate::audio::get_audio_duration_ms(audio_path.to_str().unwrap_or(""))
+        .await
+        .unwrap_or(0) as f64 / 1000.0;
 
     // Merge ad segments that are close together (Python parity: AdMerger)
-    let merged = merge_ad_segments(&refined, min_sep as f64);
-    tracing::info!("Merged {} ad segments into {} groups (gap threshold: {}s)", refined.len(), merged.len(), min_sep);
+    let merged = merge_ad_segments(&refined, min_sep as f64, min_len as f64, audio_duration);
+    tracing::info!("Merged {} ad segments into {} groups (gap: {}s, min_len: {}s)", refined.len(), merged.len(), min_sep, min_len);
 
     let output_path = cut_audio(&audio_path, &merged, &feed_title, &post_title, fade_ms).await?;
     update_step(pool, job_id, 4, "Processing audio", 90.0).await;
@@ -774,9 +779,14 @@ async fn cut_audio(
     Ok(output_path)
 }
 
-/// Merge ad segments that are within `max_gap` seconds of each other,
-/// then filter out very short segments. Matches Python's AdMerger.
-fn merge_ad_segments(segments: &[(f64, f64)], max_gap: f64) -> Vec<(f64, f64)> {
+/// Merge ad segments, filter short ones, extend last segment to audio end.
+/// Matches Python's merge_ad_segments (AudioProcessor).
+fn merge_ad_segments(
+    segments: &[(f64, f64)],
+    max_gap: f64,
+    min_segment_length: f64,
+    audio_duration: f64,
+) -> Vec<(f64, f64)> {
     if segments.is_empty() {
         return vec![];
     }
@@ -784,11 +794,42 @@ fn merge_ad_segments(segments: &[(f64, f64)], max_gap: f64) -> Vec<(f64, f64)> {
     let mut sorted: Vec<(f64, f64)> = segments.to_vec();
     sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Pass 1: Proximity merge
-    let mut merged: Vec<(f64, f64)> = Vec::new();
-    let mut current = sorted[0];
+    // Save last segment before filtering (for restoration)
+    let last_segment = *sorted.last().unwrap();
+    let last_near_end = audio_duration > 0.0 && (audio_duration - last_segment.1) <= max_gap;
 
-    for &(start, end) in &sorted[1..] {
+    // Pass 1: Proximity merge
+    let mut merged = proximity_merge(&sorted, max_gap);
+
+    // Pass 2: Filter short segments
+    merged.retain(|&(start, end)| (end - start) >= min_segment_length);
+
+    // Pass 3: Restore last segment if it was near the end and got filtered
+    if last_near_end && (merged.is_empty() || merged.last().unwrap().1 < last_segment.0) {
+        merged.push(last_segment);
+    }
+
+    // Pass 4: Re-merge after filtering
+    if merged.len() > 1 {
+        merged = proximity_merge(&merged, max_gap);
+    }
+
+    // Pass 5: Extend last segment to audio end if close (Python parity)
+    if audio_duration > 0.0 {
+        if let Some(last) = merged.last_mut() {
+            if (audio_duration - last.1) <= max_gap {
+                last.1 = audio_duration;
+            }
+        }
+    }
+
+    merged
+}
+
+fn proximity_merge(segments: &[(f64, f64)], max_gap: f64) -> Vec<(f64, f64)> {
+    let mut merged: Vec<(f64, f64)> = Vec::new();
+    let mut current = segments[0];
+    for &(start, end) in &segments[1..] {
         if start - current.1 <= max_gap {
             current.1 = current.1.max(end);
         } else {
@@ -797,28 +838,6 @@ fn merge_ad_segments(segments: &[(f64, f64)], max_gap: f64) -> Vec<(f64, f64)> {
         }
     }
     merged.push(current);
-
-    // Pass 2: Filter short segments (<3s) that are likely false positives
-    // (Python's _filter_short_segments with min_ad_segment_length_seconds)
-    let min_segment_length = 3.0;
-    merged.retain(|&(start, end)| (end - start) >= min_segment_length);
-
-    // Pass 3: Second proximity merge (filtering may have created new gaps)
-    if merged.len() > 1 {
-        let mut remerged: Vec<(f64, f64)> = Vec::new();
-        let mut current = merged[0];
-        for &(start, end) in &merged[1..] {
-            if start - current.1 <= max_gap {
-                current.1 = current.1.max(end);
-            } else {
-                remerged.push(current);
-                current = (start, end);
-            }
-        }
-        remerged.push(current);
-        merged = remerged;
-    }
-
     merged
 }
 
