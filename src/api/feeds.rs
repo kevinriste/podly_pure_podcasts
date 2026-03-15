@@ -733,7 +733,17 @@ async fn user_feed(
     State(state): State<AppState>,
     Path(user_id): Path<i64>,
     Query(token_params): Query<FeedTokenQuery>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
 ) -> Result<Response, AppError> {
+    // Python parity: auth check — only admin or the user themselves can access
+    if state.config.require_auth {
+        let current = get_auth_user(&auth_user)
+            .ok_or(AppError::Unauthorized("Authentication required".into()))?;
+        if current.role != "admin" && current.id != user_id {
+            return Err(AppError::ForbiddenMsg("Forbidden".into()));
+        }
+    }
+
     let user = queries::get_user_by_id(&state.db, user_id)
         .await?
         .ok_or(AppError::NotFound)?;
