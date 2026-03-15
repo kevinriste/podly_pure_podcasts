@@ -182,7 +182,7 @@ pub async fn get_posts_by_feed(
 
     let (posts, total) = if whitelisted_only {
         let posts = sqlx::query_as::<_, Post>(
-            "SELECT * FROM post WHERE feed_id = ? AND whitelisted = 1 ORDER BY release_date DESC LIMIT ? OFFSET ?",
+            "SELECT * FROM post WHERE feed_id = ? AND whitelisted = 1 ORDER BY release_date DESC NULLS LAST, id DESC LIMIT ? OFFSET ?",
         )
         .bind(feed_id)
         .bind(page_size)
@@ -199,7 +199,7 @@ pub async fn get_posts_by_feed(
         (posts, total.0)
     } else {
         let posts = sqlx::query_as::<_, Post>(
-            "SELECT * FROM post WHERE feed_id = ? ORDER BY release_date DESC LIMIT ? OFFSET ?",
+            "SELECT * FROM post WHERE feed_id = ? ORDER BY release_date DESC NULLS LAST, id DESC LIMIT ? OFFSET ?",
         )
         .bind(feed_id)
         .bind(page_size)
@@ -411,7 +411,7 @@ pub async fn get_user_by_id(pool: &SqlitePool, id: i64) -> AppResult<Option<User
 }
 
 pub async fn get_all_users(pool: &SqlitePool) -> AppResult<Vec<User>> {
-    let users = sqlx::query_as::<_, User>("SELECT * FROM users ORDER BY created_at DESC")
+    let users = sqlx::query_as::<_, User>("SELECT * FROM users ORDER BY created_at DESC, id DESC")
         .fetch_all(pool)
         .await?;
     Ok(users)

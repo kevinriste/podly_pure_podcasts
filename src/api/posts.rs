@@ -474,7 +474,8 @@ async fn download_audio(
     match audio_path {
         Some(path) => {
             let _ = queries::increment_download_count(&state.db, post.id).await;
-            serve_file_response(path, true).await
+            let download_name = format!("{}.mp3", post.title);
+            serve_file_response_named(path, true, Some(&download_name)).await
         }
         None => {
             // Check autoprocess_on_download for auto-processing
@@ -515,7 +516,9 @@ async fn download_original(
         .filter(|p| Path::new(p).exists())
         .ok_or(AppError::NotFound)?;
 
-    serve_file_response(audio_path, true).await
+    let _ = queries::increment_download_count(&state.db, post.id).await;
+    let download_name = format!("{}_original.mp3", post.title);
+    serve_file_response_named(audio_path, true, Some(&download_name)).await
 }
 
 fn not_whitelisted_response() -> Response {
@@ -552,9 +555,11 @@ async fn processing_estimate(
         .await?
         .ok_or(AppError::NotFound)?;
 
-    let duration_sec = post.duration.unwrap_or(0) as f64;
-    // Python formula: max(1.0, duration / 60.0) → returns minutes
-    let estimated_minutes = (duration_sec / 60.0).max(1.0);
+    // Python: returns 60.0 minutes when duration is None or 0
+    let estimated_minutes = match post.duration {
+        Some(d) if d > 0 => (d as f64 / 60.0).max(1.0),
+        _ => 60.0,
+    };
 
     Ok(Json(json!({
         "post_guid": p_guid,
@@ -720,12 +725,12 @@ async fn post_debug(
     })))
 }
 
-// Legacy routes
+// Legacy routes — Python routes /post/{guid}.mp3 to download (Content-Disposition: attachment)
 async fn serve_audio_legacy(
     State(state): State<AppState>,
     AxumPath(p_guid): AxumPath<String>,
 ) -> Result<Response, AppError> {
-    serve_audio(State(state), AxumPath(p_guid)).await
+    download_audio(State(state), AxumPath(p_guid)).await
 }
 
 async fn serve_audio_dot_mp3(
@@ -737,7 +742,7 @@ async fn serve_audio_dot_mp3(
         Some(guid) => guid.to_string(),
         None => return Err(AppError::NotFound),
     };
-    serve_audio(State(state), AxumPath(p_guid)).await
+    download_audio(State(state), AxumPath(p_guid)).await
 }
 
 async fn download_original_legacy(
@@ -748,14 +753,23 @@ async fn download_original_legacy(
 }
 
 async fn serve_file_response(path: &str, as_attachment: bool) -> Result<Response, AppError> {
+    serve_file_response_named(path, as_attachment, None).await
+}
+
+async fn serve_file_response_named(path: &str, as_attachment: bool, download_name: Option<&str>) -> Result<Response, AppError> {
     let bytes = tokio::fs::read(path)
         .await
         .map_err(|_| AppError::NotFound)?;
 
-    let filename = Path::new(path)
-        .file_name()
-        .and_then(|f| f.to_str())
-        .unwrap_or("audio.mp3");
+    let filename = download_name
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            Path::new(path)
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or("audio.mp3")
+                .to_string()
+        });
 
     let content_type = if path.ends_with(".mp3") {
         "audio/mpeg"
