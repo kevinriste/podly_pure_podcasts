@@ -860,6 +860,9 @@ fn build_token_suffix(params: &FeedTokenQuery) -> String {
 }
 
 fn base_url(state: &AppState) -> String {
+    if let Some(url) = &state.config.base_url {
+        return url.clone();
+    }
     format!("http://{}:{}", state.config.host, state.config.port)
 }
 

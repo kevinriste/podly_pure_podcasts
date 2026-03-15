@@ -23,7 +23,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tower_sessions::cookie::time::Duration;
-use tower_sessions::{Expiry, MemoryStore, SessionManagerLayer};
+use tower_sessions::{Expiry, SessionManagerLayer};
 use tracing_subscriber::EnvFilter;
 
 use crate::auth::middleware::SharedRateLimiter;
@@ -76,9 +76,10 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Set up session store (in-memory; sessions lost on restart)
-    // TODO: Replace with SQLite-backed store once tower-sessions-sqlx-store matches tower-sessions version
-    let session_store = MemoryStore::default();
+    // Set up SQLite-backed session store (persists across restarts)
+    let session_store = db::session_store::SqliteSessionStore::new(pool.clone())
+        .await
+        .expect("Failed to initialize session store");
 
     let session_layer = SessionManagerLayer::new(session_store)
         .with_expiry(Expiry::OnInactivity(Duration::days(30)))

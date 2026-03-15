@@ -1,6 +1,7 @@
 pub mod models;
 #[allow(dead_code)]
 pub mod queries;
+pub mod session_store;
 
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};

@@ -57,6 +57,9 @@ pub struct AppConfig {
     pub stripe_webhook_secret: Option<String>,
     pub stripe_min_subscription_amount_cents: i64,
 
+    // Base URL for RSS feed links (auto-detected from host/port if unset)
+    pub base_url: Option<String>,
+
     // Developer mode
     pub developer_mode: bool,
 }
@@ -134,6 +137,11 @@ impl AppConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(100),
+
+            base_url: env::var("BASE_URL")
+                .or_else(|_| env::var("PODLY_BASE_URL"))
+                .ok()
+                .map(|u| u.trim_end_matches('/').to_string()),
 
             developer_mode: env::var("DEVELOPER_MODE")
                 .map(|v| v == "true" || v == "1")

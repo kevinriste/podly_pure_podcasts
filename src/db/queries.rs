@@ -182,7 +182,7 @@ pub async fn get_posts_by_feed(
 
     let (posts, total) = if whitelisted_only {
         let posts = sqlx::query_as::<_, Post>(
-            "SELECT * FROM post WHERE feed_id = ? AND whitelisted = 1 ORDER BY release_date DESC NULLS LAST, id DESC LIMIT ? OFFSET ?",
+            "SELECT * FROM post WHERE feed_id = ? AND whitelisted = 1 ORDER BY release_date IS NULL, release_date DESC, id DESC LIMIT ? OFFSET ?",
         )
         .bind(feed_id)
         .bind(page_size)
@@ -199,7 +199,7 @@ pub async fn get_posts_by_feed(
         (posts, total.0)
     } else {
         let posts = sqlx::query_as::<_, Post>(
-            "SELECT * FROM post WHERE feed_id = ? ORDER BY release_date DESC NULLS LAST, id DESC LIMIT ? OFFSET ?",
+            "SELECT * FROM post WHERE feed_id = ? ORDER BY release_date IS NULL, release_date DESC, id DESC LIMIT ? OFFSET ?",
         )
         .bind(feed_id)
         .bind(page_size)
@@ -238,7 +238,7 @@ pub async fn get_whitelisted_total(pool: &SqlitePool, feed_id: i64) -> AppResult
 pub async fn get_whitelisted_posts_for_feed(pool: &SqlitePool, feed_id: i64) -> AppResult<Vec<Post>> {
     // Python parity: only include whitelisted posts that have been processed
     let posts = sqlx::query_as::<_, Post>(
-        "SELECT * FROM post WHERE feed_id = ? AND whitelisted = 1 AND processed_audio_path IS NOT NULL ORDER BY release_date DESC",
+        "SELECT * FROM post WHERE feed_id = ? AND whitelisted = 1 AND processed_audio_path IS NOT NULL ORDER BY release_date IS NULL, release_date DESC",
     )
     .bind(feed_id)
     .fetch_all(pool)
@@ -248,7 +248,7 @@ pub async fn get_whitelisted_posts_for_feed(pool: &SqlitePool, feed_id: i64) -> 
 
 pub async fn get_all_posts_for_feed(pool: &SqlitePool, feed_id: i64) -> AppResult<Vec<Post>> {
     let posts = sqlx::query_as::<_, Post>(
-        "SELECT * FROM post WHERE feed_id = ? ORDER BY release_date DESC",
+        "SELECT * FROM post WHERE feed_id = ? ORDER BY release_date IS NULL, release_date DESC",
     )
     .bind(feed_id)
     .fetch_all(pool)
@@ -327,7 +327,7 @@ pub async fn increment_download_count(pool: &SqlitePool, post_id: i64) -> AppRes
 
 pub async fn get_recent_processed_posts(pool: &SqlitePool, feed_id: i64, limit: i64) -> AppResult<Vec<Post>> {
     let posts = sqlx::query_as::<_, Post>(
-        "SELECT p.*, f.title as feed_title FROM post p JOIN feed f ON p.feed_id = f.id WHERE p.feed_id = ? AND p.whitelisted = 1 AND p.processed_audio_path IS NOT NULL ORDER BY p.release_date DESC LIMIT ?",
+        "SELECT p.*, f.title as feed_title FROM post p JOIN feed f ON p.feed_id = f.id WHERE p.feed_id = ? AND p.whitelisted = 1 AND p.processed_audio_path IS NOT NULL ORDER BY p.release_date IS NULL, p.release_date DESC LIMIT ?",
     )
     .bind(feed_id)
     .bind(limit)
