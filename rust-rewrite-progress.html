@@ -766,9 +766,10 @@
     <h3>Pipeline (Remaining)</h3>
     <ul class="remaining-list">
       <li>Content-aware ad merging (keyword/sponsor detection) — Rust uses proximity-only merging</li>
-      <li>No token rate limiting</li>
+      <li>No token rate limiting for LLM API calls</li>
       <li>No <code>max_completion_tokens</code> for newer OpenAI models</li>
       <li>No pre-reprocess snapshot creation</li>
+      <li>No input token count validation/trimming for oversized prompts</li>
     </ul>
 
     <h3>Infrastructure (TODO)</h3>
