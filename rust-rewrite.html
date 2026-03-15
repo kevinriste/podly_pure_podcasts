@@ -218,6 +218,41 @@
   </table>
 </section>
 
+<!-- Scope -->
+<section>
+  <h2>Scope: What's Upstream vs What's Not</h2>
+
+  <p>The Rust rewrite includes features from <strong>unmerged Python feature branches</strong>, not just the upstream <code>origin/main</code>. This is important for understanding what the rewrite actually targets.</p>
+
+  <table>
+    <thead><tr><th>Feature</th><th>Origin</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>Core API (auth, feeds, posts, config, billing, Discord, RSS, scheduler)</td><td><code>origin/main</code></td><td>Upstream</td></tr>
+      <tr><td>Chunked LLM ad classification + boundary refinement</td><td><code>origin/main</code></td><td>Upstream</td></tr>
+      <tr><td>Per-feed <code>ad_detection_strategy</code> + chapter-based detection</td><td><code>origin/preview</code></td><td>Not in main</td></tr>
+      <tr><td>One-shot LLM classifier + <code>oneshot_model</code> settings</td><td><code>kevin/feat/oneshot-llm-strategy</code></td><td>Unmerged branch</td></tr>
+      <tr><td>12-factor env var precedence (env overrides DB, never persisted)</td><td><code>kevin/feat/env-vars-authoritative</code></td><td>Unmerged branch</td></tr>
+      <tr><td>Global <code>ad_detection_strategy</code> on <code>app_settings</code></td><td>Invented by rewrite</td><td>No Python equivalent</td></tr>
+      <tr><td><code>max_overlap_segments</code> setting</td><td>Invented by rewrite</td><td>No Python equivalent</td></tr>
+    </tbody>
+  </table>
+
+  <div class="verdict caution">
+    <strong>These features are interleaved throughout the code</strong> &mdash; classification pipeline, config endpoints, and schema all reference them inline. Separating them into isolated commits would require significant rework. Practically, the Rust rewrite can be merged as-is and the Python upstream can adopt the features independently.
+  </div>
+</section>
+
+<!-- Data Migration -->
+<section>
+  <h2>Data Migration</h2>
+
+  <p><strong>No data migration is needed.</strong> The Rust binary can use the existing Python SQLite database file directly. SQLite column types (<code>DateTime</code> vs <code>TEXT</code>, <code>JSON</code> vs <code>TEXT</code>) are just type affinities &mdash; the stored bytes are identical.</p>
+
+  <p>The Rust schema adds a few columns from unmerged feature branches (<code>oneshot_model</code>, etc.). These are added automatically via <code>ALTER TABLE ADD COLUMN</code> on startup. Just point the Rust binary at the same <code>.db</code> file.</p>
+
+  <p class="muted">A <code>migrate_legacy</code> binary exists for copying data between separate database files, but it is unnecessary for the standard deployment path.</p>
+</section>
+
 <!-- Before Merging -->
 <section>
   <h2>Before Merging</h2>
