@@ -145,9 +145,7 @@ If local transcription or ARM64 deployment is required, this needs explicit buil
 
 ### Ad Segment Merging is Simplified (LOW RISK)
 
-The Python backend's `AdMerger` does three passes: proximity grouping, content-aware keyword extraction (URLs, promo codes, brand names, phone numbers), and weak-group filtering. The Rust version does proximity grouping + short-segment filtering only.
-
-**Practical impact:** In multi-sponsor episodes where ad segments from the same sponsor appear with content gaps, Python may merge them into one cut while Rust treats them as separate cuts. This produces slightly different output audio but both are valid ad removals.
+Both backends implement multi-pass ad merging: proximity grouping, content-aware keyword extraction (URLs, promo codes, brand names, phone numbers), weak-group filtering, short-segment removal, and last-segment extension. The Rust implementation queries transcript text from the database for each ad group and runs the same regex patterns as Python's `AdMerger`.
 
 ### No Data Migration Needed (CORRECTED)
 
@@ -180,8 +178,7 @@ Three `.unwrap()` calls exist in hot paths (HTTP response builders, vector opera
 6. **Stripe SDK evaluation.** Assess whether `stripe-rs` is mature enough to replace raw HTTP, reducing Stripe maintenance burden.
 
 ### Nice-to-Have
-7. Content-aware ad merging (keyword extraction).
-8. Token rate limiting for LLM API calls.
+7. Token rate limiting for LLM API calls.
 9. `max_completion_tokens` support for newer OpenAI models.
 10. Input token validation to prevent oversized prompts.
 

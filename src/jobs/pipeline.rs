@@ -154,8 +154,8 @@ pub async fn run_pipeline(
         .await
         .unwrap_or(0) as f64 / 1000.0;
 
-    // Merge ad segments that are close together (Python parity: AdMerger)
-    let merged = merge_ad_segments(&refined, min_sep as f64, min_len as f64, audio_duration);
+    // Merge ad segments (proximity + content-aware keyword merge, Python parity: AdMerger)
+    let merged = merge_ad_segments(pool, post_id, &refined, min_sep as f64, min_len as f64, audio_duration).await;
     tracing::info!("Merged {} ad segments into {} groups (gap: {}s, min_len: {}s)", refined.len(), merged.len(), min_sep, min_len);
 
     let output_path = cut_audio(&audio_path, &merged, &feed_title, &post_title, fade_ms).await?;
@@ -779,9 +779,12 @@ async fn cut_audio(
     Ok(output_path)
 }
 
-/// Merge ad segments, filter short ones, extend last segment to audio end.
-/// Matches Python's merge_ad_segments (AudioProcessor).
-fn merge_ad_segments(
+/// Merge ad segments: proximity grouping, content-aware keyword merge,
+/// short-segment filtering, last-segment extension.
+/// Matches Python's AdMerger + AudioProcessor.merge_ad_segments.
+async fn merge_ad_segments(
+    pool: &SqlitePool,
+    post_id: i64,
     segments: &[(f64, f64)],
     max_gap: f64,
     min_segment_length: f64,
@@ -801,20 +804,25 @@ fn merge_ad_segments(
     // Pass 1: Proximity merge
     let mut merged = proximity_merge(&sorted, max_gap);
 
-    // Pass 2: Filter short segments
+    // Pass 2: Content-aware merge — merge groups with shared keywords
+    if merged.len() > 1 {
+        merged = content_aware_merge(pool, post_id, &merged, max_gap * 1.5).await;
+    }
+
+    // Pass 3: Filter short segments
     merged.retain(|&(start, end)| (end - start) >= min_segment_length);
 
-    // Pass 3: Restore last segment if it was near the end and got filtered
+    // Pass 4: Restore last segment if it was near the end and got filtered
     if last_near_end && (merged.is_empty() || merged.last().unwrap().1 < last_segment.0) {
         merged.push(last_segment);
     }
 
-    // Pass 4: Re-merge after filtering
+    // Pass 5: Re-merge after filtering
     if merged.len() > 1 {
         merged = proximity_merge(&merged, max_gap);
     }
 
-    // Pass 5: Extend last segment to audio end if close (Python parity)
+    // Pass 6: Extend last segment to audio end if close
     if audio_duration > 0.0 {
         if let Some(last) = merged.last_mut() {
             if (audio_duration - last.1) <= max_gap {
@@ -824,6 +832,148 @@ fn merge_ad_segments(
     }
 
     merged
+}
+
+/// Content-aware merge: query transcript text for each group, extract keywords
+/// (URLs, promo codes, phone numbers, repeated brand names), merge groups
+/// that share keywords or both have high confidence.
+/// Matches Python's AdMerger._refine_by_content + _should_merge + _extract_keywords.
+async fn content_aware_merge(
+    pool: &SqlitePool,
+    post_id: i64,
+    groups: &[(f64, f64)],
+    min_content_gap: f64,
+) -> Vec<(f64, f64)> {
+    // Extract keywords for each group from transcript text
+    let mut group_keywords: Vec<Vec<String>> = Vec::new();
+    for &(start, end) in groups {
+        let keywords = extract_keywords_for_range(pool, post_id, start, end).await;
+        group_keywords.push(keywords);
+    }
+
+    let mut merged: Vec<(f64, f64)> = Vec::new();
+    let mut merged_kw: Vec<Vec<String>> = Vec::new();
+    let mut i = 0;
+
+    while i < groups.len() {
+        let current = groups[i];
+        let current_kw = &group_keywords[i];
+
+        if i + 1 < groups.len() {
+            let next = groups[i + 1];
+            let next_kw = &group_keywords[i + 1];
+            let gap = next.0 - current.1;
+
+            if gap <= min_content_gap && should_merge_groups(current_kw, next_kw) {
+                // Merge the two groups
+                let combined_kw: Vec<String> = current_kw.iter()
+                    .chain(next_kw.iter())
+                    .cloned()
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                merged.push((current.0, next.1));
+                merged_kw.push(combined_kw);
+                i += 2;
+                continue;
+            }
+        }
+
+        merged.push(current);
+        merged_kw.push(current_kw.clone());
+        i += 1;
+    }
+
+    // Filter weak groups: long segments (>180s) without keywords are likely
+    // educational/self-promo, not ads (Python's _is_valid_group)
+    merged.into_iter()
+        .zip(merged_kw.iter())
+        .filter(|&((start, end), kw)| {
+            let duration = end - start;
+            if duration > 180.0 && kw.is_empty() {
+                tracing::debug!("Filtering weak group {:.1}s-{:.1}s (long, no keywords)", start, end);
+                false
+            } else {
+                true
+            }
+        })
+        .map(|(seg, _)| seg)
+        .collect()
+}
+
+/// Check if two ad groups should be merged based on shared keywords.
+/// Matches Python's AdMerger._should_merge.
+fn should_merge_groups(kw1: &[String], kw2: &[String]) -> bool {
+    // Shared keywords → merge
+    let set1: std::collections::HashSet<&str> = kw1.iter().map(|s| s.as_str()).collect();
+    for k in kw2 {
+        if set1.contains(k.as_str()) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Extract keywords (URLs, promo codes, phone numbers, brand names) from
+/// transcript text in a time range. Matches Python's AdMerger._extract_keywords.
+async fn extract_keywords_for_range(
+    pool: &SqlitePool,
+    post_id: i64,
+    start: f64,
+    end: f64,
+) -> Vec<String> {
+    // Query transcript text for this time range
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT text FROM transcript_segment WHERE post_id = ? AND start_time >= ? AND end_time <= ? ORDER BY start_time",
+    )
+    .bind(post_id)
+    .bind(start)
+    .bind(end)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let text: String = rows.iter().map(|(t,)| t.as_str()).collect::<Vec<_>>().join(" ");
+    let text_lower = text.to_lowercase();
+
+    let mut keywords: Vec<String> = Vec::new();
+
+    // URLs: *.com, *.net, *.org, *.io
+    let url_re = regex::Regex::new(r"\b([a-z0-9\-\.]+\.(?:com|net|org|io))\b").unwrap();
+    for cap in url_re.captures_iter(&text_lower) {
+        keywords.push(cap[1].to_string());
+    }
+
+    // Promo codes: "code X", "promo X", "save X"
+    let promo_re = regex::Regex::new(r"(?i)\b(code|promo|save)\s+\w+\b").unwrap();
+    for cap in promo_re.captures_iter(&text_lower) {
+        keywords.push(cap[0].to_string());
+    }
+
+    // Phone numbers
+    let phone_re = regex::Regex::new(r"\b\d{3}[ -]?\d{3}[ -]?\d{4}\b").unwrap();
+    if phone_re.is_match(&text) {
+        keywords.push("phone".to_string());
+    }
+
+    // Brand names: capitalized words appearing 2+ times
+    let brand_re = regex::Regex::new(r"\b[A-Z][a-z]+\b").unwrap();
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for m in brand_re.find_iter(&text) {
+        let word = m.as_str().to_string();
+        if word.len() > 3 {
+            *counts.entry(word).or_insert(0) += 1;
+        }
+    }
+    for (word, count) in &counts {
+        if *count >= 2 {
+            keywords.push(word.to_lowercase());
+        }
+    }
+
+    keywords.sort();
+    keywords.dedup();
+    keywords
 }
 
 fn proximity_merge(segments: &[(f64, f64)], max_gap: f64) -> Vec<(f64, f64)> {

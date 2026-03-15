@@ -193,8 +193,8 @@
   <h3>LLM Integration: genai vs litellm</h3>
   <p>Python's <code>litellm</code> supports 100+ LLM providers behind a single call. Rust's <code>genai</code> crate natively supports OpenAI, Anthropic, Gemini, and Groq. If the user configures a provider genai doesn't support, classification will fail. This covers &gt;95% of practical use cases but is a regression in provider breadth.</p>
 
-  <h3>Ad Segment Merging: Simplified</h3>
-  <p>Python's <code>AdMerger</code> does three passes: proximity grouping, content-aware keyword extraction (URLs, promo codes, brand names), and weak-group filtering. Rust does proximity grouping + short-segment filtering only. The content-aware pass was deferred because it requires transcript segment text and ORM relationships not easily available at the merge step. In multi-sponsor episodes, this may produce slightly different (but valid) audio cuts.</p>
+  <h3>Ad Segment Merging</h3>
+  <p>Both backends implement multi-pass ad merging: proximity grouping, content-aware keyword extraction (URLs, promo codes, brand names, phone numbers), weak-group filtering, short-segment removal, and last-segment extension. The Rust implementation queries transcript text from the database for each ad group and runs the same regex patterns as Python's <code>AdMerger</code>.</p>
 </section>
 
 <!-- What's Incomplete -->
@@ -239,11 +239,6 @@
         <td><span class="badge low">Low</span></td>
         <td>Reactive 429 backoff only. No proactive token counting. May hit API rate limits faster on large batch processing.</td>
       </tr>
-      <tr>
-        <td>Content-aware ad merging</td>
-        <td><span class="badge low">Low</span></td>
-        <td>Proximity merge only. Multi-sponsor episodes may have slightly different cut patterns than Python.</td>
-      </tr>
     </tbody>
   </table>
 </section>
@@ -269,7 +264,6 @@
 
   <h3>Nice-to-Have</h3>
   <ul class="clean">
-    <li>Content-aware ad merging (keyword/sponsor detection)</li>
     <li>Token rate limiting for LLM API calls</li>
     <li><code>max_completion_tokens</code> support for newer OpenAI models</li>
     <li>Input token validation to prevent oversized prompts</li>

@@ -128,7 +128,7 @@
 - ~~No heuristic fallback when LLM boundary refinement fails~~ — **FIXED**: heuristic_refine() with intro/outro patterns
 - ~~Oneshot skipped boundary refinement~~ — **FIXED**: refine() called for all strategies
 - ~~ffmpeg fails hard on complex filter errors~~ — **FIXED**: simple fallback extracts segments individually
-- Content-aware ad merging (keyword/sponsor/URL detection) — NOT IMPLEMENTED (DECISION-034)
+- ~~Content-aware ad merging (keyword/sponsor/URL detection)~~ — **FIXED**: queries transcript text, extracts URLs/promo codes/brand names/phone numbers
 - No proactive token rate limiting in Rust (reactive 429 backoff only)
 - `max_tokens` used instead of `max_completion_tokens` for newer models (DECISION-036)
 - No pre-reprocess snapshot creation

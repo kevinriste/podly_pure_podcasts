@@ -65,12 +65,11 @@ between Python (podly.klt.pw) and Rust (podly2.klt.pw).
 - **`POST /feed` response format**: Python returns 302 redirect (server-rendered), Rust returns 201 JSON. Both correctly add the feed. Frontend handles both.
 - **`GET /api/auth/me` after logout**: Python doesn't actually clear the session on logout (returns user data). Rust correctly returns 401. This is a Python bug.
 - **`search_feeds`**: PodcastIndex API (Rust) vs iTunes (Python) — same result format.
-- **Ad merging**: Proximity-only (Rust) vs proximity + content-aware keyword extraction (Python). See DECISION-034.
+- **Ad merging**: Both use proximity + content-aware keyword merge (URLs, promo codes, brand names, phone numbers).
 - **Session store**: Custom SQLite-backed (Rust) vs Flask server-side (Python). Both persist across restarts. See DECISION-032.
 - **Password hashing**: Argon2id (Rust) with bcrypt fallback for legacy hashes. See DECISION-015.
 
 ### Pipeline Differences (Accepted)
-- Content-aware ad merging (keyword/sponsor/URL detection) — not implemented (DECISION-034)
 - No proactive token rate limiting (reactive 429 backoff only)
 - `max_tokens` instead of `max_completion_tokens` for newer OpenAI models (DECISION-036)
 - No pre-reprocess snapshot creation
