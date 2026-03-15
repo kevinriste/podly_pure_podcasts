@@ -132,12 +132,8 @@ pub async fn run_pipeline(
             };
             update_step(pool, job_id, 3, step_name, 70.0).await;
 
-            let refined = if strategy.as_str() == "oneshot" {
-                ad_segments.iter().map(|a| (a.start_time, a.end_time)).collect()
-            } else {
-                refine(pool, config, post_id, &ad_segments, &segments).await
-            };
-            refined
+            // Apply boundary refinement to all strategies (Python parity)
+            refine(pool, config, post_id, &ad_segments, &segments).await
         }
     };
 
