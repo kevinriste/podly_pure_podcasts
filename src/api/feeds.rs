@@ -52,7 +52,7 @@ async fn serialize_feed(
     .unwrap_or(0);
 
     let member_count: i64 = sqlx::query_as::<_, (i64,)>(
-        "SELECT COUNT(*) FROM user_feed WHERE feed_id = ?",
+        "SELECT COUNT(*) FROM feed_supporter WHERE feed_id = ?",
     )
     .bind(feed.id)
     .fetch_one(pool)
@@ -68,7 +68,7 @@ async fn serialize_feed(
         true
     } else if let Some(uid) = user_id {
         sqlx::query_as::<_, (i64,)>(
-            "SELECT COUNT(*) FROM user_feed WHERE user_id = ? AND feed_id = ?",
+            "SELECT COUNT(*) FROM feed_supporter WHERE user_id = ? AND feed_id = ?",
         )
         .bind(uid)
         .bind(feed.id)
@@ -129,7 +129,7 @@ async fn is_feed_active_for_user(
 
     // Get user's feeds sorted by creation date to determine priority
     let user_feeds: Vec<(i64,)> = sqlx::query_as(
-        "SELECT feed_id FROM user_feed WHERE user_id = ? ORDER BY created_at ASC",
+        "SELECT feed_id FROM feed_supporter WHERE user_id = ? ORDER BY created_at ASC",
     )
     .bind(user.id)
     .fetch_all(pool)

@@ -236,8 +236,9 @@ pub async fn get_whitelisted_total(pool: &SqlitePool, feed_id: i64) -> AppResult
 }
 
 pub async fn get_whitelisted_posts_for_feed(pool: &SqlitePool, feed_id: i64) -> AppResult<Vec<Post>> {
+    // Python parity: only include whitelisted posts that have been processed
     let posts = sqlx::query_as::<_, Post>(
-        "SELECT * FROM post WHERE feed_id = ? AND whitelisted = 1 ORDER BY release_date DESC",
+        "SELECT * FROM post WHERE feed_id = ? AND whitelisted = 1 AND processed_audio_path IS NOT NULL ORDER BY release_date DESC",
     )
     .bind(feed_id)
     .fetch_all(pool)
