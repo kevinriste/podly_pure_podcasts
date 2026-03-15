@@ -269,8 +269,8 @@
   <h3>Nice-to-Have</h3>
   <ul class="clean">
     <li>Token rate limiting for LLM API calls</li>
-    <li><code>max_completion_tokens</code> support for newer OpenAI models</li>
-    <li>Input token validation to prevent oversized prompts</li>
+    <li><s><code>max_completion_tokens</code> support for newer OpenAI models</s> <span class="resolved-note"><code>model_uses_max_completion_tokens()</code> implemented; genai crate only exposes <code>max_tokens</code>. May work transparently for newer models — needs testing.</span></li>
+    <li><s>Input token validation to prevent oversized prompts</s> <span class="resolved-note">Added via <code>tiktoken-rs</code>. Prompts validated against <code>llm_max_input_tokens_per_call</code> from DB before sending.</span></li>
   </ul>
 </section>
 
