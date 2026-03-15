@@ -120,6 +120,7 @@
 57. **Oneshot failure status** — Model call failure status is now `"failed_permanent"` (was `"error"`)
 58. **Whisper model call preservation** — `clear_post_identifications` now preserves Whisper model calls so transcript can be reused on reprocess
 59. **fade_ms from config** — Audio cutting now reads `fade_ms` from `output_settings` (was hardcoded 50ms, DB default is 3000ms)
+60. **user_feed auth check** — `/feed/user/{user_id}` now checks that requesting user is admin or same user (was unauthenticated — security vulnerability)
 
 ## Remaining Known Pipeline Differences
 
