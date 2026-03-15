@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { feedsApi } from '../services/api';
 
@@ -8,7 +8,7 @@ interface ChapterProcessingStatsProps {
   className?: string;
 }
 
-type TabId = 'overview' | 'chapters';
+type TabId = 'overview' | 'chapters' | 'transcript';
 
 export default function ChapterProcessingStats({
   episodeGuid,
@@ -23,6 +23,15 @@ export default function ChapterProcessingStats({
     queryFn: () => feedsApi.getPostStats(episodeGuid),
     enabled: showModal && hasProcessedAudio,
   });
+  const isChapterInsert = stats?.ad_detection_strategy === 'chapter_insert';
+  const showTranscriptTab = isChapterInsert;
+  const modelEntries = Object.entries(stats?.processing_stats?.model_types || {});
+
+  useEffect(() => {
+    if (!showTranscriptTab && activeTab === 'transcript') {
+      setActiveTab('overview');
+    }
+  }, [showTranscriptTab, activeTab]);
 
   const formatDuration = (seconds: number) => {
     const hours = Math.floor(seconds / 3600);
@@ -74,7 +83,8 @@ export default function ChapterProcessingStats({
               <nav className="flex space-x-8 px-6">
                 {[
                   { id: 'overview', label: 'Overview' },
-                  { id: 'chapters', label: 'Chapters' }
+                  { id: 'chapters', label: 'Chapters' },
+                  ...(showTranscriptTab ? [{ id: 'transcript', label: 'Transcript' }] : []),
                 ].map((tab) => (
                   <button
                     key={tab.id}
@@ -87,6 +97,7 @@ export default function ChapterProcessingStats({
                   >
                     {tab.label}
                     {stats && tab.id === 'chapters' && stats.chapters && ` (${stats.chapters.chapters?.length || 0})`}
+                    {stats && tab.id === 'transcript' && ` (${stats.transcript_segments?.length || 0})`}
                   </button>
                 ))}
               </nav>
@@ -122,7 +133,7 @@ export default function ChapterProcessingStats({
                           <div className="text-left">
                             <span className="font-medium text-gray-700">Detection Method:</span>
                             <span className="ml-2 px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800">
-                              Chapter-based
+                              {isChapterInsert ? 'Chapter insertion only' : 'Chapter-based removal'}
                             </span>
                           </div>
                         </div>
@@ -142,24 +153,58 @@ export default function ChapterProcessingStats({
                             <div className="text-2xl font-bold text-green-600">
                               {stats.chapters?.chapters_kept || 0}
                             </div>
-                            <div className="text-sm text-green-800">Chapters Kept</div>
+                            <div className="text-sm text-green-800">
+                              {isChapterInsert ? 'Chapters Inserted' : 'Chapters Kept'}
+                            </div>
                           </div>
 
                           <div className="bg-gradient-to-br from-red-50 to-red-100 rounded-lg p-4 text-center">
                             <div className="text-2xl font-bold text-red-600">
                               {stats.chapters?.chapters_removed || 0}
                             </div>
-                            <div className="text-sm text-red-800">Chapters Removed</div>
+                            <div className="text-sm text-red-800">
+                              {isChapterInsert ? 'Chapters Removed (N/A)' : 'Chapters Removed'}
+                            </div>
                           </div>
                         </div>
                       </div>
 
-                      {stats.chapters?.filter_strings && (
+                      {isChapterInsert && (
+                        <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+                          Chapter insertion mode keeps audio unchanged and only writes chapter metadata.
+                        </div>
+                      )}
+
+                      <div>
+                        <h3 className="font-semibold text-gray-900 mb-4 text-left">
+                          Models Used ({stats.processing_stats?.total_model_calls || 0} calls)
+                        </h3>
+                        {modelEntries.length === 0 ? (
+                          <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">
+                            No model calls were recorded for this run.
+                          </div>
+                        ) : (
+                          <div className="bg-white border rounded-lg p-4">
+                            <div className="space-y-2">
+                              {modelEntries.map(([model, count]) => (
+                                <div key={model} className="flex justify-between items-center">
+                                  <span className="text-sm text-gray-600">{model}</span>
+                                  <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-medium">
+                                    {count} calls
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {!isChapterInsert && (stats.chapters?.filter_strings ?? []).length > 0 && (
                         <div>
                           <h3 className="font-semibold text-gray-900 mb-4 text-left">Filter Strings</h3>
                           <div className="bg-white border rounded-lg p-4">
                             <div className="flex flex-wrap gap-2">
-                              {stats.chapters.filter_strings.map((filter: string, idx: number) => (
+                              {(stats.chapters?.filter_strings ?? []).map((filter: string, idx: number) => (
                                 <span key={idx} className="px-3 py-1 bg-gray-100 text-gray-700 rounded-full text-sm">
                                   {filter}
                                 </span>
@@ -265,7 +310,7 @@ export default function ChapterProcessingStats({
                             <tbody className="bg-white divide-y divide-gray-200">
                               {(stats.chapters?.chapters || []).map((chapter: { title: string; start_time: number; end_time: number; label: string }, idx: number) => (
                                 <tr key={idx} className={`hover:bg-gray-50 ${
-                                  chapter.label === 'ad' ? 'bg-red-50' : ''
+                                  chapter.label === 'ad' && !isChapterInsert ? 'bg-red-50' : ''
                                 }`}>
                                   <td className="px-4 py-3 text-sm text-gray-900">{idx + 1}</td>
                                   <td className="px-4 py-3 text-sm text-gray-900 font-medium">{chapter.title}</td>
@@ -281,7 +326,9 @@ export default function ChapterProcessingStats({
                                         ? 'bg-red-100 text-red-800'
                                         : 'bg-green-100 text-green-800'
                                     }`}>
-                                      {chapter.label === 'ad' ? 'Removed' : 'Kept'}
+                                      {chapter.label === 'ad'
+                                        ? (isChapterInsert ? 'Excluded' : 'Removed')
+                                        : (isChapterInsert ? 'Included' : 'Kept')}
                                     </span>
                                   </td>
                                 </tr>
@@ -298,6 +345,44 @@ export default function ChapterProcessingStats({
                       {(!stats.chapters?.chapters || stats.chapters.chapters.length === 0) && (
                         <div className="text-center py-8 text-gray-500">
                           No chapter data available.
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {activeTab === 'transcript' && (
+                    <div>
+                      <h3 className="font-semibold text-gray-900 mb-4 text-left">
+                        Transcript Segments ({stats.transcript_segments?.length || 0})
+                      </h3>
+                      {(!stats.transcript_segments || stats.transcript_segments.length === 0) ? (
+                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">
+                          No transcript segments were generated for this episode.
+                        </div>
+                      ) : (
+                        <div className="bg-white border rounded-lg overflow-hidden">
+                          <div className="overflow-x-auto">
+                            <table className="min-w-full divide-y divide-gray-200">
+                              <thead className="bg-gray-50">
+                                <tr>
+                                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">#</th>
+                                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Start</th>
+                                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">End</th>
+                                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Text</th>
+                                </tr>
+                              </thead>
+                              <tbody className="bg-white divide-y divide-gray-200">
+                                {(stats.transcript_segments || []).map((segment, idx) => (
+                                  <tr key={segment.id ?? idx} className="hover:bg-gray-50">
+                                    <td className="px-4 py-3 text-sm text-gray-900">{segment.sequence_num}</td>
+                                    <td className="px-4 py-3 text-sm text-gray-600">{segment.start_time}s</td>
+                                    <td className="px-4 py-3 text-sm text-gray-600">{segment.end_time}s</td>
+                                    <td className="px-4 py-3 text-sm text-gray-700">{segment.text}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
                         </div>
                       )}
                     </div>

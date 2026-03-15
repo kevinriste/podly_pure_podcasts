@@ -6,7 +6,7 @@ from unittest import mock
 from flask import g
 
 from app.extensions import db
-from app.models import Feed, Post, User
+from app.models import Feed, ModelCall, Post, TranscriptSegment, User
 from app.routes.post_routes import post_bp
 from app.runtime_config import config as runtime_config
 
@@ -377,7 +377,71 @@ def test_feed_posts_include_podly_description_html(app):
     assert "Podly Chapters" in item["podly_description_html"]
     assert "<li>00:00 Intro</li>" in item["podly_description_html"]
     assert "<li>08:05 Gold mission</li>" in item["podly_description_html"]
-    assert "Podly Post JSON" in item["podly_description_html"]
+    assert "Podly Post JSON" not in item["podly_description_html"]
+
+
+def test_reprocess_keep_transcript_accepts_local_whisper_model_call(app):
+    app.testing = True
+    app.register_blueprint(post_bp)
+
+    with app.app_context():
+        feed = Feed(title="Local Whisper Feed", rss_url="https://example.com/feed.xml")
+        db.session.add(feed)
+        db.session.commit()
+
+        post = Post(
+            feed_id=feed.id,
+            guid="local-whisper-guid",
+            download_url="https://example.com/audio.mp3",
+            title="Local Whisper Episode",
+            whitelisted=True,
+        )
+        db.session.add(post)
+        db.session.commit()
+
+        db.session.add(
+            TranscriptSegment(
+                post_id=post.id,
+                sequence_num=0,
+                start_time=0.0,
+                end_time=5.0,
+                text="hello",
+            )
+        )
+        db.session.add(
+            ModelCall(
+                post_id=post.id,
+                first_segment_sequence_num=0,
+                last_segment_sequence_num=0,
+                model_name="local_base.en",
+                prompt="Whisper transcription job",
+                status="success",
+            )
+        )
+        db.session.commit()
+        guid = post.guid
+
+    client = app.test_client()
+
+    with (
+        mock.patch("app.routes.post_routes.get_jobs_manager") as mock_mgr,
+        mock.patch(
+            "app.routes.post_routes.clear_post_processing_data_keep_transcript"
+        ) as clear_mock,
+    ):
+        mock_mgr.return_value.start_post_processing.return_value = {
+            "status": "started",
+            "job_id": "job-123",
+            "message": "ok",
+        }
+
+        response = client.post(f"/api/posts/{guid}/reprocess/keep-transcript")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload is not None
+    assert payload["status"] == "started"
+    clear_mock.assert_called_once()
 
 
 def test_post_stats_omits_debug_info_when_disabled(app):
@@ -409,6 +473,74 @@ def test_post_stats_omits_debug_info_when_disabled(app):
     payload = response.get_json()
     assert payload is not None
     assert "debug_info" not in payload
+
+
+def test_post_stats_include_chapters_for_chapter_insert_strategy(app):
+    app.testing = True
+    app.register_blueprint(post_bp)
+
+    with app.app_context():
+        feed = Feed(
+            title="Chapter Insert Feed",
+            rss_url="https://example.com/feed.xml",
+            ad_detection_strategy="chapter_insert",
+        )
+        db.session.add(feed)
+        db.session.commit()
+
+        post = Post(
+            feed_id=feed.id,
+            guid="chapter-insert-stats-guid",
+            download_url="https://example.com/audio.mp3",
+            title="Chapter Insert Episode",
+            processed_audio_path="/tmp/chapter-insert-output.mp3",
+            chapter_data=json.dumps(
+                {
+                    "chapter_source": "description",
+                    "chapters_for_output": [
+                        {
+                            "title": "Intro",
+                            "start_time": 0.0,
+                            "end_time": 12.5,
+                        },
+                        {
+                            "title": "Main Topic",
+                            "start_time": 12.5,
+                            "end_time": 30.0,
+                        },
+                    ],
+                }
+            ),
+            whitelisted=True,
+        )
+        db.session.add(post)
+        db.session.commit()
+        guid = post.guid
+
+    client = app.test_client()
+    response = client.get(f"/api/posts/{guid}/stats")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload is not None
+    assert payload["ad_detection_strategy"] == "chapter_insert"
+    assert payload["chapters"]["total_chapters"] == 2
+    assert payload["chapters"]["chapters_kept"] == 2
+    assert payload["chapters"]["chapters_removed"] == 0
+    assert payload["chapters"]["chapters"] == [
+        {
+            "title": "Intro",
+            "start_time": 0.0,
+            "end_time": 12.5,
+            "label": "content",
+        },
+        {
+            "title": "Main Topic",
+            "start_time": 12.5,
+            "end_time": 30.0,
+            "label": "content",
+        },
+    ]
 
 
 def test_post_stats_includes_debug_info_when_enabled(app, tmp_path):

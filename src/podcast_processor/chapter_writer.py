@@ -34,11 +34,9 @@ def recalculate_chapter_times(
     if not removed_segments:
         return chapters
 
-    # Sort and normalize removed segments to integer milliseconds
-    sorted_segments_ms = sorted(
-        [(int(start * 1000), int(end * 1000)) for start, end in removed_segments],
-        key=lambda x: x[0],
-    )
+    # Normalize removed segments to sorted, non-overlapping millisecond windows so
+    # offset math always reflects unique removed audio time before each marker.
+    sorted_segments_ms = _normalize_removed_segments_ms(removed_segments)
 
     adjusted_chapters: list[Chapter] = []
 
@@ -74,6 +72,34 @@ def recalculate_chapter_times(
         )
 
     return adjusted_chapters
+
+
+def _normalize_removed_segments_ms(
+    removed_segments: list[tuple[float, float]],
+) -> list[tuple[int, int]]:
+    """Convert to sorted, merged millisecond windows."""
+    windows_ms: list[tuple[int, int]] = []
+    for start_sec, end_sec in removed_segments:
+        start_ms = round(start_sec * 1000)
+        end_ms = round(end_sec * 1000)
+        if end_ms <= start_ms:
+            continue
+        windows_ms.append((start_ms, end_ms))
+
+    if not windows_ms:
+        return []
+
+    windows_ms.sort(key=lambda window: window[0])
+    merged: list[tuple[int, int]] = [windows_ms[0]]
+
+    for start_ms, end_ms in windows_ms[1:]:
+        last_start_ms, last_end_ms = merged[-1]
+        if start_ms <= last_end_ms:
+            merged[-1] = (last_start_ms, max(last_end_ms, end_ms))
+            continue
+        merged.append((start_ms, end_ms))
+
+    return merged
 
 
 def _removed_offset_ms_at_time(

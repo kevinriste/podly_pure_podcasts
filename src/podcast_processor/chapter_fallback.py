@@ -309,6 +309,8 @@ def refine_generated_chapter_titles_with_llm(
     transcript_segments: Sequence[Any],
     *,
     llm_model: str | None,
+    llm_api_key: str | None = None,
+    openai_base_url: str | None = None,
     openai_timeout_sec: int = 300,
     logger_override: logging.Logger | None = None,
 ) -> list[Chapter]:
@@ -337,6 +339,8 @@ def refine_generated_chapter_titles_with_llm(
             {"role": "user", "content": prompt},
         ],
         "timeout": int(openai_timeout_sec or 300),
+        "api_key": llm_api_key,
+        "base_url": openai_base_url,
     }
     if model_uses_max_completion_tokens(llm_model):
         completion_args["max_completion_tokens"] = 300
@@ -378,6 +382,8 @@ def generate_topic_chapters_from_transcript_with_llm(
     transcript_segments: Sequence[Any],
     *,
     llm_model: str | None,
+    llm_api_key: str | None = None,
+    openai_base_url: str | None = None,
     total_duration_ms: int | None = None,
     openai_timeout_sec: int = 300,
     target_chapter_seconds: int = 8 * 60,
@@ -445,6 +451,8 @@ def generate_topic_chapters_from_transcript_with_llm(
     try:
         parsed, content, finish_reason, expected_count = _request_topic_chapter_plan(
             llm_model=llm_model,
+            llm_api_key=llm_api_key,
+            openai_base_url=openai_base_url,
             prompt=prompt,
             openai_timeout_sec=openai_timeout_sec,
             logger_override=log,
@@ -468,6 +476,8 @@ def generate_topic_chapters_from_transcript_with_llm(
             target_chapter_seconds=target_chapter_seconds,
             min_chapter_seconds=min_chapter_seconds,
             llm_model=llm_model,
+            llm_api_key=llm_api_key,
+            openai_base_url=openai_base_url,
             openai_timeout_sec=openai_timeout_sec,
             logger_override=log,
         )
@@ -771,6 +781,8 @@ def _build_topic_chapter_generation_prompt(
 def _request_topic_chapter_plan(
     *,
     llm_model: str,
+    llm_api_key: str | None = None,
+    openai_base_url: str | None = None,
     prompt: str,
     openai_timeout_sec: int,
     logger_override: logging.Logger | None = None,
@@ -790,6 +802,8 @@ def _request_topic_chapter_plan(
             {"role": "user", "content": prompt},
         ],
         "timeout": int(openai_timeout_sec or 300),
+        "api_key": llm_api_key,
+        "base_url": openai_base_url,
     }
     if model_uses_max_completion_tokens(llm_model):
         completion_args["max_completion_tokens"] = TOPIC_CHAPTER_LLM_MAX_OUTPUT_TOKENS
@@ -827,6 +841,8 @@ def _retry_incomplete_topic_chapter_plan(
     target_chapter_seconds: int,
     min_chapter_seconds: int,
     llm_model: str,
+    llm_api_key: str | None,
+    openai_base_url: str | None,
     openai_timeout_sec: int,
     logger_override: logging.Logger | None = None,
 ) -> list[tuple[int, str]]:
@@ -887,6 +903,8 @@ def _retry_incomplete_topic_chapter_plan(
     retry_parsed, retry_content, retry_finish_reason, retry_expected = (
         _request_topic_chapter_plan(
             llm_model=llm_model,
+            llm_api_key=llm_api_key,
+            openai_base_url=openai_base_url,
             prompt=retry_prompt,
             openai_timeout_sec=openai_timeout_sec,
             logger_override=log,

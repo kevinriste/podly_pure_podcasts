@@ -22,6 +22,35 @@ interface FeedDetailProps {
 type SortOption = 'newest' | 'oldest' | 'title';
 type EpisodeDescriptionView = 'source' | 'podly';
 
+const EPISODE_DESCRIPTION_VIEW_STORAGE_KEY_PREFIX = 'podly:episode-description-view:feed:';
+
+function getEpisodeDescriptionViewStorageKey(feedId: number): string {
+  return `${EPISODE_DESCRIPTION_VIEW_STORAGE_KEY_PREFIX}${feedId}`;
+}
+
+function loadEpisodeDescriptionView(feedId: number): EpisodeDescriptionView {
+  if (typeof window === 'undefined') {
+    return 'source';
+  }
+  const rawValue = window.localStorage.getItem(
+    getEpisodeDescriptionViewStorageKey(feedId)
+  );
+  return rawValue === 'podly' ? 'podly' : 'source';
+}
+
+function persistEpisodeDescriptionView(
+  feedId: number,
+  view: EpisodeDescriptionView
+): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  window.localStorage.setItem(
+    getEpisodeDescriptionViewStorageKey(feedId),
+    view
+  );
+}
+
 interface ProcessingEstimate {
   post_guid: string;
   estimated_minutes: number;
@@ -50,7 +79,11 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
   const [page, setPage] = useState(1);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [episodeDescriptionView, setEpisodeDescriptionView] =
-    useState<EpisodeDescriptionView>('source');
+    useState<EpisodeDescriptionView>(() => loadEpisodeDescriptionView(feed.id));
+  const handleEpisodeDescriptionViewChange = (view: EpisodeDescriptionView) => {
+    setEpisodeDescriptionView(view);
+    persistEpisodeDescriptionView(currentFeed.id, view);
+  };
 
   const isAdmin = !requireAuth || user?.role === 'admin';
   const whitelistedOnly = requireAuth && !isAdmin;
@@ -356,6 +389,10 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
   useEffect(() => {
     setCurrentFeed(feed);
   }, [feed]);
+
+  useEffect(() => {
+    setEpisodeDescriptionView(loadEpisodeDescriptionView(currentFeed.id));
+  }, [currentFeed.id]);
 
   useEffect(() => {
     setExpandedDescriptions(new Set());
@@ -1133,6 +1170,7 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
                           <ProcessingStatsButton
                             episodeGuid={episode.guid}
                             hasProcessedAudio={episode.has_processed_audio}
+                            adDetectionStrategy={currentFeed.ad_detection_strategy}
                           />
                         </div>
 
@@ -1247,8 +1285,11 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
         isOpen={showSettingsModal}
         onClose={() => setShowSettingsModal(false)}
         autoWhitelistGlobalDefault={appAutoWhitelistDefault}
+        llmChapterFallbackGlobalDefault={
+          configResponse?.config?.llm?.enable_llm_chapter_fallback_tagging
+        }
         episodeDescriptionView={episodeDescriptionView}
-        onEpisodeDescriptionViewChange={setEpisodeDescriptionView}
+        onEpisodeDescriptionViewChange={handleEpisodeDescriptionViewChange}
       />
     </div>
   );

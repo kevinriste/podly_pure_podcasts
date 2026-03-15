@@ -467,7 +467,7 @@ def test_feed_item_appends_podly_chapters(mock_post, app):
     assert "Podly Chapters" in description
     assert "<li>00:00 Episode intro</li>" in description
     assert "<li>08:05 Gold mission</li>" in description
-    assert "Podly Post JSON" in description
+    assert "Podly Post JSON" not in description
 
 
 def test_feed_item_with_reverse_proxy(mock_post, app):

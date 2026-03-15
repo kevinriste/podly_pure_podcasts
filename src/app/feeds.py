@@ -84,9 +84,6 @@ def _render_podly_chapters_html(post: Post) -> str:
 
 def build_post_feed_description_html(post: Post) -> str:
     """Build the description shown in Podly-generated RSS items for a post."""
-    base_url = _get_base_url()
-    post_details_url = _append_feed_token_params(f"{base_url}/post/{post.guid}/json")
-
     description_parts: list[str] = []
     if post.description:
         description_parts.append(post.description)
@@ -95,7 +92,6 @@ def build_post_feed_description_html(post: Post) -> str:
     if chapters_html:
         description_parts.append(chapters_html)
 
-    description_parts.append(f'<p><a href="{post_details_url}">Podly Post JSON</a></p>')
     return "\n".join(description_parts)
 
 

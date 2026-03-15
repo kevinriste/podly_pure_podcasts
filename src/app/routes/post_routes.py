@@ -14,6 +14,7 @@ from app.auth.service import update_user_last_active
 from app.extensions import db
 from app.feeds import build_post_feed_description_html
 from app.jobs_manager import get_jobs_manager
+from app.model_call_utils import whisper_model_call_filter
 from app.models import (
     Feed,
     Identification,
@@ -236,9 +237,7 @@ def get_post_json(p_guid: str) -> flask.Response:
             )
 
     whisper_model_calls = []
-    for model_call in post.model_calls.filter(
-        ModelCall.model_name.like("%whisper%")
-    ).all():
+    for model_call in post.model_calls.filter(whisper_model_call_filter()).all():
         whisper_model_calls.append(
             {
                 "id": model_call.id,
@@ -344,6 +343,12 @@ def _get_chapter_stats(post: Post, feed: Feed) -> dict[str, Any]:
             chapters_removed = [
                 {**ch, "label": "ad"} for ch in data.get("chapters_removed", [])
             ]
+            if not chapters_kept and not chapters_removed:
+                chapters_for_output = data.get("chapters_for_output", [])
+                if isinstance(chapters_for_output, list):
+                    chapters_kept = [
+                        {**ch, "label": "content"} for ch in chapters_for_output
+                    ]
             # Sort by original start time to maintain order from the file
             all_chapters = sorted(
                 chapters_kept + chapters_removed, key=lambda c: c["start_time"]
@@ -517,7 +522,11 @@ def api_post_stats(p_guid: str) -> flask.Response:
 
     # Build chapter data for chapter-based processing
     chapters_data = None
-    if ad_detection_strategy == "chapter" and post.processed_audio_path and feed:
+    if (
+        ad_detection_strategy in ("chapter", "chapter_insert")
+        and post.processed_audio_path
+        and feed
+    ):
         chapters_data = _get_chapter_stats(post, feed)
 
     # Calculate ad blocks and statistics for LLM-based processing
@@ -1017,7 +1026,7 @@ def api_reprocess_post_keep_transcript(p_guid: str) -> ResponseReturnValue:
         db.session.query(ModelCall.id)
         .filter(
             ModelCall.post_id == post.id,
-            ModelCall.model_name.like("%whisper%"),
+            whisper_model_call_filter(),
             ModelCall.status == "success",
         )
         .first()

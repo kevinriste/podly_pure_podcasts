@@ -5,6 +5,7 @@ from typing import Any
 
 from app.extensions import db
 from app.jobs_manager_run_service import recalculate_run_counts
+from app.model_call_utils import whisper_model_call_filter
 from app.models import (
     Identification,
     ModelCall,
@@ -172,7 +173,7 @@ def clear_post_processing_data_keep_transcript_action(
     non_whisper_model_calls_deleted = (
         db.session.query(ModelCall)
         .filter(ModelCall.post_id == post.id)
-        .filter(~ModelCall.model_name.like("%whisper%"))
+        .filter(~whisper_model_call_filter())
         .delete(synchronize_session=False)
     )
 

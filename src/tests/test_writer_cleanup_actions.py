@@ -94,6 +94,14 @@ def test_clear_post_processing_data_keep_transcript_preserves_transcript(app) ->
             prompt="Whisper transcription job",
             status="success",
         )
+        local_whisper_call = ModelCall(
+            post_id=post.id,
+            first_segment_sequence_num=0,
+            last_segment_sequence_num=0,
+            model_name="local_base.en",
+            prompt="Whisper transcription job",
+            status="success",
+        )
         llm_call = ModelCall(
             post_id=post.id,
             first_segment_sequence_num=0,
@@ -103,6 +111,7 @@ def test_clear_post_processing_data_keep_transcript_preserves_transcript(app) ->
             status="success",
         )
         db.session.add(whisper_call)
+        db.session.add(local_whisper_call)
         db.session.add(llm_call)
         db.session.commit()
 
@@ -134,6 +143,13 @@ def test_clear_post_processing_data_keep_transcript_preserves_transcript(app) ->
             ModelCall.query.filter_by(
                 post_id=post.id,
                 model_name="groq_whisper-large-v3-turbo",
+            ).count()
+            == 1
+        )
+        assert (
+            ModelCall.query.filter_by(
+                post_id=post.id,
+                model_name="local_base.en",
             ).count()
             == 1
         )

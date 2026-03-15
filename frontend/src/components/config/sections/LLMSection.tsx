@@ -158,8 +158,8 @@ export default function LLMSection() {
             />
           </Field>
           <Field
-            label="Enable Chapter Fallback Tagging (LLM)"
-            hint="Keep or auto-create chapter tags for LLM-processed MP3s from descriptions or transcripts."
+            label="Enable LLM-Based Chapter Tagging"
+            hint="Preserve embedded chapters when available, otherwise fall back to description or transcript-derived chapters for LLM processing."
           >
             <input
               type="checkbox"

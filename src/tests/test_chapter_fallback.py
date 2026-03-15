@@ -176,16 +176,20 @@ def test_refine_generated_chapter_titles_with_llm_updates_titles() -> None:
     with patch(
         "podcast_processor.chapter_fallback.litellm.completion",
         return_value=response,
-    ):
+    ) as completion_mock:
         refined = refine_generated_chapter_titles_with_llm(
             chapters,
             transcript_segments,
             llm_model="test-model",
+            llm_api_key="test-key",
+            openai_base_url="https://llm.example.com/v1",
             openai_timeout_sec=30,
         )
 
     assert [c.title for c in refined] == ["Episode intro", "Gold mission"]
     assert [c.start_time_ms for c in refined] == [0, 300_000]
+    assert completion_mock.call_args.kwargs["api_key"] == "test-key"
+    assert completion_mock.call_args.kwargs["base_url"] == "https://llm.example.com/v1"
 
 
 def test_generate_topic_chapters_from_transcript_with_llm_uses_llm_boundaries() -> None:
@@ -222,10 +226,12 @@ def test_generate_topic_chapters_from_transcript_with_llm_uses_llm_boundaries() 
     with patch(
         "podcast_processor.chapter_fallback.litellm.completion",
         return_value=response,
-    ):
+    ) as completion_mock:
         chapters = generate_topic_chapters_from_transcript_with_llm(
             transcript_segments,
             llm_model="test-model",
+            llm_api_key="test-key",
+            openai_base_url="https://llm.example.com/v1",
             total_duration_ms=900_000,
             openai_timeout_sec=30,
             min_chapter_seconds=0,
@@ -238,6 +244,8 @@ def test_generate_topic_chapters_from_transcript_with_llm_uses_llm_boundaries() 
         "Challenge begins",
         "Roundtable fallout",
     ]
+    assert completion_mock.call_args.kwargs["api_key"] == "test-key"
+    assert completion_mock.call_args.kwargs["base_url"] == "https://llm.example.com/v1"
 
 
 def test_generate_topic_chapters_from_transcript_with_llm_retries_remaining_blocks() -> (

@@ -1,31 +1,27 @@
-import { useQuery } from '@tanstack/react-query';
-import { feedsApi } from '../services/api';
 import ChapterProcessingStats from './ChapterProcessingStats';
 import LLMProcessingStats from './LLMProcessingStats';
 
 interface ProcessingStatsButtonProps {
   episodeGuid: string;
   hasProcessedAudio: boolean;
+  adDetectionStrategy?: 'llm' | 'chapter' | 'chapter_insert';
   className?: string;
 }
 
 export default function ProcessingStatsButton({
   episodeGuid,
   hasProcessedAudio,
+  adDetectionStrategy = 'llm',
   className = ''
 }: ProcessingStatsButtonProps) {
-  const { data: stats } = useQuery({
-    queryKey: ['episode-stats', episodeGuid],
-    queryFn: () => feedsApi.getPostStats(episodeGuid),
-    enabled: false,
-    staleTime: 0,
-  });
-
   if (!hasProcessedAudio) {
     return null;
   }
 
-  if (stats?.ad_detection_strategy === 'chapter') {
+  if (
+    adDetectionStrategy === 'chapter' ||
+    adDetectionStrategy === 'chapter_insert'
+  ) {
     return <ChapterProcessingStats episodeGuid={episodeGuid} hasProcessedAudio={hasProcessedAudio} className={className} />;
   }
 
