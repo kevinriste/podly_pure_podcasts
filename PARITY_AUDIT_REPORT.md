@@ -14,7 +14,8 @@
 | Config (settings, test endpoints) | 8 | 12 | 12 | All critical, most moderate |
 | Feeds + Posts (CRUD, RSS, audio) | 14 | 21 | 8 | All critical, most moderate |
 | DB / Queries | 2 | 3 | 5 | All critical |
-| **Total** | **44** | **67** | **42** | **~95 fixes applied** |
+| Processing Pipeline | 7 | 8 | 9 | All critical + high |
+| **Total** | **51** | **75** | **51** | **~105 fixes applied** |
 
 ## Fixes Applied
 
@@ -108,6 +109,28 @@
 49. **is_feed_active_for_user table name** — Same fix
 50. **RSS feed filtering** — `get_whitelisted_posts_for_feed` now requires `processed_audio_path IS NOT NULL` (Python excludes unprocessed posts)
 51. **Password hashing** — Confirmed Python uses raw bcrypt (not werkzeug PBKDF2), Rust bcrypt fallback is correct
+
+### Processing Pipeline Domain
+
+52. **Streaming download** — Now streams audio to file instead of loading entirely into memory (prevents OOM on large episodes)
+53. **User-Agent header** — Downloads now include Chrome User-Agent header (some CDNs reject without it)
+54. **Referer for acast** — Adds Referer header for acast.com URLs (required by their CDN)
+55. **Download timeout** — 60s timeout added (was no timeout, could hang indefinitely)
+56. **Post-level metadata** — Classifiers now use `post.title`/`post.description` instead of `feed.title`/`feed.description` (Python parity)
+57. **Oneshot failure status** — Model call failure status is now `"failed_permanent"` (was `"error"`)
+58. **Whisper model call preservation** — `clear_post_identifications` now preserves Whisper model calls so transcript can be reused on reprocess
+59. **fade_ms from config** — Audio cutting now reads `fade_ms` from `output_settings` (was hardcoded 50ms, DB default is 3000ms)
+
+## Remaining Known Pipeline Differences
+
+- Audio fade applied at content-segment edges (Rust) vs ad boundaries (Python) — produces slightly different audio
+- No ad segment merging/filtering before audio cut (short/spurious segments not consolidated)
+- No heuristic fallback when LLM boundary refinement fails
+- Refined boundaries stored as `[(start, end)]` tuples (Rust) vs `[{orig_start, orig_end, refined_start, refined_end}]` dicts (Python)
+- Transcript markers `=== TRANSCRIPT START ===` vs `[TRANSCRIPT START]`
+- No token rate limiting in Rust
+- No `max_completion_tokens` support for newer OpenAI models (uses `max_tokens` always)
+- No pre-reprocess snapshot creation
 
 ## Remaining Known Differences (Database Layer)
 
