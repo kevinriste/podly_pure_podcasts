@@ -13,7 +13,8 @@
 | Jobs (manager, pipeline, status) | 5 | 8 | 4 | All critical + moderate |
 | Config (settings, test endpoints) | 8 | 12 | 12 | All critical, most moderate |
 | Feeds + Posts (CRUD, RSS, audio) | 14 | 21 | 8 | All critical, most moderate |
-| **Total** | **42** | **64** | **37** | **~90 fixes applied** |
+| DB / Queries | 2 | 3 | 5 | All critical |
+| **Total** | **44** | **67** | **42** | **~95 fixes applied** |
 
 ## Fixes Applied
 
@@ -101,7 +102,22 @@
 - Missing catch-all `/<path>` route for static file/RSS URL fallback
 - Developer mode test feed handling not implemented (non-production feature)
 
-## Files Modified (14 files, ~1033 insertions, ~234 deletions)
+### Database / Queries Domain
+
+48. **serialize_feed table name** — Fixed `user_feed` → `feed_supporter` (would have caused runtime SQL errors)
+49. **is_feed_active_for_user table name** — Same fix
+50. **RSS feed filtering** — `get_whitelisted_posts_for_feed` now requires `processed_audio_path IS NOT NULL` (Python excludes unprocessed posts)
+51. **Password hashing** — Confirmed Python uses raw bcrypt (not werkzeug PBKDF2), Rust bcrypt fallback is correct
+
+## Remaining Known Differences (Database Layer)
+
+- DateTime format: Python stores naive datetimes, Rust stores RFC 3339 with timezone — functionally compatible in SQLite
+- `JobsManagerRun` orchestration not created by Rust (reads existing Python-era runs only)
+- Post cleanup doesn't remove orphaned transcript/identification data (audio files only)
+- Token ID format differs (Rust strips dashes) — existing Python tokens still work
+- Session store is in-memory (lost on restart) — needs SQLite-backed store for production
+
+## Files Modified (16 files, ~1050 insertions, ~240 deletions)
 
 - `src/api/auth.rs` — Username normalization, rate limiting, error messages
 - `src/api/billing.rs` — Response shapes, status codes, field names
