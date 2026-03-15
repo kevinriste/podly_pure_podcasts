@@ -97,6 +97,41 @@
   </div>
 </section>
 
+<!-- Scope -->
+<section>
+  <h2>Scope: What's Upstream vs What's Not</h2>
+
+  <p>The Rust rewrite targets the upstream Python codebase but also includes features from <strong>unmerged Python feature branches</strong>. This is important for understanding what the rewrite actually delivers.</p>
+
+  <table>
+    <thead><tr><th>Feature</th><th>Origin</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>Core API (auth, feeds, posts, config, billing, Discord, RSS, scheduler)</td><td><code>origin/main</code></td><td>Upstream</td></tr>
+      <tr><td>Chunked LLM ad classification + boundary refinement</td><td><code>origin/main</code></td><td>Upstream</td></tr>
+      <tr><td>Per-feed <code>ad_detection_strategy</code> + chapter-based detection</td><td><code>origin/preview</code></td><td>Not in main</td></tr>
+      <tr><td>One-shot LLM classifier + <code>oneshot_model</code> settings</td><td><code>kevin/feat/oneshot-llm-strategy</code></td><td>Unmerged branch</td></tr>
+      <tr><td>12-factor env var precedence (env overrides DB, never persisted)</td><td><code>kevin/feat/env-vars-authoritative</code></td><td>Unmerged branch</td></tr>
+      <tr><td>Global <code>ad_detection_strategy</code> on <code>app_settings</code></td><td>Invented by rewrite</td><td>No Python equivalent</td></tr>
+      <tr><td><code>max_overlap_segments</code> setting</td><td>Invented by rewrite</td><td>No Python equivalent</td></tr>
+    </tbody>
+  </table>
+
+  <div class="verdict caution">
+    <strong>These features are interleaved throughout the code</strong> &mdash; classification pipeline, config endpoints, and schema all reference them inline. Separating them into isolated commits would require significant rework.
+  </div>
+</section>
+
+<!-- Data Migration -->
+<section>
+  <h2>Data Migration</h2>
+
+  <p><strong>No data migration is needed.</strong> The Rust binary can use the existing Python SQLite database file directly. Both backends use the same SQLite schema; column type differences (<code>DateTime</code> vs <code>TEXT</code>, <code>JSON</code> vs <code>TEXT</code>) are just SQLite type affinities &mdash; the stored bytes are identical.</p>
+
+  <p>The non-upstream features add a handful of new columns (<code>oneshot_model</code>, etc.). These are added automatically via <code>ALTER TABLE ADD COLUMN</code> with defaults on startup. Just point the Rust binary at the same <code>.db</code> file.</p>
+
+  <p class="muted">A <code>migrate_legacy</code> binary exists for copying data between separate database files, but it is unnecessary for the standard deployment path.</p>
+</section>
+
 <!-- Performance -->
 <section>
   <h2>Performance</h2>
@@ -190,11 +225,6 @@
         <td>No ARM64 Docker build. <code>whisper-rs-sys</code> requires architecture-specific SIMD compilation. Limits deployment to x86 servers.</td>
       </tr>
       <tr>
-        <td>Migration tool has no transactions</td>
-        <td><span class="badge medium">Medium</span></td>
-        <td>Data copied table-by-table without transaction wrapping. Partial failure leaves inconsistent state. Dry-run mode available but no rollback.</td>
-      </tr>
-      <tr>
         <td>Stripe without SDK</td>
         <td><span class="badge medium">Medium</span></td>
         <td>Raw HTTP calls to 6 Stripe endpoints. No type safety on request params. Stripe API changes require manual code updates.</td>
@@ -216,41 +246,6 @@
       </tr>
     </tbody>
   </table>
-</section>
-
-<!-- Scope -->
-<section>
-  <h2>Scope: What's Upstream vs What's Not</h2>
-
-  <p>The Rust rewrite includes features from <strong>unmerged Python feature branches</strong>, not just the upstream <code>origin/main</code>. This is important for understanding what the rewrite actually targets.</p>
-
-  <table>
-    <thead><tr><th>Feature</th><th>Origin</th><th>Status</th></tr></thead>
-    <tbody>
-      <tr><td>Core API (auth, feeds, posts, config, billing, Discord, RSS, scheduler)</td><td><code>origin/main</code></td><td>Upstream</td></tr>
-      <tr><td>Chunked LLM ad classification + boundary refinement</td><td><code>origin/main</code></td><td>Upstream</td></tr>
-      <tr><td>Per-feed <code>ad_detection_strategy</code> + chapter-based detection</td><td><code>origin/preview</code></td><td>Not in main</td></tr>
-      <tr><td>One-shot LLM classifier + <code>oneshot_model</code> settings</td><td><code>kevin/feat/oneshot-llm-strategy</code></td><td>Unmerged branch</td></tr>
-      <tr><td>12-factor env var precedence (env overrides DB, never persisted)</td><td><code>kevin/feat/env-vars-authoritative</code></td><td>Unmerged branch</td></tr>
-      <tr><td>Global <code>ad_detection_strategy</code> on <code>app_settings</code></td><td>Invented by rewrite</td><td>No Python equivalent</td></tr>
-      <tr><td><code>max_overlap_segments</code> setting</td><td>Invented by rewrite</td><td>No Python equivalent</td></tr>
-    </tbody>
-  </table>
-
-  <div class="verdict caution">
-    <strong>These features are interleaved throughout the code</strong> &mdash; classification pipeline, config endpoints, and schema all reference them inline. Separating them into isolated commits would require significant rework. Practically, the Rust rewrite can be merged as-is and the Python upstream can adopt the features independently.
-  </div>
-</section>
-
-<!-- Data Migration -->
-<section>
-  <h2>Data Migration</h2>
-
-  <p><strong>No data migration is needed.</strong> The Rust binary can use the existing Python SQLite database file directly. SQLite column types (<code>DateTime</code> vs <code>TEXT</code>, <code>JSON</code> vs <code>TEXT</code>) are just type affinities &mdash; the stored bytes are identical.</p>
-
-  <p>The Rust schema adds a few columns from unmerged feature branches (<code>oneshot_model</code>, etc.). These are added automatically via <code>ALTER TABLE ADD COLUMN</code> on startup. Just point the Rust binary at the same <code>.db</code> file.</p>
-
-  <p class="muted">A <code>migrate_legacy</code> binary exists for copying data between separate database files, but it is unnecessary for the standard deployment path.</p>
 </section>
 
 <!-- Before Merging -->
@@ -289,26 +284,12 @@
     <tbody>
       <tr><td>No compile-time SQL</td><td>Runtime-checked queries</td><td>Schema changes break silently</td><td>Adopt <code>sqlx::query!()</code> incrementally</td></tr>
       <tr><td>No Stripe SDK</td><td>Raw HTTP</td><td>Maintenance burden</td><td>Evaluate <code>stripe-rs</code></td></tr>
-      <tr><td>PodcastIndex only</td><td>Replaced iTunes</td><td>Catalog coverage</td><td>Add iTunes as fallback</td></tr>
+      <tr><td>PodcastIndex only</td><td>Uses different API than Python</td><td>Potential catalog gaps</td><td>Add iTunes as fallback</td></tr>
       <tr><td>genai only</td><td>~5 LLM providers</td><td>Users on other providers</td><td>Add OpenAI-compatible HTTP fallback</td></tr>
       <tr><td>No tests</td><td>3 unit tests</td><td>Highest risk area</td><td>Integration test suite</td></tr>
       <tr><td>AMD64 only</td><td>No ARM64 Docker</td><td>Limits deployments</td><td>Cross-compilation CI</td></tr>
     </tbody>
   </table>
-</section>
-
-<!-- Data Migration -->
-<section>
-  <h2>Data Migration</h2>
-  <p>A standalone binary (<code>migrate_legacy</code>) copies all 12 tables from a Python-era SQLite database to the Rust schema. It preserves all IDs (maintaining foreign key integrity), handles minor schema differences between the two backends, and supports <code>--dry-run</code> mode.</p>
-
-  <p>What migrates: feeds, posts, users, transcript segments, model calls, identifications, feed memberships, access tokens, job history, and all settings tables.</p>
-
-  <p>What doesn't migrate: user sessions (different session store implementation), temporary audio files (only paths stored).</p>
-
-  <div class="verdict caution">
-    <strong>Risk:</strong> No transaction wrapping. If migration fails partway (disk full, schema mismatch), the destination database is inconsistent with no rollback. Always back up the destination database first.
-  </div>
 </section>
 
 <!-- Architecture -->
@@ -327,7 +308,7 @@
       <tr><td>Payments</td><td>Raw reqwest to Stripe API</td><td>HMAC-SHA256 webhook verification</td></tr>
       <tr><td>OAuth</td><td>Raw reqwest to Discord API</td><td>Full authorization code flow</td></tr>
       <tr><td>Scheduler</td><td>tokio::spawn loop</td><td>Reads interval from DB each cycle</td></tr>
-      <tr><td>Config</td><td>12-factor env precedence</td><td>Env vars override DB; never persisted back</td></tr>
+      <tr><td>Config</td><td>12-factor env precedence</td><td>Env vars override DB; never persisted back <em>(non-upstream feature)</em></td></tr>
     </tbody>
   </table>
 </section>
