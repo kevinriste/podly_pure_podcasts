@@ -144,17 +144,20 @@ pub async fn run_pipeline(
     // Step 4: Process audio (matches Python step 4 "Processing audio")
     update_step(pool, job_id, 4, "Processing audio", 75.0).await;
 
-    // Read fade_ms from output_settings (Python uses config.output.fade_ms, default 3000)
-    let fade_ms: i64 = sqlx::query_as::<_, (i64,)>(
-        "SELECT fade_ms FROM output_settings WHERE id = 1",
+    // Read output settings (fade_ms, min_ad_segment_separation)
+    let (fade_ms, min_sep): (i64, i64) = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT fade_ms, min_ad_segement_separation_seconds FROM output_settings WHERE id = 1",
     )
     .fetch_optional(pool)
     .await
     .unwrap_or(None)
-    .map(|(v,)| v)
-    .unwrap_or(3000);
+    .unwrap_or((3000, 8));
 
-    let output_path = cut_audio(&audio_path, &refined, &feed_title, &post_title, fade_ms).await?;
+    // Merge ad segments that are close together (Python parity: AdMerger)
+    let merged = merge_ad_segments(&refined, min_sep as f64);
+    tracing::info!("Merged {} ad segments into {} groups (gap threshold: {}s)", refined.len(), merged.len(), min_sep);
+
+    let output_path = cut_audio(&audio_path, &merged, &feed_title, &post_title, fade_ms).await?;
     update_step(pool, job_id, 4, "Processing audio", 90.0).await;
 
     let _ = sqlx::query("UPDATE post SET processed_audio_path = ? WHERE id = ?")
@@ -773,6 +776,33 @@ async fn cut_audio(
     }
 
     Ok(output_path)
+}
+
+/// Merge ad segments that are within `max_gap` seconds of each other.
+/// Matches Python's AdMerger proximity-based grouping.
+fn merge_ad_segments(segments: &[(f64, f64)], max_gap: f64) -> Vec<(f64, f64)> {
+    if segments.is_empty() {
+        return vec![];
+    }
+
+    let mut sorted: Vec<(f64, f64)> = segments.to_vec();
+    sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut merged: Vec<(f64, f64)> = Vec::new();
+    let mut current = sorted[0];
+
+    for &(start, end) in &sorted[1..] {
+        if start - current.1 <= max_gap {
+            // Merge: extend current group
+            current.1 = current.1.max(end);
+        } else {
+            merged.push(current);
+            current = (start, end);
+        }
+    }
+    merged.push(current);
+
+    merged
 }
 
 fn sanitize_filename(name: &str) -> String {

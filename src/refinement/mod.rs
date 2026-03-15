@@ -100,8 +100,9 @@ pub async fn refine_boundaries(
                 .await;
             }
             Err(e) => {
-                tracing::warn!("Boundary refinement LLM call failed: {e}");
-                refined.push((block.start_time, block.end_time));
+                tracing::warn!("Boundary refinement LLM call failed, trying heuristic: {e}");
+                let (h_start, h_end) = heuristic_refine(block.start_time, block.end_time, &context);
+                refined.push((h_start, h_end));
             }
         }
     }
@@ -229,4 +230,49 @@ async fn call_refinement_llm(
 
     serde_json::from_str::<RefinedBoundary>(json_str)
         .map_err(|e| format!("parse refinement response: {e}"))
+}
+
+/// Pattern-based heuristic refinement fallback (matches Python _heuristic_refine).
+/// Extends ad boundaries into adjacent segments that contain intro/outro patterns.
+fn heuristic_refine(ad_start: f64, ad_end: f64, context: &[Segment]) -> (f64, f64) {
+    const INTRO_PATTERNS: &[&str] = &["brought to you", "sponsor", "let me tell you"];
+    const OUTRO_PATTERNS: &[&str] = &[".com", "thanks to", "use code", "visit"];
+
+    let mut refined_start = ad_start;
+    let mut refined_end = ad_end;
+
+    // Check segments before ad for intro patterns
+    for seg in context {
+        if seg.start_time < ad_start {
+            let text_lower = seg.text.to_lowercase();
+            if INTRO_PATTERNS.iter().any(|p| text_lower.contains(p)) {
+                tracing::debug!("Heuristic: intro pattern matched at {:.1}s", seg.start_time);
+                refined_start = seg.start_time;
+            }
+        }
+    }
+
+    // Check segments after ad for outro patterns
+    for seg in context {
+        if seg.start_time > ad_end {
+            let text_lower = seg.text.to_lowercase();
+            if OUTRO_PATTERNS.iter().any(|p| text_lower.contains(p)) {
+                tracing::debug!("Heuristic: outro pattern matched at {:.1}s", seg.start_time);
+                refined_end = seg.end_time;
+            }
+        }
+    }
+
+    // Constrain to max extension bounds
+    refined_start = refined_start.max(ad_start - MAX_START_EXTENSION_SECONDS);
+    refined_end = refined_end.min(ad_end + MAX_END_EXTENSION_SECONDS);
+
+    if refined_start != ad_start || refined_end != ad_end {
+        tracing::info!(
+            "Heuristic refinement: {:.1}s-{:.1}s → {:.1}s-{:.1}s",
+            ad_start, ad_end, refined_start, refined_end,
+        );
+    }
+
+    (refined_start, refined_end)
 }
