@@ -221,7 +221,7 @@ async fn cleanup_run(
         }
 
         let _ = sqlx::query(
-            "UPDATE post SET processed_audio_path = NULL, unprocessed_audio_path = NULL WHERE id = ?",
+            "UPDATE post SET processed_audio_path = NULL, unprocessed_audio_path = NULL, whitelisted = 0 WHERE id = ?",
         )
         .bind(post_id)
         .execute(&state.db)

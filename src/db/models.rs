@@ -54,6 +54,7 @@ pub struct TranscriptSegment {
 pub struct User {
     pub id: i64,
     pub username: String,
+    #[serde(skip_serializing)]
     pub password_hash: String,
     pub role: String,
     pub feed_allowance: i64,
