@@ -43,7 +43,17 @@ pub fn router() -> Router<AppState> {
 struct PostsQuery {
     page: Option<i64>,
     page_size: Option<i64>,
-    whitelisted_only: Option<bool>,
+    /// Python accepts "1", "true", "yes", "on" — use custom deserializer
+    #[serde(default, deserialize_with = "deserialize_truthy_bool")]
+    whitelisted_only: bool,
+}
+
+fn deserialize_truthy_bool<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    let val: Option<String> = Option::deserialize(deserializer)?;
+    match val.as_deref() {
+        Some("1") | Some("true") | Some("yes") | Some("on") => Ok(true),
+        _ => Ok(false),
+    }
 }
 
 async fn list_posts(
@@ -53,7 +63,7 @@ async fn list_posts(
 ) -> AppResult<Json<Value>> {
     let page = q.page.unwrap_or(1).max(1);
     let page_size = q.page_size.unwrap_or(25).clamp(1, 200);
-    let whitelisted_only = q.whitelisted_only.unwrap_or(false);
+    let whitelisted_only = q.whitelisted_only;
 
     let (posts, total) =
         queries::get_posts_by_feed(&state.db, feed_id, page, page_size, whitelisted_only).await?;
@@ -589,19 +599,24 @@ async fn post_json(
         .iter()
         .take(5)
         .map(|s| {
+            let truncated_text = if s.text.len() > 100 {
+                format!("{}...", &s.text[..100])
+            } else {
+                s.text.clone()
+            };
             json!({
                 "id": s.id,
                 "sequence_num": s.sequence_num,
                 "start_time": s.start_time,
                 "end_time": s.end_time,
-                "text": s.text,
+                "text": truncated_text,
             })
         })
         .collect();
 
     // Get whisper model calls (matching Python)
-    let whisper_model_calls: Vec<Value> = sqlx::query_as::<_, (i64, String, String, Option<i64>, Option<i64>, Option<String>, Option<String>)>(
-        "SELECT id, model_name, status, first_segment_sequence_num, last_segment_sequence_num, timestamp, response FROM model_call WHERE post_id = ? AND model_name LIKE '%whisper%'",
+    let whisper_model_calls: Vec<Value> = sqlx::query_as::<_, (i64, String, String, Option<i64>, Option<i64>, Option<String>, Option<String>, Option<String>)>(
+        "SELECT id, model_name, status, first_segment_sequence_num, last_segment_sequence_num, timestamp, response, error_message FROM model_call WHERE post_id = ? AND model_name LIKE '%whisper%'",
     )
     .bind(post.id)
     .fetch_all(&state.db)
@@ -610,7 +625,7 @@ async fn post_json(
     .into_iter()
     .map(|mc| {
         let response_preview = mc.6.as_deref().map(|r| {
-            if r.len() > 200 { format!("{}...", &r[..200]) } else { r.to_string() }
+            if r.len() > 100 { format!("{}...", &r[..100]) } else { r.to_string() }
         });
         json!({
             "id": mc.0,
@@ -620,6 +635,7 @@ async fn post_json(
             "last_segment": mc.4,
             "timestamp": mc.5,
             "response": response_preview,
+            "error": mc.7,
         })
     })
     .collect();

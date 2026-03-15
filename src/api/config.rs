@@ -61,13 +61,17 @@ fn build_env_override_metadata(config: &AppConfig, data: &Value) -> Value {
         }
     };
 
-    // LLM overrides
-    let llm_api_key = config
-        .llm_api_key
-        .clone()
-        .or_else(|| config.openai_api_key.clone())
-        .or_else(|| config.groq_api_key.clone());
-    register("llm.llm_api_key", "LLM_API_KEY", &llm_api_key, true);
+    // LLM overrides — report the actual env var name that was found (Python parity)
+    let (llm_api_key, llm_api_key_env) = if config.llm_api_key.is_some() {
+        (config.llm_api_key.clone(), "LLM_API_KEY")
+    } else if config.openai_api_key.is_some() {
+        (config.openai_api_key.clone(), "OPENAI_API_KEY")
+    } else if config.groq_api_key.is_some() {
+        (config.groq_api_key.clone(), "GROQ_API_KEY")
+    } else {
+        (None, "LLM_API_KEY")
+    };
+    register("llm.llm_api_key", llm_api_key_env, &llm_api_key, true);
     register(
         "llm.openai_base_url",
         "OPENAI_BASE_URL",
@@ -1031,13 +1035,24 @@ async fn test_whisper(
     }
 }
 
-async fn whisper_capabilities() -> AppResult<Json<Value>> {
+async fn whisper_capabilities(
+    auth_user: Option<Extension<AuthenticatedUser>>,
+    State(state): State<AppState>,
+) -> AppResult<Json<Value>> {
+    require_admin_user(&auth_user, state.config.require_auth)?;
     Ok(Json(json!({
         "local_available": cfg!(feature = "local-whisper"),
     })))
 }
 
-async fn api_configured(State(state): State<AppState>) -> Json<Value> {
+async fn api_configured(
+    State(state): State<AppState>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
+) -> Json<Value> {
+    // Python requires admin but catches all errors defensively
+    if require_admin_user(&auth_user, state.config.require_auth).is_err() {
+        return Json(json!({ "configured": false }));
+    }
     // Python catches all exceptions and returns {configured: false}
     let has_key = match queries::get_llm_settings(&state.db).await {
         Ok(llm) => state

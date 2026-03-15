@@ -303,7 +303,13 @@ async fn serve_feed(
     State(state): State<AppState>,
     Path(feed_id): Path<i64>,
     Query(token_params): Query<FeedTokenQuery>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
 ) -> Result<Response, AppError> {
+    // Update last_active if user is present (Python parity)
+    if let Some(user) = get_auth_user(&auth_user) {
+        let _ = queries::update_user_last_active(&state.db, user.id).await;
+    }
+
     let feed = queries::get_feed_by_id(&state.db, feed_id)
         .await?
         .ok_or(AppError::NotFound)?;

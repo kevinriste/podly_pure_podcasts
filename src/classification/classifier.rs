@@ -200,7 +200,7 @@ fn build_user_prompt(
     let mut transcript = String::new();
 
     if is_start {
-        transcript.push_str("=== TRANSCRIPT START ===\n");
+        transcript.push_str("[TRANSCRIPT START]\n");
     }
 
     for seg in chunk {
@@ -209,7 +209,7 @@ fn build_user_prompt(
     }
 
     if is_end {
-        transcript.push_str("=== TRANSCRIPT END ===\n");
+        transcript.push_str("[TRANSCRIPT END]\n");
     }
 
     format!(

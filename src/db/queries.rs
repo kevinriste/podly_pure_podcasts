@@ -357,9 +357,17 @@ pub async fn clear_post_processing_data(pool: &SqlitePool, post_id: i64) -> AppR
         .execute(pool)
         .await?;
 
-    // Clear processed audio path and refined boundaries
+    // Delete processing jobs for this post
     sqlx::query(
-        "UPDATE post SET processed_audio_path = NULL, refined_ad_boundaries = NULL, refined_ad_boundaries_updated_at = NULL WHERE id = ?",
+        "DELETE FROM processing_job WHERE post_guid = (SELECT guid FROM post WHERE id = ?)",
+    )
+    .bind(post_id)
+    .execute(pool)
+    .await?;
+
+    // Clear processed audio path, refined boundaries, and reset duration
+    sqlx::query(
+        "UPDATE post SET processed_audio_path = NULL, refined_ad_boundaries = NULL, refined_ad_boundaries_updated_at = NULL, duration = NULL WHERE id = ?",
     )
     .bind(post_id)
     .execute(pool)

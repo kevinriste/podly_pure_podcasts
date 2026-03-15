@@ -17,12 +17,39 @@ pub fn hash_token(secret: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Create a new feed access token. Returns (token_id, secret).
+/// Create or reuse a feed access token. Returns (token_id, secret).
+/// Python parity: reuses existing non-revoked token for the same user+feed_id
+/// if token_secret is stored; otherwise creates a new one.
 pub async fn create_feed_access_token(
     pool: &SqlitePool,
     user_id: i64,
     feed_id: Option<i64>,
 ) -> Result<(String, String), sqlx::Error> {
+    // Check for existing non-revoked token for this user+feed
+    let existing: Option<(String, Option<String>)> = if let Some(fid) = feed_id {
+        sqlx::query_as(
+            "SELECT token_id, token_secret FROM feed_access_token WHERE user_id = ? AND feed_id = ? AND revoked = 0 LIMIT 1",
+        )
+        .bind(user_id)
+        .bind(fid)
+        .fetch_optional(pool)
+        .await?
+    } else {
+        sqlx::query_as(
+            "SELECT token_id, token_secret FROM feed_access_token WHERE user_id = ? AND feed_id IS NULL AND revoked = 0 LIMIT 1",
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?
+    };
+
+    // Reuse existing token if it has a stored secret
+    if let Some((token_id, Some(secret))) = existing {
+        if !secret.is_empty() {
+            return Ok((token_id, secret));
+        }
+    }
+
     let token_id: String = uuid::Uuid::new_v4()
         .to_string()
         .replace('-', "")
