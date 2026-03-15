@@ -62,6 +62,10 @@
   ul.clean li { padding: 0.4rem 0; border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 0.9rem; }
   ul.clean li:last-child { border: none; }
 
+  .resolved { text-decoration: line-through; opacity: 0.5; }
+  .resolved-note { color: var(--green); font-size: 0.85em; font-style: italic; }
+  td.resolved-cell { text-decoration: line-through; opacity: 0.5; }
+
   footer { text-align: center; padding: 3rem 1rem; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 0.85rem; }
   footer a { color: var(--accent); text-decoration: none; }
 
@@ -168,7 +172,7 @@
       <tr><td>Web framework</td><td>Flask + Gunicorn</td><td>Axum + Tokio</td><td>Async by default, steeper learning curve</td></tr>
       <tr><td>Database</td><td>SQLAlchemy ORM</td><td>sqlx (raw SQL)</td><td>Explicit queries, no compile-time schema checks</td></tr>
       <tr><td>LLM calls</td><td>litellm (100+ providers)</td><td>genai crate (~5 providers)</td><td>Fewer supported providers</td></tr>
-      <tr><td>Payments</td><td>Stripe Python SDK</td><td>Raw HTTP + HMAC</td><td>No type safety on API params</td></tr>
+      <tr><td>Payments</td><td>Stripe Python SDK</td><td>Raw HTTP + HMAC</td><td>No type safety; SDK evaluated, pre-1.0</td></tr>
       <tr><td>Auth</td><td>Flask-Login</td><td>tower-sessions + SQLite</td><td>Custom session store implementation</td></tr>
       <tr><td>Passwords</td><td>bcrypt</td><td>Argon2id + bcrypt fallback</td><td>Strictly better, transparent migration</td></tr>
       <tr><td>Podcast search</td><td>iTunes API</td><td>PodcastIndex API</td><td>Different catalog, same format</td></tr>
@@ -180,8 +184,8 @@
   </table>
 
   <h3>Why Not Use the Stripe SDK?</h3>
-  <p>A community crate (<code>stripe-rs</code>) exists. The rewrite uses raw HTTP instead: 6 helper functions calling Stripe's REST API with Basic Auth, plus 35 lines of webhook HMAC verification.</p>
-  <p>This loses type-safe request/response structs, automatic retry logic, and forward compatibility with Stripe API changes. It gains a smaller dependency surface for the 6 endpoints actually used. Acceptable for the current simple billing model; would become a liability if billing complexity grows.</p>
+  <p>A community crate (<code>async-stripe</code>, 688 stars, auto-generated from Stripe's OpenAPI spec) exists. We evaluated it: v1.0.0-rc.3 has been restructured into 4 sub-crates with an unstable type import surface. Checkout, billing portal, and subscription types aren't straightforwardly importable in the current RC.</p>
+  <p>The rewrite uses raw HTTP instead: 6 helper functions (175 lines) calling Stripe's REST API with Basic Auth, plus 35 lines of HMAC webhook verification. This works, is easy to read, and covers the 6 endpoints actually used. When <code>async-stripe</code> ships 1.0 stable, it would be worth adopting for type safety and forward compatibility.</p>
 
   <h3>Why sqlx Instead of an ORM?</h3>
   <p>88 query functions, 911 lines of hand-written SQL. No compile-time schema validation. If a column is renamed, it's a runtime error.</p>
@@ -225,9 +229,9 @@
         <td>No ARM64 Docker build. <code>whisper-rs-sys</code> requires architecture-specific SIMD compilation. Limits deployment to x86 servers.</td>
       </tr>
       <tr>
-        <td>Stripe without SDK</td>
-        <td><span class="badge medium">Medium</span></td>
-        <td>Raw HTTP calls to 6 Stripe endpoints. No type safety on request params. Stripe API changes require manual code updates.</td>
+        <td class="resolved-cell">Stripe without SDK</td>
+        <td><span class="badge low">Evaluated</span></td>
+        <td><s>Raw HTTP calls to 6 Stripe endpoints. No type safety on request params.</s> <span class="resolved-note">Evaluated <code>async-stripe</code> (v1.0.0-rc.3, 688 stars). API is pre-release with unstable module structure split across 4 sub-crates. Raw HTTP retained &mdash; 175 lines, straightforward. Revisit when async-stripe ships 1.0 stable.</span></td>
       </tr>
       <tr>
         <td>Fewer LLM providers</td>
@@ -258,7 +262,7 @@
   <ul class="clean">
     <li><strong>Compile-time query checking.</strong> Adopt <code>sqlx::query!()</code> for critical queries to catch schema mismatches at build time.</li>
     <li><strong>ARM64 Docker build</strong> (if ARM deployment is needed).</li>
-    <li><strong>Stripe SDK evaluation.</strong> Assess whether <code>stripe-rs</code> is mature enough to replace raw HTTP.</li>
+    <li><s><strong>Stripe SDK evaluation.</strong> Assess whether <code>stripe-rs</code> is mature enough to replace raw HTTP.</s> <span class="resolved-note">Done. <code>async-stripe</code> v1.0.0-rc.3 evaluated; pre-release API not stable. Revisit at 1.0.</span></li>
     <li><strong>LLM provider documentation.</strong> Clearly list supported providers and configuration patterns.</li>
   </ul>
 
@@ -277,7 +281,7 @@
     <thead><tr><th>Decision</th><th>Current</th><th>Concern</th><th>Action</th></tr></thead>
     <tbody>
       <tr><td>No compile-time SQL</td><td>Runtime-checked queries</td><td>Schema changes break silently</td><td>Adopt <code>sqlx::query!()</code> incrementally</td></tr>
-      <tr><td>No Stripe SDK</td><td>Raw HTTP</td><td>Maintenance burden</td><td>Evaluate <code>stripe-rs</code></td></tr>
+      <tr><td class="resolved-cell">No Stripe SDK</td><td class="resolved-cell">Raw HTTP</td><td class="resolved-cell">Maintenance burden</td><td><s>Evaluate stripe-rs</s> <span class="resolved-note">Done. async-stripe is pre-1.0; raw HTTP retained. Revisit at 1.0.</span></td></tr>
       <tr><td>PodcastIndex only</td><td>Uses different API than Python</td><td>Potential catalog gaps</td><td>Add iTunes as fallback</td></tr>
       <tr><td>genai only</td><td>~5 LLM providers</td><td>Users on other providers</td><td>Add OpenAI-compatible HTTP fallback</td></tr>
       <tr><td>No tests</td><td>3 unit tests</td><td>Highest risk area</td><td>Integration test suite</td></tr>
