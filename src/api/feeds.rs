@@ -16,6 +16,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/feeds", get(list_feeds))
         .route("/feed", post(add_feed))
+        .route("/feed/aggregate", get(aggregate_feed_legacy))
         .route("/feed/{feed_id}", get(serve_feed).delete(delete_feed))
         .route("/api/feeds/search", get(search_feeds))
         .route("/api/feeds/{feed_id}/refresh", post(refresh_feed))
@@ -37,8 +38,10 @@ pub fn router() -> Router<AppState> {
 async fn serialize_feed(
     pool: &sqlx::SqlitePool,
     feed: &crate::db::models::Feed,
-    user_id: Option<i64>,
+    user: Option<&AuthenticatedUser>,
+    require_auth: bool,
 ) -> Value {
+    let user_id = user.map(|u| u.id);
     let posts_count: i64 = sqlx::query_as::<_, (i64,)>(
         "SELECT COUNT(*) FROM post WHERE feed_id = ?",
     )
@@ -57,7 +60,13 @@ async fn serialize_feed(
     .map(|(c,)| c)
     .unwrap_or(0);
 
-    let is_member = if let Some(uid) = user_id {
+    // Python parity: when auth is disabled, is_member is always true
+    // Also Feed 1 is always treated as member when user is present or auth disabled
+    let is_member = if !require_auth {
+        true
+    } else if feed.id == 1 && user.is_some() {
+        true
+    } else if let Some(uid) = user_id {
         sqlx::query_as::<_, (i64,)>(
             "SELECT COUNT(*) FROM user_feed WHERE user_id = ? AND feed_id = ?",
         )
@@ -67,6 +76,19 @@ async fn serialize_feed(
         .await
         .map(|(c,)| c > 0)
         .unwrap_or(false)
+    } else {
+        false
+    };
+
+    // Compute is_active_subscription: checks if feed is within user's allowance
+    let is_active_subscription = if is_member {
+        if let Some(u) = user {
+            is_feed_active_for_user(pool, feed.id, u).await
+        } else if !require_auth {
+            true
+        } else {
+            false
+        }
     } else {
         false
     };
@@ -82,10 +104,45 @@ async fn serialize_feed(
         "posts_count": posts_count,
         "member_count": member_count,
         "is_member": is_member,
-        "is_active_subscription": is_member,
+        "is_active_subscription": is_active_subscription,
         "ad_detection_strategy": &feed.ad_detection_strategy,
         "chapter_filter_strings": feed.chapter_filter_strings,
     })
+}
+
+/// Check if a feed is within the user's allowance based on subscription date.
+async fn is_feed_active_for_user(
+    pool: &sqlx::SqlitePool,
+    feed_id: i64,
+    user: &AuthenticatedUser,
+) -> bool {
+    if user.role == "admin" {
+        return true;
+    }
+
+    // Hack: Always treat Feed 1 as active (matches Python)
+    if feed_id == 1 {
+        return true;
+    }
+
+    let allowance = user.manual_feed_allowance.unwrap_or(user.feed_allowance) as usize;
+
+    // Get user's feeds sorted by creation date to determine priority
+    let user_feeds: Vec<(i64,)> = sqlx::query_as(
+        "SELECT feed_id FROM user_feed WHERE user_id = ? ORDER BY created_at ASC",
+    )
+    .bind(user.id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    for (i, (fid,)) in user_feeds.iter().enumerate() {
+        if *fid == feed_id {
+            return i < allowance;
+        }
+    }
+
+    false
 }
 
 async fn list_feeds(
@@ -112,12 +169,13 @@ async fn list_feeds(
     } else {
         queries::get_all_feeds(&state.db).await?
     };
-    feeds.sort_by(|a, b| a.title.cmp(&b.title));
+    // Python does not sort feeds — return in database order
+    // feeds.sort_by(|a, b| a.title.cmp(&b.title));
 
     let mut feeds_json = Vec::new();
-    let user_id = get_auth_user(&auth_user).map(|u| u.id);
+    let user_ref = get_auth_user(&auth_user);
     for feed in &feeds {
-        feeds_json.push(serialize_feed(&state.db, &feed, user_id).await);
+        feeds_json.push(serialize_feed(&state.db, &feed, user_ref, state.config.require_auth).await);
     }
 
     // Python returns bare array, not wrapped object
@@ -358,10 +416,10 @@ async fn search_feeds(
                 .map(|f| {
                     json!({
                         "title": f.get("title").and_then(|v| v.as_str()),
-                        "url": f.get("url").and_then(|v| v.as_str()),
+                        "feedUrl": f.get("url").and_then(|v| v.as_str()),
                         "description": f.get("description").and_then(|v| v.as_str()),
                         "author": f.get("author").and_then(|v| v.as_str()),
-                        "image": f.get("image").and_then(|v| v.as_str()),
+                        "artworkUrl": f.get("image").and_then(|v| v.as_str()),
                     })
                 })
                 .collect()
@@ -382,9 +440,9 @@ fn sha1_hex(input: &str) -> String {
 async fn refresh_feed(
     State(state): State<AppState>,
     Path(feed_id): Path<i64>,
-    auth_user: Option<Extension<AuthenticatedUser>>,
+    _auth_user: Option<Extension<AuthenticatedUser>>,
 ) -> AppResult<impl IntoResponse> {
-    require_admin_user(&auth_user, state.config.require_auth)?;
+    // Python does not require admin for refresh — any authenticated user can refresh
 
     let feed = queries::get_feed_by_id(&state.db, feed_id)
         .await?
@@ -410,13 +468,17 @@ async fn refresh_feed(
 
 async fn refresh_all_feeds(
     State(state): State<AppState>,
-    auth_user: Option<Extension<AuthenticatedUser>>,
+    _auth_user: Option<Extension<AuthenticatedUser>>,
 ) -> AppResult<Json<Value>> {
-    require_admin_user(&auth_user, state.config.require_auth)?;
+    // Python does not require admin for refresh-all
 
-    state.jobs_manager.start_refresh_all_feeds().await;
+    let result = state.jobs_manager.start_refresh_all_feeds().await;
 
-    Ok(Json(json!({"status": "ok", "message": "Refresh started."})))
+    Ok(Json(json!({
+        "status": "success",
+        "feeds_refreshed": result.get("feeds_refreshed"),
+        "jobs_enqueued": result.get("enqueued"),
+    })))
 }
 
 #[derive(Deserialize)]
@@ -439,6 +501,14 @@ async fn update_feed_settings(
         .ok_or(AppError::NotFound)?;
 
     if let Some(strategy) = &body.ad_detection_strategy {
+        const VALID_STRATEGIES: &[&str] = &["inherit", "llm", "oneshot", "chapter"];
+        if !VALID_STRATEGIES.contains(&strategy.as_str()) {
+            return Err(AppError::BadRequest(format!(
+                "Invalid ad_detection_strategy: {}. Must be one of: {}",
+                strategy,
+                VALID_STRATEGIES.join(", ")
+            )));
+        }
         queries::update_feed_strategy(&state.db, feed_id, strategy).await?;
     }
     if let Some(filter) = &body.chapter_filter_strings {
@@ -454,8 +524,8 @@ async fn update_feed_settings(
     let updated_feed = queries::get_feed_by_id(&state.db, feed_id)
         .await?
         .ok_or(AppError::NotFound)?;
-    let user_id = get_auth_user(&auth_user).map(|u| u.id);
-    Ok(Json(serialize_feed(&state.db, &updated_feed, user_id).await))
+    let user_ref = get_auth_user(&auth_user);
+    Ok(Json(serialize_feed(&state.db, &updated_feed, user_ref, state.config.require_auth).await))
 }
 
 async fn join_feed(
@@ -470,7 +540,7 @@ async fn join_feed(
         .ok_or(AppError::NotFound)?;
 
     if queries::is_feed_member(&state.db, user.id, feed_id).await? {
-        return Ok(Json(serialize_feed(&state.db, &feed, Some(user.id)).await));
+        return Ok(Json(serialize_feed(&state.db, &feed, Some(user), state.config.require_auth).await));
     }
 
     let allowance = user_feed_allowance(&state, user).await?;
@@ -492,7 +562,7 @@ async fn join_feed(
     // Auto-whitelist latest episode for first member
     whitelist_latest_for_first_member(&state.db, feed_id).await;
 
-    Ok(Json(serialize_feed(&state.db, &feed, Some(user.id)).await))
+    Ok(Json(serialize_feed(&state.db, &feed, Some(user), state.config.require_auth).await))
 }
 
 async fn leave_feed(
@@ -502,19 +572,26 @@ async fn leave_feed(
 ) -> AppResult<Json<Value>> {
     let user = get_auth_user(&auth_user).ok_or(AppError::Unauthorized("Authentication required.".into()))?;
     queries::remove_feed_membership(&state.db, user.id, feed_id).await?;
+
+    // Python returns {status: "ok", feed_id}
+    Ok(Json(json!({
+        "status": "ok",
+        "feed_id": feed_id,
+    })))
+}
+
+/// Python /exit returns the full serialized feed (different from /leave)
+async fn exit_feed(
+    State(state): State<AppState>,
+    Path(feed_id): Path<i64>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
+) -> AppResult<Json<Value>> {
+    let user = get_auth_user(&auth_user).ok_or(AppError::Unauthorized("Authentication required.".into()))?;
+    queries::remove_feed_membership(&state.db, user.id, feed_id).await?;
     let feed = queries::get_feed_by_id(&state.db, feed_id)
         .await?
         .ok_or(AppError::NotFound)?;
-    Ok(Json(serialize_feed(&state.db, &feed, Some(user.id)).await))
-}
-
-/// Alias for leave_feed (Python has both /leave and /exit)
-async fn exit_feed(
-    state: State<AppState>,
-    path: Path<i64>,
-    auth_user: Option<Extension<AuthenticatedUser>>,
-) -> AppResult<Json<Value>> {
-    leave_feed(state, path, auth_user).await
+    Ok(Json(serialize_feed(&state.db, &feed, Some(user), state.config.require_auth).await))
 }
 
 async fn create_share_link(
@@ -522,6 +599,10 @@ async fn create_share_link(
     Path(feed_id): Path<i64>,
     auth_user: Option<Extension<AuthenticatedUser>>,
 ) -> Result<Response, AppError> {
+    // Python returns 404 when auth is disabled
+    if !state.config.require_auth {
+        return Err(AppError::NotFoundMsg("Authentication is disabled.".into()));
+    }
     let user = get_auth_user(&auth_user).ok_or(AppError::Unauthorized("Authentication required.".into()))?;
 
     let _feed = queries::get_feed_by_id(&state.db, feed_id)
@@ -570,9 +651,7 @@ async fn toggle_whitelist_all(
         .await?
         .ok_or(AppError::NotFound)?;
 
-    let whitelist = body.whitelist.unwrap_or(true);
-
-    // Count total posts and how many changed
+    // Count total posts
     let total: i64 = sqlx::query_as::<_, (i64,)>(
         "SELECT COUNT(*) FROM post WHERE feed_id = ?",
     )
@@ -581,6 +660,24 @@ async fn toggle_whitelist_all(
     .await
     .map(|(c,)| c)
     .unwrap_or(0);
+
+    // Python parity: auto-toggle based on current state
+    // If all are whitelisted → unwhitelist all; otherwise → whitelist all
+    let whitelist = match body.whitelist {
+        Some(v) => v,
+        None => {
+            let whitelisted_count: i64 = sqlx::query_as::<_, (i64,)>(
+                "SELECT COUNT(*) FROM post WHERE feed_id = ? AND whitelisted = 1",
+            )
+            .bind(feed_id)
+            .fetch_one(&state.db)
+            .await
+            .map(|(c,)| c)
+            .unwrap_or(0);
+            // Toggle: if not all whitelisted, whitelist all; otherwise unwhitelist all
+            whitelisted_count < total
+        }
+    };
 
     let updated: u64 = queries::set_all_posts_whitelist(&state.db, feed_id, whitelist).await?;
 
@@ -604,6 +701,32 @@ async fn aggregate_feed(
 ) -> AppResult<Json<Value>> {
     let user = get_auth_user(&auth_user).ok_or(AppError::Unauthorized("Authentication required.".into()))?;
     Ok(Json(json!({"redirect": format!("/feed/user/{}", user.id)})))
+}
+
+/// Legacy /feed/aggregate route — Python serves this as a redirect to the user's aggregate feed.
+async fn aggregate_feed_legacy(
+    State(state): State<AppState>,
+    auth_user: Option<Extension<AuthenticatedUser>>,
+    Query(token_params): Query<FeedTokenQuery>,
+) -> Result<Response, AppError> {
+    let user_id = if let Some(user) = get_auth_user(&auth_user) {
+        user.id
+    } else if !state.config.require_auth {
+        // When auth disabled, find the admin user (or fallback to user_id=0)
+        let admin_id: Option<(i64,)> = sqlx::query_as(
+            "SELECT id FROM user WHERE role = 'admin' ORDER BY id ASC LIMIT 1",
+        )
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+        admin_id.map(|(id,)| id).unwrap_or(0)
+    } else {
+        return Err(AppError::Unauthorized("Authentication required.".into()));
+    };
+    let token_suffix = build_token_suffix(&token_params);
+    let redirect_url = format!("/feed/user/{}{}", user_id, token_suffix);
+    Ok(axum::response::Redirect::to(&redirect_url).into_response())
 }
 
 async fn user_feed(
@@ -663,20 +786,36 @@ async fn create_aggregate_link(
     State(state): State<AppState>,
     auth_user: Option<Extension<AuthenticatedUser>>,
 ) -> Result<Response, AppError> {
-    let user = get_auth_user(&auth_user).ok_or(AppError::Unauthorized("Authentication required.".into()))?;
+    let user_id = if let Some(user) = get_auth_user(&auth_user) {
+        user.id
+    } else if !state.config.require_auth {
+        // When auth disabled, find or create default admin user
+        let admin_id: Option<(i64,)> = sqlx::query_as(
+            "SELECT id FROM user WHERE role = 'admin' ORDER BY id ASC LIMIT 1",
+        )
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten();
+        admin_id.map(|(id,)| id).unwrap_or(1)
+    } else {
+        return Err(AppError::Unauthorized("Authentication required.".into()));
+    };
 
     let (token_id, secret) =
-        crate::auth::feed_tokens::create_feed_access_token(&state.db, user.id, None)
+        crate::auth::feed_tokens::create_feed_access_token(&state.db, user_id, None)
             .await
             .map_err(|e| AppError::Internal(anyhow::anyhow!("Token error: {e}")))?;
 
-    let url = format!(
-        "{}/feed/user/{}?feed_token={}&feed_secret={}",
-        base_url(&state),
-        user.id,
-        token_id,
-        secret
-    );
+    // When auth disabled, Python doesn't include token params in URL
+    let url = if state.config.require_auth {
+        format!(
+            "{}/feed/user/{}?feed_token={}&feed_secret={}",
+            base_url(&state), user_id, token_id, secret
+        )
+    } else {
+        format!("{}/feed/user/{}", base_url(&state), user_id)
+    };
 
     Ok((
         StatusCode::CREATED,

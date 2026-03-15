@@ -13,6 +13,8 @@ pub struct AuthenticatedUser {
     pub id: i64,
     pub username: String,
     pub role: String,
+    pub feed_allowance: i64,
+    pub manual_feed_allowance: Option<i64>,
 }
 
 pub fn hash_password(password: &str) -> Result<String, argon2::password_hash::Error> {

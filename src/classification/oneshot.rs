@@ -113,7 +113,7 @@ Return JSON."#
             Ok(resp_text) => {
                 // Update model_call with response
                 let _ = sqlx::query(
-                    "UPDATE model_call SET status = 'completed', response = ? WHERE id = ?",
+                    "UPDATE model_call SET status = 'success', response = ? WHERE id = ?",
                 )
                 .bind(&resp_text)
                 .bind(model_call_id)

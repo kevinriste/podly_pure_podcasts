@@ -92,6 +92,8 @@ pub async fn authenticate_feed_token(
             id: user.id,
             username: user.username,
             role: user.role,
+            feed_allowance: user.feed_allowance,
+            manual_feed_allowance: user.manual_feed_allowance,
         },
         feed_id: token.feed_id,
         token,

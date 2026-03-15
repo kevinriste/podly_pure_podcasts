@@ -51,32 +51,117 @@ async fn job_manager_status(State(state): State<AppState>) -> AppResult<Json<Val
     .fetch_optional(&state.db)
     .await?;
 
-    Ok(Json(json!({
-        "run": run.map(|r| serde_json::to_value(r).unwrap_or_default())
-    })))
+    let run_json = if let Some(r) = run {
+        // Compute live job counts like Python does
+        let rid = &r.id;
+        let total: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM processing_job WHERE jobs_manager_run_id = ?",
+        )
+        .bind(rid)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or((0,));
+
+        let queued: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM processing_job WHERE jobs_manager_run_id = ? AND status = 'pending'",
+        )
+        .bind(rid)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or((0,));
+
+        let running: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM processing_job WHERE jobs_manager_run_id = ? AND status = 'running'",
+        )
+        .bind(rid)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or((0,));
+
+        let completed: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM processing_job WHERE jobs_manager_run_id = ? AND status = 'completed'",
+        )
+        .bind(rid)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or((0,));
+
+        let failed: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM processing_job WHERE jobs_manager_run_id = ? AND status = 'failed'",
+        )
+        .bind(rid)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or((0,));
+
+        let skipped: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM processing_job WHERE jobs_manager_run_id = ? AND status = 'skipped'",
+        )
+        .bind(rid)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or((0,));
+
+        let progress = if total.0 > 0 {
+            ((completed.0 + skipped.0) as f64 / total.0 as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        json!({
+            "id": r.id,
+            "status": r.status,
+            "trigger": r.trigger,
+            "started_at": r.started_at,
+            "completed_at": r.completed_at,
+            "updated_at": r.updated_at,
+            "total_jobs": total.0,
+            "queued_jobs": queued.0,
+            "running_jobs": running.0,
+            "completed_jobs": completed.0,
+            "failed_jobs": failed.0,
+            "skipped_jobs": skipped.0,
+            "context": r.context_json,
+            "counters_reset_at": r.counters_reset_at,
+            "progress_percentage": progress,
+        })
+    } else {
+        Value::Null
+    };
+
+    Ok(Json(json!({ "run": run_json })))
 }
 
 async fn cancel_job(
     State(state): State<AppState>,
     Path(job_id): Path<String>,
-) -> AppResult<Json<Value>> {
-    let result = state.jobs_manager.cancel_job(&job_id).await;
-    Ok(Json(result))
+) -> Result<axum::response::Response, crate::error::AppError> {
+    let (status_code, result) = state.jobs_manager.cancel_job(&job_id).await;
+    let status = axum::http::StatusCode::from_u16(status_code).unwrap_or(axum::http::StatusCode::OK);
+    Ok((status, Json(result)).into_response())
 }
+
+use axum::response::IntoResponse;
 
 async fn cancel_queued_jobs(State(state): State<AppState>) -> AppResult<Json<Value>> {
     let result = state.jobs_manager.cancel_queued_jobs().await;
     Ok(Json(result))
 }
 
+#[derive(Deserialize)]
+struct CleanupQuery {
+    retention_days: Option<i64>,
+}
+
 async fn cleanup_preview(
     State(state): State<AppState>,
+    Query(q): Query<CleanupQuery>,
     auth_user: Option<Extension<AuthenticatedUser>>,
 ) -> AppResult<Json<Value>> {
     require_admin_user(&auth_user, state.config.require_auth)?;
 
     let app = queries::get_app_settings(&state.db).await?;
-    let retention_days = app.post_cleanup_retention_days;
+    let retention_days = q.retention_days.or(app.post_cleanup_retention_days);
 
     if retention_days.is_none() || retention_days == Some(0) {
         return Ok(Json(json!({"count": 0, "retention_days": retention_days, "cutoff_utc": null})));
@@ -100,12 +185,13 @@ async fn cleanup_preview(
 
 async fn cleanup_run(
     State(state): State<AppState>,
+    Query(q): Query<CleanupQuery>,
     auth_user: Option<Extension<AuthenticatedUser>>,
 ) -> AppResult<Json<Value>> {
     require_admin_user(&auth_user, state.config.require_auth)?;
 
     let app = queries::get_app_settings(&state.db).await?;
-    let retention_days = app.post_cleanup_retention_days;
+    let retention_days = q.retention_days.or(app.post_cleanup_retention_days);
 
     if retention_days.is_none() || retention_days == Some(0) {
         return Ok(Json(json!({

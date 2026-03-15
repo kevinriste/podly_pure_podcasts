@@ -36,7 +36,7 @@ pub async fn run_pipeline(
 
     if let Some(processed) = &processed_audio {
         if Path::new(processed).exists() {
-            update_step(pool, job_id, 6, "already_processed", 100.0).await;
+            update_step(pool, job_id, 4, "Processing complete", 100.0).await;
             return Ok(());
         }
     }
@@ -86,8 +86,8 @@ pub async fn run_pipeline(
         .and_then(|(s,)| s)
     };
 
-    // Step 1: Download
-    update_step(pool, job_id, 1, "downloading", 0.0).await;
+    // Step 1: Download (matches Python step 1 "Downloading episode")
+    update_step(pool, job_id, 1, "Downloading episode", 0.0).await;
     let audio_path = if let Some(existing) = &existing_audio {
         if Path::new(existing).exists() {
             PathBuf::from(existing)
@@ -97,50 +97,51 @@ pub async fn run_pipeline(
     } else {
         download_audio(pool, post_id, &download_url, &post_title, job_id).await?
     };
-    update_step(pool, job_id, 1, "downloaded", 16.0).await;
+    update_step(pool, job_id, 1, "Downloading episode", 25.0).await;
 
     // Strategy-dependent steps
     let refined = match strategy.as_str() {
         "chapter" => {
             // Chapter-based: skip transcription + LLM, read chapters from audio
-            update_step(pool, job_id, 2, "reading_chapters", 20.0).await;
+            update_step(pool, job_id, 2, "Reading chapters", 30.0).await;
             let chapter_ads = classify_chapters(&audio_path, chapter_filter_strings.as_deref()).await?;
-            update_step(pool, job_id, 2, "chapters_read", 40.0).await;
-            update_step(pool, job_id, 3, "chapters_filtered", 60.0).await;
-            update_step(pool, job_id, 4, "skipped", 70.0).await;
+            update_step(pool, job_id, 2, "Reading chapters", 50.0).await;
+            update_step(pool, job_id, 3, "Filtering chapters", 70.0).await;
             chapter_ads
         }
         _ => {
             // LLM-based or oneshot: transcribe, classify, refine
-            update_step(pool, job_id, 2, "transcribing", 20.0).await;
+            // Step 2: Transcribe (matches Python step 2 "Transcribing audio")
+            update_step(pool, job_id, 2, "Transcribing audio", 30.0).await;
             let segments = transcribe(pool, config, post_id, &audio_path).await?;
-            update_step(pool, job_id, 2, "transcribed", 40.0).await;
+            update_step(pool, job_id, 2, "Transcribing audio", 50.0).await;
 
-            update_step(pool, job_id, 3, "classifying", 45.0).await;
+            // Step 3: Classify (matches Python step 3 "Classifying ads")
+            let step_name = if strategy.as_str() == "oneshot" {
+                "Classifying ads (one-shot)"
+            } else {
+                "Classifying ads"
+            };
+            update_step(pool, job_id, 3, step_name, 55.0).await;
             let ad_segments = match strategy.as_str() {
                 "oneshot" => classify_oneshot(pool, config, post_id, &segments, &feed_title, &feed_description).await?,
                 _ => classify(pool, config, post_id, &segments, &feed_title, &feed_description).await?,
             };
-            update_step(pool, job_id, 3, "classified", 60.0).await;
+            update_step(pool, job_id, 3, step_name, 70.0).await;
 
-            update_step(pool, job_id, 4, "refining", 65.0).await;
             let refined = if strategy.as_str() == "oneshot" {
                 ad_segments.iter().map(|a| (a.start_time, a.end_time)).collect()
             } else {
                 refine(pool, config, post_id, &ad_segments, &segments).await
             };
-            update_step(pool, job_id, 4, "refined", 70.0).await;
             refined
         }
     };
 
-    // Step 5: Cut
-    update_step(pool, job_id, 5, "cutting", 75.0).await;
+    // Step 4: Process audio (matches Python step 4 "Processing audio")
+    update_step(pool, job_id, 4, "Processing audio", 75.0).await;
     let output_path = cut_audio(&audio_path, &refined, &feed_title, &post_title).await?;
-    update_step(pool, job_id, 5, "cut", 90.0).await;
-
-    // Step 6: Finalize
-    update_step(pool, job_id, 6, "finalizing", 95.0).await;
+    update_step(pool, job_id, 4, "Processing audio", 90.0).await;
 
     let _ = sqlx::query("UPDATE post SET processed_audio_path = ? WHERE id = ?")
         .bind(output_path.to_str().unwrap_or(""))
@@ -169,7 +170,7 @@ pub async fn run_pipeline(
         .await;
     }
 
-    update_step(pool, job_id, 6, "complete", 100.0).await;
+    update_step(pool, job_id, 4, "Processing complete", 100.0).await;
     Ok(())
 }
 

@@ -48,15 +48,38 @@ fn is_public_request(path: &str) -> bool {
 }
 
 fn is_token_protected(path: &str) -> bool {
-    // /feed/<id>, /feed/user/<id>, /api/posts/<guid>/audio, etc.
-    if path.starts_with("/feed/") {
+    // Match Python's exact regex patterns for token-protected paths
+    let path_segments: Vec<&str> = path.split('/').collect();
+
+    // ^/feed/[^/]+$ — /feed/<id> (exactly 2 segments after root)
+    if path_segments.len() == 3 && path_segments[1] == "feed" && !path_segments[2].is_empty() {
         return true;
     }
-    if path.starts_with("/api/posts/") && (path.ends_with("/audio") || path.contains("/download")) {
+    // ^/feed/user/[^/]+$ — /feed/user/<id> (exactly 3 segments after root)
+    if path_segments.len() == 4 && path_segments[1] == "feed" && path_segments[2] == "user" && !path_segments[3].is_empty() {
         return true;
     }
-    if path.starts_with("/post/") {
-        return true;
+    // ^/api/posts/[^/]+/(audio|download(?:/original)?)$
+    if path_segments.len() >= 4 && path_segments[1] == "api" && path_segments[2] == "posts" {
+        let action = path_segments[3..].join("/");
+        // Must be <guid>/audio, <guid>/download, or <guid>/download/original
+        if path_segments.len() == 5 && (path_segments[4] == "audio" || path_segments[4] == "download") {
+            return true;
+        }
+        if path_segments.len() == 6 && path_segments[4] == "download" && path_segments[5] == "original" {
+            return true;
+        }
+        let _ = action; // suppress unused warning
+    }
+    // ^/post/[^/]+(?:\.mp3|/original\.mp3)$
+    if path_segments.len() >= 3 && path_segments[1] == "post" {
+        let last = path_segments.last().unwrap_or(&"");
+        if path_segments.len() == 3 && last.ends_with(".mp3") {
+            return true;
+        }
+        if path_segments.len() == 4 && path_segments[3] == "original.mp3" {
+            return true;
+        }
     }
     false
 }
@@ -89,6 +112,8 @@ pub async fn auth_middleware(
                     id: user.id,
                     username: user.username.clone(),
                     role: user.role.clone(),
+                    feed_allowance: user.feed_allowance,
+                    manual_feed_allowance: user.manual_feed_allowance,
                 };
                 req.extensions_mut().insert(auth_user);
                 return next.run(req).await;

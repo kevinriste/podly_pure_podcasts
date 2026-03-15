@@ -70,13 +70,19 @@ async fn load_discord_settings(state: &AppState) -> AppResult<ResolvedDiscordSet
 }
 
 /// GET /api/auth/discord/login — returns OAuth authorization URL.
+#[derive(Deserialize)]
+struct DiscordLoginQuery {
+    prompt: Option<String>,
+}
+
 async fn discord_login(
     State(state): State<AppState>,
     session: Session,
+    Query(login_query): Query<DiscordLoginQuery>,
 ) -> AppResult<Json<Value>> {
     let settings = load_discord_settings(&state).await?;
     if !settings.enabled {
-        return Err(AppError::BadRequest("Discord OAuth is not configured.".into()));
+        return Err(AppError::NotFoundMsg("Discord SSO is not configured.".into()));
     }
 
     // Generate CSRF state token
@@ -90,15 +96,17 @@ async fn discord_login(
         scopes.push("guilds");
     }
 
+    let prompt = login_query.prompt.as_deref().unwrap_or("none");
     let auth_url = format!(
-        "https://discord.com/oauth2/authorize?client_id={}&redirect_uri={}&response_type=code&scope={}&state={}&prompt=none",
+        "https://discord.com/oauth2/authorize?client_id={}&redirect_uri={}&response_type=code&scope={}&state={}&prompt={}",
         urlencoded(&settings.client_id),
         urlencoded(&settings.redirect_uri),
         urlencoded(&scopes.join(" ")),
         urlencoded(&csrf_state),
+        urlencoded(prompt),
     );
 
-    Ok(Json(json!({ "url": auth_url })))
+    Ok(Json(json!({ "authorization_url": auth_url })))
 }
 
 #[derive(Deserialize)]
@@ -119,9 +127,34 @@ async fn discord_callback(
         return Ok(Redirect::to("/?error=discord_not_configured"));
     }
 
-    // Handle Discord error responses
+    // Handle Discord error responses (including prompt retry for consent_required)
     if let Some(err) = &params.error {
         match err.as_str() {
+            "interaction_required" | "login_required" | "consent_required" => {
+                // Check if we already retried with prompt=consent
+                let already_retried: bool = session.get("discord_prompt_upgraded").await
+                    .unwrap_or(None)
+                    .unwrap_or(false);
+                if !already_retried {
+                    // Retry with prompt=consent
+                    let _ = session.insert("discord_prompt_upgraded", true).await;
+                    let csrf_state = uuid::Uuid::new_v4().to_string();
+                    let _ = session.insert("discord_oauth_state", &csrf_state).await;
+                    let mut scopes = vec!["identify"];
+                    if !settings.guild_ids.is_empty() {
+                        scopes.push("guilds");
+                    }
+                    let retry_url = format!(
+                        "https://discord.com/oauth2/authorize?client_id={}&redirect_uri={}&response_type=code&scope={}&state={}&prompt=consent",
+                        urlencoded(&settings.client_id),
+                        urlencoded(&settings.redirect_uri),
+                        urlencoded(&scopes.join(" ")),
+                        urlencoded(&csrf_state),
+                    );
+                    return Ok(Redirect::to(&retry_url));
+                }
+                return Ok(Redirect::to("/?error=auth_failed"));
+            }
             "access_denied" => return Ok(Redirect::to("/?error=access_denied")),
             _ => return Ok(Redirect::to(&format!("/?error={err}"))),
         }
@@ -136,30 +169,38 @@ async fn discord_callback(
     }
     let _ = session.remove::<String>("discord_oauth_state").await;
 
-    let code = params.code.as_deref()
-        .ok_or_else(|| AppError::BadRequest("Missing authorization code".into()))?;
+    let code = match params.code.as_deref() {
+        Some(c) => c,
+        None => return Ok(Redirect::to("/?error=missing_code")),
+    };
 
     // Exchange code for access token
-    let token = exchange_code(&settings, code).await
-        .map_err(|e| {
+    let token = match exchange_code(&settings, code).await {
+        Ok(t) => t,
+        Err(e) => {
             tracing::error!("Discord token exchange failed: {e}");
-            AppError::Internal(anyhow::anyhow!("Discord auth failed"))
-        })?;
+            return Ok(Redirect::to("/?error=auth_failed"));
+        }
+    };
 
     // Get Discord user info
-    let discord_user = get_discord_user(&token).await
-        .map_err(|e| {
+    let discord_user = match get_discord_user(&token).await {
+        Ok(u) => u,
+        Err(e) => {
             tracing::error!("Discord user fetch failed: {e}");
-            AppError::Internal(anyhow::anyhow!("Discord auth failed"))
-        })?;
+            return Ok(Redirect::to("/?error=auth_failed"));
+        }
+    };
 
     // Check guild membership if required
     if !settings.guild_ids.is_empty() {
-        let user_guilds = get_user_guilds(&token).await
-            .map_err(|e| {
+        let user_guilds = match get_user_guilds(&token).await {
+            Ok(g) => g,
+            Err(e) => {
                 tracing::error!("Discord guilds fetch failed: {e}");
-                AppError::Internal(anyhow::anyhow!("Discord auth failed"))
-            })?;
+                return Ok(Redirect::to("/?error=auth_failed"));
+            }
+        };
 
         let in_required_guild = user_guilds.iter()
             .any(|g| settings.guild_ids.contains(g));
@@ -197,6 +238,7 @@ async fn discord_callback(
     session.clear().await;
     session.insert(SESSION_USER_KEY, user_id).await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Session error: {e}")))?;
+    let _ = session.remove::<bool>("discord_prompt_upgraded").await;
 
     let _ = queries::update_user_last_active(&state.db, user_id).await;
 
@@ -247,13 +289,14 @@ async fn discord_config(
     }
 
     // Mask client_secret like Python (client_secret_preview instead of client_secret_set)
+    // Python shows full string if ≤8 chars, masks otherwise
     let secret_preview: Option<String> = db_settings
         .client_secret
         .as_ref()
         .and_then(|s| {
             let s = s.trim();
             if s.is_empty() { return None; }
-            if s.len() <= 8 { return Some("****".into()); }
+            if s.len() <= 8 { return Some(s.to_string()); }
             Some(format!("{}...{}", &s[..4], &s[s.len() - 4..]))
         });
 
@@ -292,16 +335,54 @@ async fn discord_config_update(
 
     let current = queries::get_discord_settings(&state.db).await?;
 
+    // Skip fields that have env overrides (matches Python behavior)
+    let new_client_id = if state.config.discord_client_id.is_some() {
+        current.client_id.as_deref()
+    } else {
+        body.client_id.as_deref().or(current.client_id.as_deref())
+    };
+
+    // Protect masked client_secret: if the value ends with "...", don't save it
+    let new_client_secret = if state.config.discord_client_secret.is_some() {
+        current.client_secret.as_deref()
+    } else {
+        match body.client_secret.as_deref() {
+            Some(s) if s.ends_with("...") => current.client_secret.as_deref(),
+            other => other.or(current.client_secret.as_deref()),
+        }
+    };
+
+    let new_redirect_uri = if state.config.discord_redirect_uri.is_some() {
+        current.redirect_uri.as_deref()
+    } else {
+        body.redirect_uri.as_deref().or(current.redirect_uri.as_deref())
+    };
+
+    let new_guild_ids = if state.config.discord_guild_ids.is_some() {
+        current.guild_ids.as_deref()
+    } else {
+        body.guild_ids.as_deref().or(current.guild_ids.as_deref())
+    };
+
+    let new_allow_reg = if state.config.discord_allow_registration.is_some() {
+        current.allow_registration
+    } else {
+        body.allow_registration.unwrap_or(current.allow_registration)
+    };
+
     queries::update_discord_settings(
         &state.db,
-        body.client_id.as_deref().or(current.client_id.as_deref()),
-        body.client_secret.as_deref().or(current.client_secret.as_deref()),
-        body.redirect_uri.as_deref().or(current.redirect_uri.as_deref()),
-        body.guild_ids.as_deref().or(current.guild_ids.as_deref()),
-        body.allow_registration.unwrap_or(current.allow_registration),
+        new_client_id,
+        new_client_secret,
+        new_redirect_uri,
+        new_guild_ids,
+        new_allow_reg,
     ).await?;
 
-    Ok(Json(json!({"status": "ok"})))
+    // Return updated config like Python does
+    let updated_response = discord_config(State(state), auth_user).await?;
+    let config_obj = updated_response.0;
+    Ok(Json(json!({"status": "ok", "config": config_obj.get("config")})))
 }
 
 // ── Discord API helpers ──

@@ -206,7 +206,7 @@ impl JobsManager {
         if download_url.is_none() {
             return json!({
                 "status": "error",
-                "error_code": "NO_DOWNLOAD_URL",
+                "error_code": "MISSING_DOWNLOAD_URL",
                 "message": "Post has no download URL",
             });
         }
@@ -216,7 +216,7 @@ impl JobsManager {
         let now = chrono::Utc::now().to_rfc3339();
 
         let _ = sqlx::query(
-            "INSERT INTO processing_job (id, post_guid, status, total_steps, created_at, requested_by_user_id, billing_user_id) VALUES (?, ?, 'pending', 6, ?, ?, ?)",
+            "INSERT INTO processing_job (id, post_guid, status, total_steps, current_step, progress_percentage, created_at, requested_by_user_id, billing_user_id) VALUES (?, ?, 'pending', 4, 0, 0.0, ?, ?, ?)",
         )
         .bind(&job_id)
         .bind(post_guid)
@@ -236,30 +236,78 @@ impl JobsManager {
         })
     }
 
-    /// List active (pending/running) jobs.
+    /// List active (pending/running) jobs, matching Python's response shape.
     pub async fn list_active_jobs(&self, limit: i64) -> Value {
-        let jobs: Vec<crate::db::models::ProcessingJob> = sqlx::query_as(
-            "SELECT * FROM processing_job WHERE status IN ('pending', 'running') ORDER BY created_at DESC LIMIT ?",
-        )
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await
-        .unwrap_or_default();
-
-        serde_json::to_value(jobs).unwrap_or(Value::Array(vec![]))
+        self.list_jobs_with_details(
+            "SELECT pj.*, p.title AS post_title, f.title AS feed_title \
+             FROM processing_job pj \
+             LEFT JOIN post p ON pj.post_guid = p.guid \
+             LEFT JOIN feed f ON p.feed_id = f.id \
+             WHERE pj.status IN ('pending', 'running') \
+             ORDER BY pj.created_at DESC LIMIT ?",
+            limit,
+        ).await
     }
 
-    /// List all jobs with details.
+    /// List all jobs with details, matching Python's response shape.
     pub async fn list_all_jobs(&self, limit: i64) -> Value {
-        let jobs: Vec<crate::db::models::ProcessingJob> = sqlx::query_as(
-            "SELECT * FROM processing_job ORDER BY created_at DESC LIMIT ?",
-        )
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await
-        .unwrap_or_default();
+        self.list_jobs_with_details(
+            "SELECT pj.*, p.title AS post_title, f.title AS feed_title \
+             FROM processing_job pj \
+             LEFT JOIN post p ON pj.post_guid = p.guid \
+             LEFT JOIN feed f ON p.feed_id = f.id \
+             ORDER BY pj.created_at DESC LIMIT ?",
+            limit,
+        ).await
+    }
 
-        serde_json::to_value(jobs).unwrap_or(Value::Array(vec![]))
+    /// Execute a job query and format results matching Python's response shape.
+    async fn list_jobs_with_details(&self, query: &str, limit: i64) -> Value {
+        let rows: Vec<sqlx::sqlite::SqliteRow> = sqlx::query(query)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await
+            .unwrap_or_default();
+
+        use sqlx::Row;
+        let mut jobs: Vec<Value> = rows.iter().map(|row| {
+            let status: String = row.get("status");
+            // Compute priority like Python: running=2, pending=1, else=0
+            let priority = match status.as_str() {
+                "running" => 2,
+                "pending" => 1,
+                _ => 0,
+            };
+            json!({
+                "job_id": row.get::<String, _>("id"),
+                "post_guid": row.get::<String, _>("post_guid"),
+                "post_title": row.get::<Option<String>, _>("post_title"),
+                "feed_title": row.get::<Option<String>, _>("feed_title"),
+                "status": status,
+                "step": row.get::<Option<i64>, _>("current_step"),
+                "step_name": row.get::<Option<String>, _>("step_name"),
+                "total_steps": row.get::<Option<i64>, _>("total_steps"),
+                "progress_percentage": row.get::<Option<f64>, _>("progress_percentage"),
+                "priority": priority,
+                "created_at": row.get::<Option<String>, _>("created_at"),
+                "started_at": row.get::<Option<String>, _>("started_at"),
+                "completed_at": row.get::<Option<String>, _>("completed_at"),
+                "error_message": row.get::<Option<String>, _>("error_message"),
+            })
+        }).collect();
+
+        // Sort by priority DESC, then created_at DESC (matches Python)
+        jobs.sort_by(|a, b| {
+            let pa = a["priority"].as_i64().unwrap_or(0);
+            let pb = b["priority"].as_i64().unwrap_or(0);
+            pb.cmp(&pa).then_with(|| {
+                let ca = a["created_at"].as_str().unwrap_or("");
+                let cb = b["created_at"].as_str().unwrap_or("");
+                cb.cmp(ca)
+            })
+        });
+
+        Value::Array(jobs)
     }
 
     /// Get processing status for a specific post.
@@ -314,7 +362,7 @@ impl JobsManager {
             }
             if job.status == "cancelled" {
                 if let Some(ref err) = job.error_message {
-                    response["step_name"] = json!(err);
+                    // Python only overrides message, not step_name, for cancelled jobs
                     response["message"] = json!(err);
                 }
             }
@@ -345,7 +393,8 @@ impl JobsManager {
     }
 
     /// Cancel a specific job.
-    pub async fn cancel_job(&self, job_id: &str) -> Value {
+    /// Cancel a specific job. Returns (status_code, json_body) for proper HTTP status.
+    pub async fn cancel_job(&self, job_id: &str) -> (u16, Value) {
         let job: Option<(String, String)> = sqlx::query_as(
             "SELECT id, status FROM processing_job WHERE id = ?",
         )
@@ -355,19 +404,19 @@ impl JobsManager {
         .unwrap_or(None);
 
         let Some((id, status)) = job else {
-            return json!({
+            return (404, json!({
                 "status": "error",
                 "error_code": "NOT_FOUND",
                 "message": "Job not found",
-            });
+            }));
         };
 
         if status != "pending" && status != "running" {
-            return json!({
+            return (400, json!({
                 "status": "error",
-                "error_code": "NOT_CANCELLABLE",
+                "error_code": "ALREADY_FINISHED",
                 "message": format!("Job is already {status}"),
-            });
+            }));
         }
 
         let now = chrono::Utc::now().to_rfc3339();
@@ -379,11 +428,11 @@ impl JobsManager {
         .execute(&self.pool)
         .await;
 
-        json!({
+        (200, json!({
             "status": "cancelled",
             "job_id": id,
             "message": "Job cancelled",
-        })
+        }))
     }
 
     /// Cancel all queued (pending) jobs.
@@ -440,7 +489,7 @@ impl JobsManager {
             let job_id = uuid::Uuid::new_v4().to_string();
             let now = chrono::Utc::now().to_rfc3339();
             let result = sqlx::query(
-                "INSERT INTO processing_job (id, post_guid, status, total_steps, created_at) VALUES (?, ?, 'pending', 6, ?)",
+                "INSERT INTO processing_job (id, post_guid, status, total_steps, current_step, progress_percentage, created_at) VALUES (?, ?, 'pending', 4, 0, 0.0, ?)",
             )
             .bind(&job_id)
             .bind(guid)

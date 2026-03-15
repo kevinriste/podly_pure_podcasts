@@ -804,7 +804,8 @@ async fn run_llm_probe(
     success_message: &str,
 ) -> AppResult<Json<Value>> {
     if api_key.is_empty() {
-        return Err(AppError::BadRequest("No API key configured.".into()));
+        // Python returns 400 with {"ok": false, "error": "Missing llm_api_key"}
+        return Ok(Json(json!({"ok": false, "error": "Missing llm_api_key"})));
     }
 
     // Use genai crate — handles OpenAI, Gemini, Anthropic, Groq, etc.
@@ -821,8 +822,14 @@ async fn run_llm_probe(
 
     let genai_model = crate::llm::to_genai_model(model);
     match client.exec_chat(&genai_model, chat_req, Some(&options)).await {
-        Ok(_) => Ok(Json(json!({"ok": true, "message": success_message}))),
-        Err(e) => Err(AppError::Llm(format!("LLM error: {e}"))),
+        Ok(_) => Ok(Json(json!({
+            "ok": true,
+            "message": success_message,
+            "model": model,
+            "base_url": base_url,
+        }))),
+        // Python returns 400 with {"ok": false, "error": "..."}
+        Err(e) => Ok(Json(json!({"ok": false, "error": format!("LLM error: {e}")}))),
     }
 }
 
@@ -831,7 +838,47 @@ async fn test_oneshot(
     auth_user: Option<Extension<AuthenticatedUser>>,
     Json(body): Json<Value>,
 ) -> AppResult<Json<Value>> {
-    test_llm(State(state), auth_user, Json(body)).await
+    require_admin_user(&auth_user, state.config.require_auth)?;
+
+    let llm_section = body.get("llm").unwrap_or(&body);
+    let llm_db = queries::get_llm_settings(&state.db).await?;
+
+    // Python uses get_effective_oneshot_api_key: ONESHOT_API_KEY -> LLM_API_KEY -> DB llm_api_key
+    let api_key = llm_section
+        .get("llm_api_key")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| state.config.llm_api_key.clone())
+        .or_else(|| state.config.openai_api_key.clone())
+        .or_else(|| state.config.groq_api_key.clone())
+        .or_else(|| llm_db.llm_api_key.clone())
+        .unwrap_or_default();
+
+    // Read oneshot_model from the payload
+    let model = llm_section
+        .get("oneshot_model")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| state.config.oneshot_model.clone())
+        .or_else(|| llm_db.oneshot_model.clone())
+        .unwrap_or_default();
+
+    if model.is_empty() {
+        return Ok(Json(json!({"ok": false, "error": "Missing oneshot_model. Configure One-shot Model first."})));
+    }
+
+    let base_url = llm_section
+        .get("openai_base_url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| state.config.openai_base_url.clone())
+        .or_else(|| llm_db.openai_base_url.clone());
+    let timeout: u64 = llm_section
+        .get("openai_timeout")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(llm_db.openai_timeout as u64);
+
+    run_llm_probe(&api_key, &model, base_url.as_deref(), timeout, "One-shot connection OK").await
 }
 
 async fn test_whisper(
@@ -861,9 +908,7 @@ async fn test_whisper(
             if has_local {
                 Ok(Json(json!({"ok": true, "message": "Local whisper is available."})))
             } else {
-                Err(AppError::BadRequest(
-                    "Local whisper not compiled. Build with --features local-whisper.".into(),
-                ))
+                Ok(Json(json!({"ok": false, "error": "Local whisper not compiled. Build with --features local-whisper."})))
             }
         }
         "groq" => {
@@ -875,9 +920,26 @@ async fn test_whisper(
                 .or_else(|| whisper_db.groq_api_key.clone())
                 .unwrap_or_default();
             if api_key.is_empty() {
-                return Err(AppError::BadRequest("Groq API key is required.".into()));
+                return Ok(Json(json!({"ok": false, "error": "Groq API key is required."})));
             }
-            Ok(Json(json!({"ok": true, "message": "Groq whisper connection OK"})))
+            // Actually test the Groq connection (Python calls groq.models.list())
+            let client = reqwest::Client::new();
+            match client
+                .get("https://api.groq.com/openai/v1/models")
+                .header("Authorization", format!("Bearer {api_key}"))
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    Ok(Json(json!({"ok": true, "message": "Groq whisper connection OK"})))
+                }
+                Ok(resp) => {
+                    Ok(Json(json!({"ok": false, "error": format!("Groq returned {}", resp.status())})))
+                }
+                Err(e) => {
+                    Ok(Json(json!({"ok": false, "error": format!("Groq connection error: {e}")})))
+                }
+            }
         }
         _ => {
             let api_key = whisper_section
@@ -894,27 +956,26 @@ async fn test_whisper(
                 .map(|s| s.to_string())
                 .or_else(|| state.config.whisper_remote_base_url.clone())
                 .or_else(|| state.config.openai_base_url.clone())
-                .unwrap_or_else(|| whisper_db.remote_base_url.clone());
+                .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
             if api_key.is_empty() {
-                return Err(AppError::BadRequest(
-                    "Remote whisper API key required.".into(),
-                ));
+                return Ok(Json(json!({"ok": false, "error": "Remote whisper API key required."})));
             }
             let client = reqwest::Client::new();
-            let resp = client
+            match client
                 .get(&format!("{base_url}/models"))
                 .header("Authorization", format!("Bearer {api_key}"))
                 .send()
                 .await
-                .map_err(|e| AppError::Transcription(format!("Connection error: {e}")))?;
-
-            if resp.status().is_success() {
-                Ok(Json(json!({"ok": true, "message": "Remote whisper connection OK"})))
-            } else {
-                Err(AppError::Transcription(format!(
-                    "Remote whisper returned {}",
-                    resp.status()
-                )))
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    Ok(Json(json!({"ok": true, "message": "Remote whisper connection OK", "base_url": base_url})))
+                }
+                Ok(resp) => {
+                    Ok(Json(json!({"ok": false, "error": format!("Remote whisper returned {}", resp.status())})))
+                }
+                Err(e) => {
+                    Ok(Json(json!({"ok": false, "error": format!("Connection error: {e}")})))
+                }
             }
         }
     }
@@ -926,19 +987,22 @@ async fn whisper_capabilities() -> AppResult<Json<Value>> {
     })))
 }
 
-async fn api_configured(State(state): State<AppState>) -> AppResult<Json<Value>> {
-    let llm = queries::get_llm_settings(&state.db).await?;
-    let has_key = state
-        .config
-        .llm_api_key
-        .as_ref()
-        .or(state.config.openai_api_key.as_ref())
-        .or(state.config.groq_api_key.as_ref())
-        .or(llm.llm_api_key.as_ref())
-        .map(|k| !k.is_empty())
-        .unwrap_or(false);
+async fn api_configured(State(state): State<AppState>) -> Json<Value> {
+    // Python catches all exceptions and returns {configured: false}
+    let has_key = match queries::get_llm_settings(&state.db).await {
+        Ok(llm) => state
+            .config
+            .llm_api_key
+            .as_ref()
+            .or(state.config.openai_api_key.as_ref())
+            .or(state.config.groq_api_key.as_ref())
+            .or(llm.llm_api_key.as_ref())
+            .map(|k| !k.is_empty())
+            .unwrap_or(false),
+        Err(_) => false,
+    };
 
-    Ok(Json(json!({ "configured": has_key })))
+    Json(json!({ "configured": has_key }))
 }
 
 async fn landing_status(State(state): State<AppState>) -> AppResult<Json<Value>> {
@@ -949,9 +1013,9 @@ async fn landing_status(State(state): State<AppState>) -> AppResult<Json<Value>>
         .map(|limit| (limit - user_count).max(0));
 
     Ok(Json(json!({
-        "enabled": app.enable_public_landing_page,
+        "landing_page_enabled": app.enable_public_landing_page,
         "user_count": user_count,
-        "user_limit": app.user_limit_total,
+        "user_limit_total": app.user_limit_total,
         "slots_remaining": slots_remaining,
         "require_auth": state.config.require_auth,
     })))

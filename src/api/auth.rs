@@ -47,6 +47,7 @@ struct LoginRequest {
 async fn login(
     State(state): State<AppState>,
     session: Session,
+    headers: axum::http::HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     if !state.config.require_auth {
@@ -56,17 +57,23 @@ async fn login(
     let username = body
         .username
         .as_deref()
-        .map(|s| s.trim())
+        .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| AppError::BadRequest("Username and password are required.".into()))?;
+    let username = username.as_str();
     let password = body
         .password
         .as_deref()
         .filter(|s| !s.is_empty())
         .ok_or_else(|| AppError::BadRequest("Username and password are required.".into()))?;
 
-    // Rate limiting
-    let client_ip = "unknown".to_string();
+    // Rate limiting — extract real client IP (matches Python's request.remote_addr)
+    let client_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
     {
         let mut limiter = state.rate_limiter.lock().await;
         if let Some(retry_after) = limiter.retry_after(&client_ip) {
@@ -90,7 +97,9 @@ async fn login(
                 crate::auth::VerifyResult::Failed => {
                     let backoff = state.rate_limiter.lock().await.register_failure(&client_ip);
                     if backoff > 0 {
-                        return Err(AppError::TooManyRequests {
+                        // Python returns 401 with Retry-After header (not 429)
+                        return Err(AppError::UnauthorizedWithRetry {
+                            message: "Invalid username or password.".into(),
                             retry_after: backoff,
                         });
                     }
@@ -114,13 +123,14 @@ async fn login(
     let _ = queries::update_user_last_active(&state.db, user.id).await;
 
     let allowance = user.manual_feed_allowance.unwrap_or(user.feed_allowance);
+    let sub_status = if user.feed_subscription_status.is_empty() { "inactive" } else { &user.feed_subscription_status };
     Ok(Json(json!({
         "user": {
             "id": user.id,
             "username": user.username,
             "role": user.role,
             "feed_allowance": allowance,
-            "feed_subscription_status": user.feed_subscription_status,
+            "feed_subscription_status": sub_status,
         }
     })))
 }
@@ -153,13 +163,14 @@ async fn me(
         .await?
         .ok_or(AppError::Unauthorized("Authentication required.".into()))?;
     let allowance = user.manual_feed_allowance.unwrap_or(user.feed_allowance);
+    let sub_status = if user.feed_subscription_status.is_empty() { "inactive" } else { &user.feed_subscription_status };
     Ok(Json(json!({
         "user": {
             "id": user.id,
             "username": user.username,
             "role": user.role,
             "feed_allowance": allowance,
-            "feed_subscription_status": user.feed_subscription_status,
+            "feed_subscription_status": sub_status,
         }
     })))
 }
@@ -212,9 +223,10 @@ async fn list_users(
     let users_json: Vec<Value> = users.iter().map(|u| json!({
         "id": u.id, "username": u.username, "role": u.role,
         "created_at": u.created_at, "updated_at": u.updated_at,
-        "last_active": u.last_active, "feed_allowance": u.feed_allowance,
+        "last_active": u.last_active,
+        "feed_allowance": u.manual_feed_allowance.unwrap_or(u.feed_allowance),
         "manual_feed_allowance": u.manual_feed_allowance,
-        "feed_subscription_status": u.feed_subscription_status,
+        "feed_subscription_status": if u.feed_subscription_status.is_empty() { "inactive" } else { &u.feed_subscription_status },
     })).collect();
     Ok(Json(json!({"users": users_json})))
 }
@@ -236,29 +248,38 @@ async fn create_user(
     }
     require_admin_user(&auth_user, state.config.require_auth)?;
 
-    let username = body.username.as_deref().map(|s| s.trim()).filter(|s| !s.is_empty())
+    let username = body.username.as_deref()
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
         .ok_or_else(|| AppError::BadRequest("Username and password are required.".into()))?;
     let password = body.password.as_deref().filter(|s| !s.is_empty())
         .ok_or_else(|| AppError::BadRequest("Username and password are required.".into()))?;
     let role = body.role.as_deref().unwrap_or("user");
 
+    // Validate role (matches Python ALLOWED_ROLES)
+    if role != "admin" && role != "user" {
+        return Err(AppError::BadRequest("Role must be one of ['admin', 'user'].".into()));
+    }
+
     crate::auth::validate_password(password).map_err(AppError::BadRequest)?;
 
-    if queries::get_user_by_username(&state.db, username).await?.is_some() {
-        return Err(AppError::Conflict(format!("User '{username}' already exists.")));
+    if queries::get_user_by_username(&state.db, &username).await?.is_some() {
+        return Err(AppError::Conflict("A user with that username already exists.".into()));
     }
 
     let app_settings = queries::get_app_settings(&state.db).await?;
     if let Some(limit) = app_settings.user_limit_total {
         let count = queries::count_users(&state.db).await?;
         if count >= limit {
-            return Err(AppError::BadRequest(format!("User limit of {limit} reached.")));
+            return Err(AppError::BadRequest(format!(
+                "User limit reached ({count}/{limit}). Delete a user or increase the limit."
+            )));
         }
     }
 
     let hash = crate::auth::hash_password(password)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Hash error: {e}")))?;
-    let user_id = queries::insert_user(&state.db, username, &hash, role).await?;
+    let user_id = queries::insert_user(&state.db, &username, &hash, role).await?;
     let user = queries::get_user_by_id(&state.db, user_id).await?
         .ok_or(AppError::Internal(anyhow::anyhow!("User not found after insert")))?;
 
@@ -286,13 +307,18 @@ async fn update_user(
     if !state.config.require_auth { return Err(AppError::NotFound); }
     require_admin_user(&auth_user, state.config.require_auth)?;
 
-    let target = queries::get_user_by_username(&state.db, &username).await?.ok_or(AppError::NotFound)?;
+    let normalized = username.to_lowercase();
+    let target = queries::get_user_by_username(&state.db, &normalized).await?
+        .ok_or_else(|| AppError::NotFoundMsg("User not found.".into()))?;
 
     if let Some(role) = &body.role {
+        if role != "admin" && role != "user" {
+            return Err(AppError::BadRequest("Role must be one of ['admin', 'user'].".into()));
+        }
         if target.role == "admin" && role != "admin" {
             let admin_count = queries::count_admin_users(&state.db).await?;
             if admin_count <= 1 {
-                return Err(AppError::BadRequest("Cannot remove the last admin.".into()));
+                return Err(AppError::BadRequest("Cannot demote the last admin user.".into()));
             }
         }
         queries::update_user_role(&state.db, target.id, role).await?;
@@ -320,11 +346,13 @@ async fn delete_user(
     if !state.config.require_auth { return Err(AppError::NotFound); }
     require_admin_user(&auth_user, state.config.require_auth)?;
 
-    let target = queries::get_user_by_username(&state.db, &username).await?.ok_or(AppError::NotFound)?;
+    let normalized = username.to_lowercase();
+    let target = queries::get_user_by_username(&state.db, &normalized).await?
+        .ok_or_else(|| AppError::NotFoundMsg("User not found.".into()))?;
     if target.role == "admin" {
         let admin_count = queries::count_admin_users(&state.db).await?;
         if admin_count <= 1 {
-            return Err(AppError::BadRequest("Cannot delete the last admin.".into()));
+            return Err(AppError::BadRequest("Cannot remove the last admin user.".into()));
         }
     }
     queries::delete_user(&state.db, target.id).await?;

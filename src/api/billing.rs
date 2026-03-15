@@ -33,11 +33,15 @@ async fn billing_summary(
 ) -> Result<Json<Value>, AppError> {
     if !is_stripe_enabled(&state) {
         return Ok(Json(json!({
-            "billing_enabled": false,
             "feed_allowance": 0,
             "feeds_in_use": 0,
             "remaining": 0,
-            "status": "disabled",
+            "current_amount": null,
+            "min_amount_cents": 0,
+            "subscription_status": "disabled",
+            "stripe_subscription_id": null,
+            "stripe_customer_id": null,
+            "product_id": null,
         })));
     }
 
@@ -60,19 +64,23 @@ async fn billing_summary(
     }
 
     Ok(Json(json!({
-        "billing_enabled": true,
         "feed_allowance": allowance,
         "feeds_in_use": feeds_in_use,
         "remaining": remaining,
-        "status": user.feed_subscription_status,
+        "current_amount": current_amount_cents.unwrap_or(0),
+        "min_amount_cents": state.config.stripe_min_subscription_amount_cents,
+        "subscription_status": if user.feed_subscription_status.is_empty() { "inactive" } else { user.feed_subscription_status.as_str() },
+        "stripe_subscription_id": user.stripe_subscription_id,
         "stripe_customer_id": user.stripe_customer_id,
-        "current_amount_cents": current_amount_cents,
+        "product_id": state.config.stripe_product_id,
     })))
 }
 
 #[derive(Deserialize)]
 struct SubscriptionRequest {
-    amount_cents: i64,
+    // Python uses "amount", accept both for compatibility
+    amount: Option<i64>,
+    amount_cents: Option<i64>,
 }
 
 /// POST /api/billing/subscription — create/update/cancel subscription with custom amount.
@@ -82,7 +90,7 @@ async fn subscription(
     Json(body): Json<SubscriptionRequest>,
 ) -> Result<Json<Value>, AppError> {
     if !is_stripe_enabled(&state) {
-        return Err(AppError::BadRequest("Billing is not enabled.".into()));
+        return Err(AppError::ServiceUnavailable("Stripe billing is not configured.".into()));
     }
 
     let stripe_key = state.config.stripe_secret_key.as_deref().unwrap();
@@ -92,8 +100,10 @@ async fn subscription(
     let user = queries::get_user_by_id(&state.db, auth.id).await?
         .ok_or(AppError::Unauthorized("Authentication required.".into()))?;
 
+    let amount_cents = body.amount.or(body.amount_cents).unwrap_or(0);
+
     // Cancel if amount is 0
-    if body.amount_cents == 0 {
+    if amount_cents == 0 {
         if let Some(sub_id) = &user.stripe_subscription_id {
             if !sub_id.is_empty() {
                 cancel_subscription(stripe_key, sub_id).await
@@ -103,14 +113,22 @@ async fn subscription(
         queries::set_user_billing_fields(
             &state.db, user.id, None, None, Some(0), Some("canceled"),
         ).await?;
-        return Ok(Json(json!({"status": "canceled"})));
+        let feeds_in_use = queries::count_user_feeds(&state.db, user.id).await?;
+        return Ok(Json(json!({
+            "feed_allowance": 0,
+            "feeds_in_use": feeds_in_use,
+            "remaining": 0,
+            "subscription_status": "canceled",
+            "requires_stripe_checkout": false,
+            "message": "Subscription canceled.",
+        })));
     }
 
     // Validate minimum
-    if body.amount_cents < state.config.stripe_min_subscription_amount_cents {
+    if amount_cents < state.config.stripe_min_subscription_amount_cents {
+        let dollars = state.config.stripe_min_subscription_amount_cents as f64 / 100.0;
         return Err(AppError::BadRequest(format!(
-            "Minimum subscription is {} cents.",
-            state.config.stripe_min_subscription_amount_cents
+            "Minimum amount is ${dollars:.2}"
         )));
     }
 
@@ -138,9 +156,21 @@ async fn subscription(
     // If user already has a subscription, modify it
     if let Some(sub_id) = &user.stripe_subscription_id {
         if !sub_id.is_empty() && user.feed_subscription_status != "canceled" {
-            update_subscription(stripe_key, sub_id, product_id, body.amount_cents).await
-                .map_err(|e| AppError::Internal(anyhow::anyhow!("Stripe update error: {e}")))?;
-            return Ok(Json(json!({"status": "updated"})));
+            update_subscription(stripe_key, sub_id, product_id, amount_cents).await
+                .map_err(|e| AppError::BadGateway(format!("{e}")))?;
+            // Set allowance to 10 like Python does
+            queries::set_user_billing_fields(
+                &state.db, user.id, None, None, Some(ACTIVE_FEED_ALLOWANCE), Some("active"),
+            ).await?;
+            let feeds_in_use = queries::count_user_feeds(&state.db, user.id).await?;
+            return Ok(Json(json!({
+                "feed_allowance": ACTIVE_FEED_ALLOWANCE,
+                "feeds_in_use": feeds_in_use,
+                "remaining": (ACTIVE_FEED_ALLOWANCE - feeds_in_use).max(0),
+                "subscription_status": "active",
+                "requires_stripe_checkout": false,
+                "message": "Subscription updated.",
+            })));
         }
     }
 
@@ -149,20 +179,30 @@ async fn subscription(
         stripe_key,
         &customer_id,
         product_id,
-        body.amount_cents,
+        amount_cents,
+        user.id,
     ).await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Stripe checkout error: {e}")))?;
+        .map_err(|e| AppError::BadGateway(format!("{e}")))?;
 
-    Ok(Json(json!({"url": checkout_url})))
+    let feeds_in_use = queries::count_user_feeds(&state.db, user.id).await?;
+    let allowance = user.manual_feed_allowance.unwrap_or(user.feed_allowance);
+    Ok(Json(json!({
+        "requires_stripe_checkout": true,
+        "checkout_url": checkout_url,
+        "feed_allowance": allowance,
+        "feeds_in_use": feeds_in_use,
+        "subscription_status": if user.feed_subscription_status.is_empty() { "inactive" } else { user.feed_subscription_status.as_str() },
+    })))
 }
 
 /// POST /api/billing/portal-session — creates Stripe portal session.
 async fn portal_session(
     State(state): State<AppState>,
     auth_user: Option<Extension<AuthenticatedUser>>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<Value>, AppError> {
     if !is_stripe_enabled(&state) {
-        return Err(AppError::BadRequest("Billing is not enabled.".into()));
+        return Err(AppError::ServiceUnavailable("Stripe billing is not configured.".into()));
     }
 
     let stripe_key = state.config.stripe_secret_key.as_deref().unwrap();
@@ -173,10 +213,19 @@ async fn portal_session(
 
     let customer_id = user.stripe_customer_id.as_deref()
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| AppError::BadRequest("No billing account found.".into()))?;
+        .ok_or_else(|| AppError::BadRequest("No Stripe customer on file.".into()))?;
 
-    let url = create_portal_session(stripe_key, customer_id).await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("Stripe portal error: {e}")))?;
+    // Build return_url from Host header like Python does
+    let host = headers.get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("localhost");
+    let scheme = headers.get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("http");
+    let return_url = format!("{scheme}://{host}/billing?checkout=success");
+
+    let url = create_portal_session(stripe_key, customer_id, &return_url).await
+        .map_err(|e| AppError::BadGateway(format!("{e}")))?;
 
     Ok(Json(json!({"url": url})))
 }
@@ -191,7 +240,7 @@ async fn stripe_webhook(
         Some(s) if !s.is_empty() => s.clone(),
         _ => {
             tracing::warn!("Stripe webhook received but no webhook secret configured");
-            return Ok(Json(json!({"received": true})));
+            return Err(AppError::BadRequest("Webhook secret not configured.".into()));
         }
     };
 
@@ -230,7 +279,7 @@ async fn stripe_webhook(
         }
     }
 
-    Ok(Json(json!({"received": true})))
+    Ok(Json(json!({"status": "ok"})))
 }
 
 // ── Webhook event handlers ──
@@ -308,8 +357,15 @@ async fn create_checkout_session(
     customer_id: &str,
     product_id: &str,
     amount_cents: i64,
+    user_id: i64,
 ) -> anyhow::Result<String> {
     let client = reqwest::Client::new();
+    // Note: success/cancel URLs use {CHECKOUT_SESSION_ID} as Stripe's template variable.
+    // In production these would be built from the request host, but Stripe handles the redirect.
+    let success_url = "/billing?checkout=success";
+    let cancel_url = "/billing?checkout=cancel";
+    let user_id_str = user_id.to_string();
+    let amount_str = amount_cents.to_string();
     let resp = client
         .post("https://api.stripe.com/v1/checkout/sessions")
         .basic_auth(key, None::<&str>)
@@ -318,11 +374,13 @@ async fn create_checkout_session(
             ("customer", customer_id),
             ("line_items[0][price_data][currency]", "usd"),
             ("line_items[0][price_data][product]", product_id),
-            ("line_items[0][price_data][unit_amount]", &amount_cents.to_string()),
+            ("line_items[0][price_data][unit_amount]", &amount_str),
             ("line_items[0][price_data][recurring][interval]", "month"),
             ("line_items[0][quantity]", "1"),
-            ("success_url", "{CHECKOUT_SESSION_URL}"),
-            ("cancel_url", "{CHECKOUT_SESSION_URL}"),
+            ("success_url", success_url),
+            ("cancel_url", cancel_url),
+            ("metadata[user_id]", &user_id_str),
+            ("subscription_data[metadata][user_id]", &user_id_str),
         ])
         .send()
         .await?;
@@ -334,12 +392,12 @@ async fn create_checkout_session(
         .ok_or_else(|| anyhow::anyhow!("No checkout URL in Stripe response: {data}"))
 }
 
-async fn create_portal_session(key: &str, customer_id: &str) -> anyhow::Result<String> {
+async fn create_portal_session(key: &str, customer_id: &str, return_url: &str) -> anyhow::Result<String> {
     let client = reqwest::Client::new();
     let resp = client
         .post("https://api.stripe.com/v1/billing_portal/sessions")
         .basic_auth(key, None::<&str>)
-        .form(&[("customer", customer_id)])
+        .form(&[("customer", customer_id), ("return_url", return_url)])
         .send()
         .await?;
 

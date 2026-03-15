@@ -30,9 +30,13 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/posts/{p_guid}/processing-estimate", get(processing_estimate))
         .route("/api/posts/{p_guid}/json", get(post_json))
-        // Legacy routes
+        .route("/post/{p_guid}/json", get(post_json))
+        .route("/post/{p_guid}/debug", get(post_debug))
+        // Legacy routes — both slash and dot variants
         .route("/post/{p_guid}/mp3", get(serve_audio_legacy))
         .route("/post/{p_guid}/original.mp3", get(download_original_legacy))
+        // Dot-separated .mp3 route (used by RSS readers): /post/{guid}.mp3
+        .route("/post/{p_guid_mp3}", get(serve_audio_dot_mp3))
 }
 
 #[derive(Deserialize)]
@@ -144,7 +148,14 @@ async fn post_stats(
     .ok()
     .flatten()
     .map(|(s,)| s);
-    let ad_detection_strategy = feed_strategy.as_deref().unwrap_or("llm");
+    // Resolve "inherit" to the global default (like Python does)
+    let ad_detection_strategy = match feed_strategy.as_deref() {
+        Some("inherit") | None => {
+            let app = queries::get_app_settings(&state.db).await?;
+            app.ad_detection_strategy.clone()
+        }
+        Some(other) => other.to_string(),
+    };
 
     // Build model_calls detail array
     let model_calls_json: Vec<Value> = model_calls
@@ -277,9 +288,15 @@ fn merge_time_windows(windows: &[(f64, f64)], gap_seconds: f64) -> Vec<(f64, f64
 async fn post_status(
     State(state): State<AppState>,
     AxumPath(p_guid): AxumPath<String>,
-) -> AppResult<Json<Value>> {
+) -> Result<Response, AppError> {
     let result = state.jobs_manager.get_post_status(&p_guid).await;
-    Ok(Json(result))
+    // Python returns 404 for NOT_FOUND, 400 for other error_codes, 200 otherwise
+    let status_code = match result.get("error_code").and_then(|c| c.as_str()) {
+        Some("NOT_FOUND") => StatusCode::NOT_FOUND,
+        Some(_) => StatusCode::BAD_REQUEST,
+        None => StatusCode::OK,
+    };
+    Ok((status_code, Json(result)).into_response())
 }
 
 #[derive(Deserialize)]
@@ -328,9 +345,30 @@ async fn process_post(
 ) -> AppResult<Json<Value>> {
     require_admin_user(&auth_user, state.config.require_auth)?;
 
-    let _post = queries::get_post_by_guid(&state.db, &p_guid)
+    let post = queries::get_post_by_guid(&state.db, &p_guid)
         .await?
-        .ok_or(AppError::NotFound)?;
+        .ok_or(AppError::NotFoundMsg("Post not found.".into()))?;
+
+    // Check feed exists (Python parity)
+    let _feed = queries::get_feed_by_id(&state.db, post.feed_id)
+        .await?
+        .ok_or(AppError::NotFoundMsg("Feed not found".into()))?;
+
+    // Check post is whitelisted (Python parity)
+    if !post.whitelisted {
+        return Err(AppError::BadRequest("Post is not whitelisted.".into()));
+    }
+
+    // Check if already processed (Python returns 200 with download URL)
+    if let Some(ref audio_path) = post.processed_audio_path {
+        if Path::new(audio_path).exists() {
+            return Ok(Json(json!({
+                "status": "already_processed",
+                "message": "Post is already processed.",
+                "download_url": format!("/api/posts/{}/download", p_guid),
+            })));
+        }
+    }
 
     let user_id = get_auth_user_id(&auth_user);
     let result = state
@@ -356,7 +394,17 @@ async fn reprocess_post(
 
     let post = queries::get_post_by_guid(&state.db, &p_guid)
         .await?
-        .ok_or(AppError::NotFound)?;
+        .ok_or(AppError::NotFoundMsg("Post not found.".into()))?;
+
+    // Check feed exists (Python parity)
+    let _feed = queries::get_feed_by_id(&state.db, post.feed_id)
+        .await?
+        .ok_or(AppError::NotFoundMsg("Feed not found".into()))?;
+
+    // Check post is whitelisted (Python parity)
+    if !post.whitelisted {
+        return Err(AppError::BadRequest("Post is not whitelisted.".into()));
+    }
 
     // Cancel existing jobs
     state.jobs_manager.cancel_post_jobs(&p_guid).await;
@@ -389,16 +437,13 @@ async fn serve_audio(
         .ok_or(AppError::NotFound)?;
 
     if !post.whitelisted {
-        return Err(AppError::Forbidden);
+        return Ok(not_whitelisted_response());
     }
 
-    let audio_path = post
-        .processed_audio_path
-        .as_deref()
-        .filter(|p| Path::new(p).exists())
-        .ok_or(AppError::NotFound)?;
-
-    serve_file_response(audio_path, false).await
+    match post.processed_audio_path.as_deref().filter(|p| Path::new(p).exists()) {
+        Some(audio_path) => serve_file_response(audio_path, false).await,
+        None => Ok(audio_not_ready_response()),
+    }
 }
 
 async fn download_audio(
@@ -409,15 +454,47 @@ async fn download_audio(
         .await?
         .ok_or(AppError::NotFound)?;
 
+    if !post.whitelisted {
+        // Check if autoprocess_on_download is enabled
+        let app = queries::get_app_settings(&state.db).await
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("{e}")))?;
+        if !app.autoprocess_on_download {
+            return Ok(not_whitelisted_response());
+        }
+        // Auto-whitelist the post
+        let _ = queries::set_post_whitelist(&state.db, post.id, true).await;
+        tracing::info!("Auto-whitelisted post {} on download request", p_guid);
+    }
+
     let audio_path = post
         .processed_audio_path
         .as_deref()
-        .filter(|p| Path::new(p).exists())
-        .ok_or(AppError::NotFound)?;
+        .filter(|p| Path::new(p).exists());
 
-    let _ = queries::increment_download_count(&state.db, post.id).await;
-
-    serve_file_response(audio_path, true).await
+    match audio_path {
+        Some(path) => {
+            let _ = queries::increment_download_count(&state.db, post.id).await;
+            serve_file_response(path, true).await
+        }
+        None => {
+            // Check autoprocess_on_download for auto-processing
+            let app = queries::get_app_settings(&state.db).await
+                .map_err(|e| AppError::Internal(anyhow::anyhow!("{e}")))?;
+            if app.autoprocess_on_download {
+                // Queue processing and return a 202
+                let _ = state.jobs_manager.start_post_processing(&p_guid, None, None).await;
+                return Ok((
+                    StatusCode::ACCEPTED,
+                    Json(json!({
+                        "error": "Audio not ready",
+                        "error_code": "AUDIO_NOT_READY",
+                        "message": "Processing has been queued. Please try again later.",
+                    })),
+                ).into_response());
+            }
+            Ok(audio_not_ready_response())
+        }
+    }
 }
 
 async fn download_original(
@@ -428,6 +505,10 @@ async fn download_original(
         .await?
         .ok_or(AppError::NotFound)?;
 
+    if !post.whitelisted {
+        return Ok(not_whitelisted_response());
+    }
+
     let audio_path = post
         .unprocessed_audio_path
         .as_deref()
@@ -435,6 +516,29 @@ async fn download_original(
         .ok_or(AppError::NotFound)?;
 
     serve_file_response(audio_path, true).await
+}
+
+fn not_whitelisted_response() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "error": "Post not whitelisted",
+            "error_code": "NOT_WHITELISTED",
+        })),
+    )
+        .into_response()
+}
+
+fn audio_not_ready_response() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({
+            "error": "Audio not ready",
+            "error_code": "AUDIO_NOT_READY",
+            "message": "The processed audio is not yet available.",
+        })),
+    )
+        .into_response()
 }
 
 async fn processing_estimate(
@@ -487,6 +591,31 @@ async fn post_json(
         })
         .collect();
 
+    // Get whisper model calls (matching Python)
+    let whisper_model_calls: Vec<Value> = sqlx::query_as::<_, (i64, String, String, Option<i64>, Option<i64>, Option<String>, Option<String>)>(
+        "SELECT id, model_name, status, first_segment_sequence_num, last_segment_sequence_num, timestamp, response FROM model_call WHERE post_id = ? AND model_name LIKE '%whisper%'",
+    )
+    .bind(post.id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .map(|mc| {
+        let response_preview = mc.6.as_deref().map(|r| {
+            if r.len() > 200 { format!("{}...", &r[..200]) } else { r.to_string() }
+        });
+        json!({
+            "id": mc.0,
+            "model_name": mc.1,
+            "status": mc.2,
+            "first_segment": mc.3,
+            "last_segment": mc.4,
+            "timestamp": mc.5,
+            "response": response_preview,
+        })
+    })
+    .collect();
+
     Ok(Json(json!({
         "id": post.id, "feed_id": post.feed_id, "guid": post.guid,
         "title": post.title,
@@ -497,8 +626,97 @@ async fn post_json(
         "transcript_segment_count": segment_count,
         "transcript_sample": transcript_sample,
         "model_call_count": model_call_count,
+        "whisper_model_calls": whisper_model_calls,
         "whitelisted": post.whitelisted,
         "download_count": post.download_count,
+    })))
+}
+
+async fn post_debug(
+    State(state): State<AppState>,
+    AxumPath(p_guid): AxumPath<String>,
+) -> AppResult<Json<Value>> {
+    let post = queries::get_post_by_guid(&state.db, &p_guid)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    let segments = queries::get_segments_by_post(&state.db, post.id).await?;
+
+    let model_calls: Vec<Value> = sqlx::query_as::<_, (i64, i64, Option<i64>, Option<i64>, String, Option<String>, Option<String>, String, Option<String>, Option<String>, i64)>(
+        "SELECT id, post_id, first_segment_sequence_num, last_segment_sequence_num, model_name, prompt, response, status, error_message, timestamp, retry_attempts FROM model_call WHERE post_id = ? ORDER BY model_name, first_segment_sequence_num",
+    )
+    .bind(post.id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .map(|mc| json!({
+        "id": mc.0, "post_id": mc.1,
+        "first_segment_sequence_num": mc.2, "last_segment_sequence_num": mc.3,
+        "model_name": mc.4, "prompt": mc.5, "response": mc.6,
+        "status": mc.7, "error_message": mc.8, "timestamp": mc.9,
+        "retry_attempts": mc.10,
+    }))
+    .collect();
+
+    let identifications: Vec<Value> = sqlx::query_as::<_, (i64, i64, Option<i64>, f64, String)>(
+        "SELECT i.id, i.transcript_segment_id, i.model_call_id, i.confidence, i.label FROM identification i JOIN transcript_segment ts ON i.transcript_segment_id = ts.id WHERE ts.post_id = ? ORDER BY ts.sequence_num",
+    )
+    .bind(post.id)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .map(|id| json!({
+        "id": id.0, "transcript_segment_id": id.1,
+        "model_call_id": id.2, "confidence": id.3, "label": id.4,
+    }))
+    .collect();
+
+    // Count content vs ad segments
+    let mut content_count = 0i64;
+    let mut ad_count = 0i64;
+    // Group identifications by segment to determine primary label
+    let mut seg_labels: std::collections::HashMap<i64, &str> = std::collections::HashMap::new();
+    for id_val in &identifications {
+        let seg_id = id_val["transcript_segment_id"].as_i64().unwrap_or(0);
+        let label = id_val["label"].as_str().unwrap_or("content");
+        let conf = id_val["confidence"].as_f64().unwrap_or(0.0);
+        let entry = seg_labels.entry(seg_id).or_insert(label);
+        // Higher confidence wins
+        if label == "ad" && conf > 0.5 {
+            *entry = "ad";
+        }
+    }
+    for seg in &segments {
+        match seg_labels.get(&seg.id).copied() {
+            Some("ad") => ad_count += 1,
+            _ => content_count += 1,
+        }
+    }
+
+    let stats = json!({
+        "total_segments": segments.len(),
+        "total_model_calls": model_calls.len(),
+        "total_identifications": identifications.len(),
+        "content_segments": content_count,
+        "ad_segments_count": ad_count,
+        "download_count": post.download_count,
+    });
+
+    Ok(Json(json!({
+        "post": {
+            "id": post.id, "guid": post.guid, "title": post.title,
+            "feed_id": post.feed_id, "whitelisted": post.whitelisted,
+        },
+        "stats": stats,
+        "model_calls": model_calls,
+        "transcript_segments": segments.iter().map(|s| json!({
+            "id": s.id, "sequence_num": s.sequence_num,
+            "start_time": s.start_time, "end_time": s.end_time,
+            "text": s.text,
+        })).collect::<Vec<_>>(),
+        "identifications": identifications,
     })))
 }
 
@@ -507,6 +725,18 @@ async fn serve_audio_legacy(
     State(state): State<AppState>,
     AxumPath(p_guid): AxumPath<String>,
 ) -> Result<Response, AppError> {
+    serve_audio(State(state), AxumPath(p_guid)).await
+}
+
+async fn serve_audio_dot_mp3(
+    State(state): State<AppState>,
+    AxumPath(p_guid_mp3): AxumPath<String>,
+) -> Result<Response, AppError> {
+    // Handle /post/{guid}.mp3 — strip the .mp3 suffix
+    let p_guid = match p_guid_mp3.strip_suffix(".mp3") {
+        Some(guid) => guid.to_string(),
+        None => return Err(AppError::NotFound),
+    };
     serve_audio(State(state), AxumPath(p_guid)).await
 }
 

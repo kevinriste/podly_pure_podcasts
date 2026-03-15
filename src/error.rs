@@ -11,11 +11,20 @@ pub enum AppError {
     #[error("not found")]
     NotFound,
 
+    #[error("not found: {0}")]
+    NotFoundMsg(String),
+
     #[error("unauthorized: {0}")]
     Unauthorized(String),
 
+    #[error("unauthorized: {message}")]
+    UnauthorizedWithRetry { message: String, retry_after: u64 },
+
     #[error("forbidden")]
     Forbidden,
+
+    #[error("forbidden: {0}")]
+    ForbiddenMsg(String),
 
     #[error("bad request: {0}")]
     BadRequest(String),
@@ -28,6 +37,12 @@ pub enum AppError {
 
     #[error("too many requests")]
     TooManyRequests { retry_after: u64 },
+
+    #[error("service unavailable: {0}")]
+    ServiceUnavailable(String),
+
+    #[error("bad gateway: {0}")]
+    BadGateway(String),
 
     #[error("not implemented")]
     NotImplemented,
@@ -56,19 +71,38 @@ impl IntoResponse for AppError {
                 )
             }
             AppError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
+            AppError::NotFoundMsg(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg.clone()),
-            AppError::Forbidden => (StatusCode::FORBIDDEN, "forbidden".to_string()),
+            AppError::UnauthorizedWithRetry { message, retry_after } => {
+                let body = json!({ "error": message, "retry_after": retry_after });
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    [("Retry-After", retry_after.to_string())],
+                    axum::Json(body),
+                )
+                    .into_response();
+            }
+            AppError::Forbidden => (StatusCode::FORBIDDEN, "Admin privileges required.".to_string()),
+            AppError::ForbiddenMsg(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::PaymentRequired(msg) => (StatusCode::PAYMENT_REQUIRED, msg.clone()),
             AppError::TooManyRequests { retry_after } => {
-                let body = json!({ "error": "too many requests", "retry_after": retry_after });
+                let body = json!({ "error": "Too many failed attempts.", "retry_after": retry_after });
                 return (
                     StatusCode::TOO_MANY_REQUESTS,
                     [("Retry-After", retry_after.to_string())],
                     axum::Json(body),
                 )
                     .into_response();
+            }
+            AppError::ServiceUnavailable(msg) => {
+                let body = json!({ "error": "STRIPE_NOT_CONFIGURED", "message": msg });
+                return (StatusCode::SERVICE_UNAVAILABLE, axum::Json(body)).into_response();
+            }
+            AppError::BadGateway(msg) => {
+                let body = json!({ "error": "STRIPE_ERROR", "message": msg });
+                return (StatusCode::BAD_GATEWAY, axum::Json(body)).into_response();
             }
             AppError::NotImplemented => {
                 (StatusCode::NOT_IMPLEMENTED, "not implemented".to_string())
