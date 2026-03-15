@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use axum::extract::{Path as AxumPath, Query, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
@@ -430,6 +430,7 @@ async fn reprocess_post(
 
 async fn serve_audio(
     State(state): State<AppState>,
+    headers: HeaderMap,
     AxumPath(p_guid): AxumPath<String>,
 ) -> Result<Response, AppError> {
     let post = queries::get_post_by_guid(&state.db, &p_guid)
@@ -441,13 +442,14 @@ async fn serve_audio(
     }
 
     match post.processed_audio_path.as_deref().filter(|p| Path::new(p).exists()) {
-        Some(audio_path) => serve_file_response(audio_path, false).await,
+        Some(audio_path) => serve_file_with_range(audio_path, false, None, &headers).await,
         None => Ok(audio_not_ready_response()),
     }
 }
 
 async fn download_audio(
     State(state): State<AppState>,
+    headers: HeaderMap,
     AxumPath(p_guid): AxumPath<String>,
 ) -> Result<Response, AppError> {
     let post = queries::get_post_by_guid(&state.db, &p_guid)
@@ -475,7 +477,7 @@ async fn download_audio(
         Some(path) => {
             let _ = queries::increment_download_count(&state.db, post.id).await;
             let download_name = format!("{}.mp3", post.title);
-            serve_file_response_named(path, true, Some(&download_name)).await
+            serve_file_with_range(path, true, Some(&download_name), &headers).await
         }
         None => {
             // Check autoprocess_on_download for auto-processing
@@ -500,6 +502,7 @@ async fn download_audio(
 
 async fn download_original(
     State(state): State<AppState>,
+    headers: HeaderMap,
     AxumPath(p_guid): AxumPath<String>,
 ) -> Result<Response, AppError> {
     let post = queries::get_post_by_guid(&state.db, &p_guid)
@@ -518,7 +521,7 @@ async fn download_original(
 
     let _ = queries::increment_download_count(&state.db, post.id).await;
     let download_name = format!("{}_original.mp3", post.title);
-    serve_file_response_named(audio_path, true, Some(&download_name)).await
+    serve_file_with_range(audio_path, true, Some(&download_name), &headers).await
 }
 
 fn not_whitelisted_response() -> Response {
@@ -728,13 +731,15 @@ async fn post_debug(
 // Legacy routes — Python routes /post/{guid}.mp3 to download (Content-Disposition: attachment)
 async fn serve_audio_legacy(
     State(state): State<AppState>,
+    headers: HeaderMap,
     AxumPath(p_guid): AxumPath<String>,
 ) -> Result<Response, AppError> {
-    download_audio(State(state), AxumPath(p_guid)).await
+    download_audio(State(state), headers, AxumPath(p_guid)).await
 }
 
 async fn serve_audio_dot_mp3(
     State(state): State<AppState>,
+    headers: HeaderMap,
     AxumPath(p_guid_mp3): AxumPath<String>,
 ) -> Result<Response, AppError> {
     // Handle /post/{guid}.mp3 — strip the .mp3 suffix
@@ -742,24 +747,28 @@ async fn serve_audio_dot_mp3(
         Some(guid) => guid.to_string(),
         None => return Err(AppError::NotFound),
     };
-    download_audio(State(state), AxumPath(p_guid)).await
+    download_audio(State(state), headers, AxumPath(p_guid)).await
 }
 
 async fn download_original_legacy(
     State(state): State<AppState>,
+    headers: HeaderMap,
     AxumPath(p_guid): AxumPath<String>,
 ) -> Result<Response, AppError> {
-    download_original(State(state), AxumPath(p_guid)).await
+    download_original(State(state), headers, AxumPath(p_guid)).await
 }
 
-async fn serve_file_response(path: &str, as_attachment: bool) -> Result<Response, AppError> {
-    serve_file_response_named(path, as_attachment, None).await
-}
-
-async fn serve_file_response_named(path: &str, as_attachment: bool, download_name: Option<&str>) -> Result<Response, AppError> {
+async fn serve_file_with_range(
+    path: &str,
+    as_attachment: bool,
+    download_name: Option<&str>,
+    headers: &HeaderMap,
+) -> Result<Response, AppError> {
     let bytes = tokio::fs::read(path)
         .await
         .map_err(|_| AppError::NotFound)?;
+
+    let total_len = bytes.len();
 
     let filename = download_name
         .map(|s| s.to_string())
@@ -779,11 +788,43 @@ async fn serve_file_response_named(path: &str, as_attachment: bool, download_nam
         "application/octet-stream"
     };
 
+    // Parse Range header for byte-range requests (podcast player seeking)
+    if let Some(range_val) = headers.get(axum::http::header::RANGE).and_then(|v| v.to_str().ok()) {
+        if let Some(range) = parse_byte_range(range_val, total_len) {
+            let (start, end) = range;
+            let slice = bytes[start..=end].to_vec();
+            let content_len = slice.len();
+
+            let mut builder = axum::http::Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header(axum::http::header::CONTENT_TYPE, content_type)
+                .header(axum::http::header::ACCEPT_RANGES, "bytes")
+                .header(axum::http::header::CONTENT_LENGTH, content_len.to_string())
+                .header(
+                    axum::http::header::CONTENT_RANGE,
+                    format!("bytes {start}-{end}/{total_len}"),
+                );
+
+            if as_attachment {
+                builder = builder.header(
+                    axum::http::header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{filename}\""),
+                );
+            }
+
+            return Ok(builder
+                .body(axum::body::Body::from(slice))
+                .unwrap()
+                .into_response());
+        }
+    }
+
+    // Full response (no Range header or unparseable range)
     let mut builder = axum::http::Response::builder()
         .status(StatusCode::OK)
         .header(axum::http::header::CONTENT_TYPE, content_type)
         .header(axum::http::header::ACCEPT_RANGES, "bytes")
-        .header(axum::http::header::CONTENT_LENGTH, bytes.len().to_string());
+        .header(axum::http::header::CONTENT_LENGTH, total_len.to_string());
 
     if as_attachment {
         builder = builder.header(
@@ -796,6 +837,35 @@ async fn serve_file_response_named(path: &str, as_attachment: bool, download_nam
         .body(axum::body::Body::from(bytes))
         .unwrap()
         .into_response())
+}
+
+/// Parse "bytes=START-END" range header. Returns (start, end) inclusive.
+fn parse_byte_range(range_str: &str, total: usize) -> Option<(usize, usize)> {
+    let range_str = range_str.strip_prefix("bytes=")?;
+    let mut parts = range_str.splitn(2, '-');
+    let start_str = parts.next()?.trim();
+    let end_str = parts.next()?.trim();
+
+    if start_str.is_empty() {
+        // Suffix range: bytes=-500 means last 500 bytes
+        let suffix_len: usize = end_str.parse().ok()?;
+        let start = total.saturating_sub(suffix_len);
+        Some((start, total - 1))
+    } else {
+        let start: usize = start_str.parse().ok()?;
+        if start >= total {
+            return None;
+        }
+        let end = if end_str.is_empty() {
+            total - 1
+        } else {
+            end_str.parse::<usize>().ok()?.min(total - 1)
+        };
+        if start > end {
+            return None;
+        }
+        Some((start, end))
+    }
 }
 
 fn get_auth_user_id(auth_user: &Option<Extension<AuthenticatedUser>>) -> Option<i64> {
