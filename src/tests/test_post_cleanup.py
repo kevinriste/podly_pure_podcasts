@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from app.extensions import db
 from app.models import (
@@ -460,3 +462,178 @@ def test_cleanup_with_single_old_post_per_feed(app, tmp_path) -> None:
         post_after = Post.query.filter_by(guid="only-post").first()
         assert post_after is not None
         assert post_after.processed_audio_path is not None
+
+
+def test_cleanup_preserves_post_with_newer_file_timestamp(app, tmp_path) -> None:
+    """Most-recent preservation should account for processed file mtime."""
+    with app.app_context():
+        feed = _create_feed()
+
+        old_post = _create_post(feed, "mtime-old", "https://example.com/mtime-old.mp3")
+        recent_file_post = _create_post(
+            feed, "mtime-recent-file", "https://example.com/mtime-recent.mp3"
+        )
+
+        old_processed = tmp_path / "mtime_old_processed.mp3"
+        old_processed.write_text("audio")
+        recent_processed = tmp_path / "mtime_recent_processed.mp3"
+        recent_processed.write_text("audio")
+
+        now_ts = datetime.utcnow().timestamp()
+        old_file_ts = (datetime.utcnow() - timedelta(days=20)).timestamp()
+        os.utime(old_processed, (old_file_ts, old_file_ts))
+        os.utime(recent_processed, (now_ts, now_ts))
+
+        old_post.processed_audio_path = str(old_processed)
+        recent_file_post.processed_audio_path = str(recent_processed)
+
+        completed_at = datetime.utcnow() - timedelta(days=30)
+        db.session.add(
+            ProcessingJob(
+                id="job-mtime-old",
+                post_guid=old_post.guid,
+                status="completed",
+                current_step=4,
+                total_steps=4,
+                progress_percentage=100.0,
+                created_at=completed_at,
+                started_at=completed_at,
+                completed_at=completed_at,
+            )
+        )
+        db.session.add(
+            ProcessingJob(
+                id="job-mtime-recent",
+                post_guid=recent_file_post.guid,
+                status="completed",
+                current_step=4,
+                total_steps=4,
+                progress_percentage=100.0,
+                created_at=completed_at,
+                started_at=completed_at,
+                completed_at=completed_at,
+            )
+        )
+        db.session.commit()
+
+        removed = cleanup_processed_posts(retention_days=5)
+        assert removed == 1
+
+        old_post_after = Post.query.filter_by(guid="mtime-old").first()
+        assert old_post_after is not None
+        assert old_post_after.processed_audio_path is None
+
+        recent_post_after = Post.query.filter_by(guid="mtime-recent-file").first()
+        assert recent_post_after is not None
+        assert recent_post_after.processed_audio_path is not None
+
+
+def test_cleanup_preserves_most_recent_when_file_timestamps_tie(app, tmp_path) -> None:
+    """When file mtimes tie, preserve the post with the newer completion timestamp."""
+    with app.app_context():
+        feed = _create_feed()
+
+        old_post = _create_post(feed, "tie-old", "https://example.com/tie-old.mp3")
+        recent_post = _create_post(
+            feed, "tie-recent", "https://example.com/tie-recent.mp3"
+        )
+
+        old_processed = tmp_path / "tie_old_processed.mp3"
+        old_processed.write_text("audio")
+        recent_processed = tmp_path / "tie_recent_processed.mp3"
+        recent_processed.write_text("audio")
+
+        tied_ts = datetime.utcnow().timestamp()
+        os.utime(old_processed, (tied_ts, tied_ts))
+        os.utime(recent_processed, (tied_ts, tied_ts))
+
+        old_post.processed_audio_path = str(old_processed)
+        recent_post.processed_audio_path = str(recent_processed)
+
+        old_completed = datetime.utcnow() - timedelta(days=12)
+        recent_completed = datetime.utcnow() - timedelta(days=8)
+        db.session.add(
+            ProcessingJob(
+                id="job-tie-old",
+                post_guid=old_post.guid,
+                status="completed",
+                current_step=4,
+                total_steps=4,
+                progress_percentage=100.0,
+                created_at=old_completed,
+                started_at=old_completed,
+                completed_at=old_completed,
+            )
+        )
+        db.session.add(
+            ProcessingJob(
+                id="job-tie-recent",
+                post_guid=recent_post.guid,
+                status="completed",
+                current_step=4,
+                total_steps=4,
+                progress_percentage=100.0,
+                created_at=recent_completed,
+                started_at=recent_completed,
+                completed_at=recent_completed,
+            )
+        )
+        db.session.commit()
+
+        removed = cleanup_processed_posts(retention_days=5)
+        assert removed == 1
+
+        old_after = Post.query.filter_by(guid="tie-old").first()
+        recent_after = Post.query.filter_by(guid="tie-recent").first()
+        assert old_after is not None
+        assert old_after.processed_audio_path is None
+        assert recent_after is not None
+        assert recent_after.processed_audio_path is not None
+
+
+def test_cleanup_skips_local_file_deletes_when_writer_cleanup_fails(
+    app, tmp_path
+) -> None:
+    """Cleanup should not remove local files if writer cleanup action fails."""
+    with app.app_context():
+        feed = _create_feed()
+        post = _create_post(feed, "writer-fail", "https://example.com/writer-fail.mp3")
+
+        processed = tmp_path / "writer_fail_processed.mp3"
+        unprocessed = tmp_path / "writer_fail_unprocessed.mp3"
+        processed.write_text("processed")
+        unprocessed.write_text("unprocessed")
+
+        post.processed_audio_path = str(processed)
+        post.unprocessed_audio_path = str(unprocessed)
+
+        completed_at = datetime.utcnow() - timedelta(days=10)
+        db.session.add(
+            ProcessingJob(
+                id="job-writer-fail",
+                post_guid=post.guid,
+                status="completed",
+                current_step=4,
+                total_steps=4,
+                progress_percentage=100.0,
+                created_at=completed_at,
+                started_at=completed_at,
+                completed_at=completed_at,
+            )
+        )
+        db.session.commit()
+
+        with patch(
+            "app.post_cleanup.writer_client.action",
+            side_effect=RuntimeError("writer down"),
+        ):
+            removed = cleanup_processed_posts(retention_days=5)
+
+        assert removed == 0
+        assert processed.exists()
+        assert unprocessed.exists()
+
+        post_after = Post.query.filter_by(guid="writer-fail").first()
+        assert post_after is not None
+        assert post_after.processed_audio_path == str(processed)
+        assert post_after.unprocessed_audio_path == str(unprocessed)
