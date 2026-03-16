@@ -39,8 +39,10 @@ from app.routes.post_utils import (
     increment_download_count,
     missing_processed_audio_response,
 )
+from app.runtime_config import config as runtime_config
 from app.writer.client import writer_client
 from podcast_processor.chapter_filter import parse_filter_strings
+from podcast_processor.transcription_manager import TranscriptionManager
 from shared import defaults as DEFAULTS
 from shared.processing_paths import (
     get_in_root,
@@ -1019,27 +1021,25 @@ def api_reprocess_post_keep_transcript(p_guid: str) -> ResponseReturnValue:
             400,
         )
 
-    transcript_count = (
-        db.session.query(TranscriptSegment.id).filter_by(post_id=post.id).count()
+    transcription_manager = TranscriptionManager(
+        logger=logger,
+        config=runtime_config,
+        db_session=db.session,
     )
-    has_whisper_model_call = (
-        db.session.query(ModelCall.id)
-        .filter(
-            ModelCall.post_id == post.id,
-            whisper_model_call_filter(),
-            ModelCall.status == "success",
+    reusable_transcript_segments = transcription_manager.get_reusable_transcription(
+        post
+    )
+    if reusable_transcript_segments is None:
+        transcript_count = (
+            db.session.query(TranscriptSegment.id).filter_by(post_id=post.id).count()
         )
-        .first()
-        is not None
-    )
-    if transcript_count <= 0 or not has_whisper_model_call:
         logger.warning(
             "[API] Reprocess (keep transcript): no reusable transcript for guid=%s "
-            "post_id=%s transcript_count=%s whisper_model_call=%s",
+            "post_id=%s transcript_count=%s active_whisper_model=%s",
             p_guid,
             post.id,
             transcript_count,
-            has_whisper_model_call,
+            transcription_manager.transcriber.model_name,
         )
         return (
             flask.jsonify(
@@ -1047,8 +1047,8 @@ def api_reprocess_post_keep_transcript(p_guid: str) -> ResponseReturnValue:
                     "status": "error",
                     "error_code": "NO_REUSABLE_TRANSCRIPT",
                     "message": (
-                        "No reusable transcript found for this episode. "
-                        "Use full reprocess instead."
+                        "No reusable transcript found for the currently configured "
+                        "transcription model. Use full reprocess instead."
                     ),
                 }
             ),

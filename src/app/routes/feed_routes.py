@@ -139,9 +139,25 @@ def _build_feed_settings_updates(
         "ad_detection_strategy",
         getattr(feed, "ad_detection_strategy", "llm"),
     )
-    if resolved_strategy == "chapter_insert":
-        # Chapter insertion mode always writes chapter metadata, so keep this on.
-        updates["enable_llm_chapter_fallback_tagging"] = True
+    if (
+        resolved_strategy == "chapter_insert"
+        and chapter_fallback_enabled is not _MISSING
+        and chapter_fallback_enabled is False
+    ):
+        return (
+            None,
+            (
+                jsonify(
+                    {
+                        "error": (
+                            "enable_llm_chapter_fallback_tagging cannot be false "
+                            "when ad_detection_strategy is 'chapter_insert'"
+                        )
+                    }
+                ),
+                400,
+            ),
+        )
 
     if not updates:
         return None, (jsonify({"error": "No settings provided."}), 400)
@@ -450,6 +466,10 @@ def update_feed_settings_endpoint(feed_id: int) -> ResponseReturnValue:
             500,
         )
 
+    # The writer may commit in a separate process/session; expire local state so the
+    # response reflects the newly persisted values instead of any cached identity-map
+    # object loaded earlier in this request.
+    db.session.expire_all()
     feed = db.session.get(Feed, feed_id)
     if feed is None:
         return jsonify({"error": "Feed not found"}), 404

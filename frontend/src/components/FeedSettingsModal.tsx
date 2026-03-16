@@ -77,23 +77,50 @@ export default function FeedSettingsModal({
     },
   });
 
-  const handleSave = () => {
-    const settings: FeedSettingsUpdate = {
-      ad_detection_strategy: strategy,
-      enable_llm_chapter_fallback_tagging:
-        strategy === 'chapter_insert'
-          ? true
-          : chapterFallbackOverride === 'inherit'
-            ? null
-            : chapterFallbackOverride === 'on',
-      auto_whitelist_new_episodes_override:
-        autoWhitelistOverride === 'inherit' ? null : autoWhitelistOverride === 'on',
-    };
+  const currentStrategy = feed.ad_detection_strategy || 'llm';
+  const currentFilterStrings = feed.chapter_filter_strings || DEFAULT_FILTER_STRINGS;
+  const currentChapterFallbackOverride =
+    feed.enable_llm_chapter_fallback_tagging === true
+      ? 'on'
+      : feed.enable_llm_chapter_fallback_tagging === false
+        ? 'off'
+        : 'inherit';
+  const currentAutoWhitelistOverride =
+    feed.auto_whitelist_new_episodes_override === true
+      ? 'on'
+      : feed.auto_whitelist_new_episodes_override === false
+        ? 'off'
+        : 'inherit';
 
-    if (strategy === 'chapter') {
+  const handleSave = () => {
+    const settings: FeedSettingsUpdate = {};
+
+    if (strategy !== currentStrategy) {
+      settings.ad_detection_strategy = strategy;
+    }
+
+    if (strategy === 'chapter' && filterStrings !== currentFilterStrings) {
       settings.chapter_filter_strings = filterStrings || null;
-    } else {
-      settings.chapter_filter_strings = null;
+    }
+
+    if (
+      strategy !== 'chapter_insert' &&
+      chapterFallbackOverride !== currentChapterFallbackOverride
+    ) {
+      settings.enable_llm_chapter_fallback_tagging =
+        chapterFallbackOverride === 'inherit'
+          ? null
+          : chapterFallbackOverride === 'on';
+    }
+
+    if (autoWhitelistOverride !== currentAutoWhitelistOverride) {
+      settings.auto_whitelist_new_episodes_override =
+        autoWhitelistOverride === 'inherit' ? null : autoWhitelistOverride === 'on';
+    }
+
+    if (Object.keys(settings).length === 0) {
+      onClose();
+      return;
     }
 
     updateMutation.mutate(settings);

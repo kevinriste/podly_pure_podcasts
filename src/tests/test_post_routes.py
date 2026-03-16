@@ -9,6 +9,7 @@ from app.extensions import db
 from app.models import Feed, ModelCall, Post, TranscriptSegment, User
 from app.routes.post_routes import post_bp
 from app.runtime_config import config as runtime_config
+from shared.config import LocalWhisperConfig
 
 
 def test_download_endpoints_increment_counter(app, tmp_path):
@@ -442,6 +443,66 @@ def test_reprocess_keep_transcript_accepts_local_whisper_model_call(app):
     assert payload is not None
     assert payload["status"] == "started"
     clear_mock.assert_called_once()
+
+
+def test_reprocess_keep_transcript_rejects_transcript_for_old_whisper_model(app):
+    app.testing = True
+    app.register_blueprint(post_bp)
+
+    with app.app_context():
+        feed = Feed(title="Local Whisper Feed", rss_url="https://example.com/feed.xml")
+        db.session.add(feed)
+        db.session.commit()
+
+        post = Post(
+            feed_id=feed.id,
+            guid="mismatched-whisper-guid",
+            download_url="https://example.com/audio.mp3",
+            title="Mismatched Whisper Episode",
+            whitelisted=True,
+        )
+        db.session.add(post)
+        db.session.commit()
+
+        db.session.add(
+            TranscriptSegment(
+                post_id=post.id,
+                sequence_num=0,
+                start_time=0.0,
+                end_time=5.0,
+                text="hello",
+            )
+        )
+        db.session.add(
+            ModelCall(
+                post_id=post.id,
+                first_segment_sequence_num=0,
+                last_segment_sequence_num=0,
+                model_name="local_base.en",
+                prompt="Whisper transcription job",
+                status="success",
+            )
+        )
+        db.session.commit()
+        guid = post.guid
+
+    client = app.test_client()
+    original_whisper = runtime_config.whisper
+    runtime_config.whisper = LocalWhisperConfig(model="small.en")
+
+    try:
+        with mock.patch(
+            "app.routes.post_routes.clear_post_processing_data_keep_transcript"
+        ) as clear_mock:
+            response = client.post(f"/api/posts/{guid}/reprocess/keep-transcript")
+    finally:
+        runtime_config.whisper = original_whisper
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload is not None
+    assert payload["error_code"] == "NO_REUSABLE_TRANSCRIPT"
+    clear_mock.assert_not_called()
 
 
 def test_post_stats_omits_debug_info_when_disabled(app):
