@@ -291,7 +291,6 @@ def update_user_route(username: str) -> RouteResult:
             update_password(target, new_password)
         if "manual_feed_allowance" in payload:
             set_manual_feed_allowance(target, manual_feed_allowance)
-
         return jsonify({"status": "ok"})
     except (PasswordValidationError, LastAdminRemovalError, AuthServiceError) as exc:
         status_code = 400

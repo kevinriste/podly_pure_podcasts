@@ -57,7 +57,6 @@ export default function LLMProcessingStats({
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
-
   const toggleModelCallDetails = (callId: number) => {
     const newExpanded = new Set(expandedModelCalls);
     if (newExpanded.has(callId)) {
