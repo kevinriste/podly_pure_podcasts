@@ -23,8 +23,10 @@ from app.models import (
     TranscriptSegment,
 )
 from app.posts import (
+    clear_post_identifications_only,
     clear_post_processing_data,
     clear_post_processing_data_keep_transcript,
+    snapshot_post_processing_data,
 )
 from app.routes.post_stats_utils import (
     count_model_calls,
@@ -400,7 +402,15 @@ def api_post_stats(p_guid: str) -> flask.Response:
         return flask.make_response(flask.jsonify({"error": "Post not found"}), 404)
 
     feed = db.session.get(Feed, post.feed_id)
-    ad_detection_strategy = feed.ad_detection_strategy if feed else "llm"
+    ad_detection_strategy = "llm"
+    if feed:
+        feed_strategy = getattr(feed, "ad_detection_strategy", "inherit") or "inherit"
+        if feed_strategy == "inherit":
+            ad_detection_strategy = (
+                getattr(runtime_config, "ad_detection_strategy", None) or "llm"
+            )
+        else:
+            ad_detection_strategy = feed_strategy
 
     model_calls = (
         ModelCall.query.filter_by(post_id=post.id)
@@ -491,7 +501,9 @@ def api_post_stats(p_guid: str) -> flask.Response:
                         "id": ident.id,
                         "label": ident.label,
                         "confidence": (
-                            round(ident.confidence, 2) if ident.confidence else None
+                            round(ident.confidence, 2)
+                            if ident.confidence is not None
+                            else None
                         ),
                         "model_call_id": ident.model_call_id,
                     }
@@ -510,7 +522,7 @@ def api_post_stats(p_guid: str) -> flask.Response:
                 "label": identification.label,
                 "confidence": (
                     round(identification.confidence, 2)
-                    if identification.confidence
+                    if identification.confidence is not None
                     else None
                 ),
                 "model_call_id": identification.model_call_id,
@@ -823,11 +835,23 @@ def api_process_post(p_guid: str) -> ResponseReturnValue:
 
 @post_bp.route("/api/posts/<string:p_guid>/reprocess", methods=["POST"])
 def api_reprocess_post(p_guid: str) -> ResponseReturnValue:
-    """Clear all processing data for a post and start processing from scratch.
+    """Clear processing data for a post and start processing from scratch.
 
     Admin only.
+
+    Request body (optional):
+        force_retranscribe: bool - If true, clears transcript and re-transcribes.
+                                   If false (default), keeps existing transcript
+                                   and only clears identifications.
     """
-    logger.info("[API] Reprocess requested for post_guid=%s", p_guid)
+    data = request.get_json(silent=True) or {}
+    force_retranscribe = data.get("force_retranscribe", False)
+
+    logger.info(
+        "[API] Reprocess requested for post_guid=%s force_retranscribe=%s",
+        p_guid,
+        force_retranscribe,
+    )
 
     post = Post.query.filter_by(guid=p_guid).first()
     if not post:
@@ -903,13 +927,45 @@ def api_reprocess_post(p_guid: str) -> ResponseReturnValue:
     billing_user_id = getattr(user, "id", None)
 
     try:
+        snapshot_path = snapshot_post_processing_data(
+            post,
+            trigger="reprocess",
+            force_retranscribe=bool(force_retranscribe),
+            requested_by_user_id=billing_user_id,
+        )
+        if snapshot_path:
+            logger.info(
+                "[API] Reprocess: snapshot created guid=%s post_id=%s path=%s",
+                p_guid,
+                getattr(post, "id", None),
+                snapshot_path,
+            )
+        else:
+            logger.warning(
+                "[API] Reprocess: snapshot was not created guid=%s post_id=%s",
+                p_guid,
+                getattr(post, "id", None),
+            )
+
         logger.info(
-            "[API] Reprocess: cancelling jobs and clearing processing data guid=%s post_id=%s",
+            "[API] Reprocess: cancelling jobs and clearing processing data guid=%s post_id=%s force_retranscribe=%s",
             p_guid,
             getattr(post, "id", None),
+            force_retranscribe,
         )
         get_jobs_manager().cancel_post_jobs(p_guid)
-        clear_post_processing_data(post)
+
+        if force_retranscribe:
+            # Clear everything including transcript (full re-process)
+            clear_post_processing_data(post)
+            clear_message = (
+                "Post fully cleared (including transcript) and reprocessing started"
+            )
+        else:
+            # Keep transcript, only clear identifications (re-classify with new strategy)
+            clear_post_identifications_only(post)
+            clear_message = "Post identifications cleared (transcript preserved) and reprocessing started"
+
         logger.info(
             "[API] Reprocess: starting post processing guid=%s post_id=%s",
             p_guid,
@@ -923,7 +979,9 @@ def api_reprocess_post(p_guid: str) -> ResponseReturnValue:
         )
         status_code = 200 if result.get("status") in ("started", "completed") else 400
         if result.get("status") == "started":
-            result["message"] = "Post cleared and reprocessing started"
+            result["message"] = clear_message
+        if snapshot_path:
+            result["snapshot_path"] = str(snapshot_path)
         logger.info(
             "[API] Reprocess: completed guid=%s status=%s code=%s",
             p_guid,
