@@ -197,6 +197,18 @@ export const feedsApi = {
     return response.data;
   },
 
+  getReprocessInfo: async (
+    guid: string
+  ): Promise<{
+    existing_whisper_model: string | null;
+    current_whisper_model: string | null;
+    model_changed: boolean;
+    has_transcript: boolean;
+  }> => {
+    const response = await api.get(`/api/posts/${guid}/reprocess-info`);
+    return response.data;
+  },
+
   getPostStatus: async (guid: string): Promise<{
     status: string;
     step: number;

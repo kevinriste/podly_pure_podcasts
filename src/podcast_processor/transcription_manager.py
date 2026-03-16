@@ -78,19 +78,27 @@ class TranscriptionManager:
             else self.db_session.query(TranscriptSegment)
         )
 
+        # Look for any successful whisper model call, not just the current model.
+        # This prevents unnecessary re-transcription when the whisper backend changes
+        # (e.g. switching from Groq to a self-hosted API).
         existing_whisper_call = (
             model_call_query.filter_by(
                 post_id=post.id,
-                model_name=self.transcriber.model_name,
                 status="success",
+            )
+            .filter(
+                ~ModelCall.model_name.like("oneshot:%"),
             )
             .order_by(ModelCall.timestamp.desc())
             .first()
         )
 
         if existing_whisper_call:
+            model_match = existing_whisper_call.model_name == self.transcriber.model_name
             self.logger.info(
-                f"Found existing successful Whisper ModelCall {existing_whisper_call.id} for post {post.id}."
+                f"Found existing successful Whisper ModelCall {existing_whisper_call.id} for post {post.id} "
+                f"(model={existing_whisper_call.model_name}, current={self.transcriber.model_name}, "
+                f"match={model_match})."
             )
             db_segments: list[TranscriptSegment] = (
                 segment_query.filter_by(post_id=post.id)
@@ -102,9 +110,15 @@ class TranscriptionManager:
                     existing_whisper_call.last_segment_sequence_num
                     == len(db_segments) - 1
                 ):
-                    self.logger.info(
-                        f"Returning {len(db_segments)} existing transcript segments from database for post {post.id}."
-                    )
+                    if not model_match:
+                        self.logger.info(
+                            f"Reusing {len(db_segments)} existing transcript segments for post {post.id} "
+                            f"(transcribed by {existing_whisper_call.model_name}, current model is {self.transcriber.model_name})."
+                        )
+                    else:
+                        self.logger.info(
+                            f"Returning {len(db_segments)} existing transcript segments from database for post {post.id}."
+                        )
                     return db_segments
                 self.logger.warning(
                     f"ModelCall {existing_whisper_call.id} for post {post.id} indicates {existing_whisper_call.last_segment_sequence_num + 1} segments, but found {len(db_segments)} in DB. Re-transcribing."
@@ -115,7 +129,7 @@ class TranscriptionManager:
                 )
         else:
             self.logger.info(
-                f"No existing successful Whisper ModelCall found for post {post.id} with model {self.transcriber.model_name}. Proceeding to transcribe."
+                f"No existing successful Whisper ModelCall found for post {post.id}. Proceeding to transcribe."
             )
         return None
 

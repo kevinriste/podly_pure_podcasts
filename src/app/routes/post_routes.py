@@ -833,6 +833,62 @@ def api_process_post(p_guid: str) -> ResponseReturnValue:
         )
 
 
+@post_bp.route("/api/posts/<string:p_guid>/reprocess-info", methods=["GET"])
+def api_reprocess_info(p_guid: str) -> ResponseReturnValue:
+    """Return whisper model info for the reprocess confirmation dialog."""
+    from app.runtime_config import config as runtime_config
+
+    post = Post.query.filter_by(guid=p_guid).first()
+    if not post:
+        return jsonify({"error": "Post not found"}), 404
+
+    # Find the existing successful whisper model call
+    existing_whisper = (
+        ModelCall.query.filter_by(post_id=post.id, status="success")
+        .filter(
+            ~ModelCall.model_name.like("oneshot:%"),
+        )
+        .order_by(ModelCall.timestamp.desc())
+        .first()
+    )
+
+    # Determine the current configured whisper model name
+    cfg = runtime_config
+    current_model = None
+    if cfg.whisper is not None:
+        from shared.config import (
+            GroqWhisperConfig,
+            LocalWhisperConfig,
+            RemoteWhisperConfig,
+            TestWhisperConfig,
+        )
+
+        if isinstance(cfg.whisper, RemoteWhisperConfig):
+            current_model = cfg.whisper.model
+        elif isinstance(cfg.whisper, GroqWhisperConfig):
+            current_model = f"groq_{cfg.whisper.model}"
+        elif isinstance(cfg.whisper, LocalWhisperConfig):
+            current_model = f"local_{cfg.whisper.model}"
+        elif isinstance(cfg.whisper, TestWhisperConfig):
+            current_model = "test_whisper"
+
+    existing_model = existing_whisper.model_name if existing_whisper else None
+    has_segments = post.segments.count() > 0
+
+    return jsonify(
+        {
+            "existing_whisper_model": existing_model,
+            "current_whisper_model": current_model,
+            "model_changed": (
+                existing_model is not None
+                and current_model is not None
+                and existing_model != current_model
+            ),
+            "has_transcript": has_segments,
+        }
+    )
+
+
 @post_bp.route("/api/posts/<string:p_guid>/reprocess", methods=["POST"])
 def api_reprocess_post(p_guid: str) -> ResponseReturnValue:
     """Clear processing data for a post and start processing from scratch.

@@ -11,6 +11,13 @@ interface ReprocessButtonProps {
   onReprocessStart?: () => void;
 }
 
+interface ReprocessInfo {
+  existing_whisper_model: string | null;
+  current_whisper_model: string | null;
+  model_changed: boolean;
+  has_transcript: boolean;
+}
+
 export default function ReprocessButton({
   episodeGuid,
   isWhitelisted,
@@ -23,6 +30,8 @@ export default function ReprocessButton({
   const [error, setError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [regenerateTranscript, setRegenerateTranscript] = useState(false);
+  const [reprocessInfo, setReprocessInfo] = useState<ReprocessInfo | null>(null);
+  const [loadingInfo, setLoadingInfo] = useState(false);
   const queryClient = useQueryClient();
 
   const handleReprocessClick = async () => {
@@ -32,7 +41,21 @@ export default function ReprocessButton({
     }
 
     setRegenerateTranscript(false);
+    setLoadingInfo(true);
     setShowModal(true);
+
+    try {
+      const info = await feedsApi.getReprocessInfo(episodeGuid);
+      setReprocessInfo(info);
+      // Auto-check regenerate if model changed
+      if (info.model_changed && info.has_transcript) {
+        setRegenerateTranscript(true);
+      }
+    } catch {
+      setReprocessInfo(null);
+    } finally {
+      setLoadingInfo(false);
+    }
   };
 
   const handleConfirmReprocess = async () => {
@@ -120,9 +143,30 @@ export default function ReprocessButton({
 
             {/* Content */}
             <div className="p-6">
-              <p className="text-gray-700 mb-6">
+              <p className="text-gray-700 mb-4">
                 Are you sure you want to reprocess this episode? This will delete the existing processed data and start fresh processing.
               </p>
+
+              {/* Whisper model change notice */}
+              {loadingInfo && (
+                <div className="text-sm text-gray-500 mb-4">Loading transcript info...</div>
+              )}
+              {reprocessInfo?.model_changed && reprocessInfo.has_transcript && (
+                <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-md text-sm">
+                  <p className="font-medium text-amber-800 mb-1">Whisper model has changed</p>
+                  <p className="text-amber-700">
+                    This episode was transcribed with{' '}
+                    <span className="font-mono text-xs bg-amber-100 px-1 rounded">
+                      {reprocessInfo.existing_whisper_model}
+                    </span>
+                    {' '}but the current model is{' '}
+                    <span className="font-mono text-xs bg-amber-100 px-1 rounded">
+                      {reprocessInfo.current_whisper_model}
+                    </span>.
+                  </p>
+                </div>
+              )}
+
               <label className="flex items-start gap-2 mb-6 text-sm text-gray-700">
                 <input
                   type="checkbox"
@@ -132,7 +176,9 @@ export default function ReprocessButton({
                 <span>
                   Also regenerate transcript
                   <span className="block text-xs text-gray-500">
-                    Disabled by default. Enable this to force a full re-transcription.
+                    {reprocessInfo?.model_changed && reprocessInfo.has_transcript
+                      ? 'Pre-checked because the whisper model has changed. Uncheck to keep the existing transcript.'
+                      : 'Disabled by default. Enable this to force a full re-transcription.'}
                   </span>
                 </span>
               </label>
