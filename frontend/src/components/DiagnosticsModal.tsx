@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useDiagnostics } from '../contexts/DiagnosticsContext';
+import { useTimestampFormatter } from '../hooks/useTimestampFormatter';
 import { DIAGNOSTIC_UPDATED_EVENT, diagnostics, type DiagnosticsEntry } from '../utils/diagnostics';
 
 const GITHUB_NEW_ISSUE_URL = 'https://github.com/podly-pure-podcasts/podly_pure_podcasts/issues/new';
@@ -11,16 +12,9 @@ const buildIssueUrl = (title: string, body: string) => {
   return url.toString();
 };
 
-const formatTs = (ts: number) => {
-  try {
-    return new Date(ts).toISOString();
-  } catch {
-    return String(ts);
-  }
-};
-
 export default function DiagnosticsModal() {
   const { isOpen, close, clear, getEntries, currentError } = useDiagnostics();
+  const { formatDateTime } = useTimestampFormatter();
   const [entries, setEntries] = useState<DiagnosticsEntry[]>(() => getEntries());
 
   useEffect(() => {
@@ -147,7 +141,7 @@ export default function DiagnosticsModal() {
               <pre className="text-xs text-gray-800 p-3 whitespace-pre-wrap break-words">
 {recentEntries
   .map((e) => {
-    const base = `[${formatTs(e.ts)}] ${e.level.toUpperCase()}: ${e.message}`;
+    const base = `[${formatDateTime(e.ts)}] ${e.level.toUpperCase()}: ${e.message}`;
     if (e.data === undefined) return base;
     try {
       return base + `\n  ${JSON.stringify(e.data)}`;

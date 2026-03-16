@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { jobsApi } from '../services/api';
+import { useTimestampFormatter } from '../hooks/useTimestampFormatter';
 import type { CleanupPreview, Job, JobManagerRun, JobManagerStatus } from '../types';
 import { buildProcessingProgressModel } from '../utils/processingProgress';
 
@@ -52,19 +53,8 @@ function RunStat({ label, value }: { label: string; value: number }) {
   );
 }
 
-function formatDateTime(value: string | null): string {
-  if (!value) {
-    return '—';
-  }
-  try {
-    return new Date(value).toLocaleString();
-  } catch (err) {
-    console.error('Failed to format date', err);
-    return value;
-  }
-}
-
 export default function JobsPage() {
+  const { formatDateTime } = useTimestampFormatter();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [managerStatus, setManagerStatus] = useState<JobManagerStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
