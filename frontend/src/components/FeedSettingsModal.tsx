@@ -15,6 +15,8 @@ interface FeedSettingsModalProps {
 
 const DEFAULT_FILTER_STRINGS = 'sponsor,advertisement,ad break,promo,brought to you by';
 
+type StrategyValue = 'inherit' | 'llm' | 'oneshot' | 'chapter' | 'chapter_insert';
+
 export default function FeedSettingsModal({
   feed,
   isOpen,
@@ -26,8 +28,8 @@ export default function FeedSettingsModal({
 }: FeedSettingsModalProps) {
   const queryClient = useQueryClient();
 
-  const [strategy, setStrategy] = useState<'llm' | 'chapter' | 'chapter_insert'>(
-    feed.ad_detection_strategy || 'llm'
+  const [strategy, setStrategy] = useState<StrategyValue>(
+    feed.ad_detection_strategy || 'inherit'
   );
   const [filterStrings, setFilterStrings] = useState(
     feed.chapter_filter_strings || DEFAULT_FILTER_STRINGS
@@ -50,7 +52,7 @@ export default function FeedSettingsModal({
   );
 
   useEffect(() => {
-    setStrategy(feed.ad_detection_strategy || 'llm');
+    setStrategy(feed.ad_detection_strategy || 'inherit');
     setFilterStrings(feed.chapter_filter_strings || DEFAULT_FILTER_STRINGS);
     setChapterFallbackOverride(
       feed.enable_llm_chapter_fallback_tagging === true
@@ -142,6 +144,14 @@ export default function FeedSettingsModal({
 
   if (!isOpen) return null;
 
+  const strategyDescription: Record<StrategyValue, string> = {
+    inherit: 'Uses the global ad detection strategy from Settings.',
+    llm: 'Uses AI transcription and chunked classification to detect ads.',
+    oneshot: 'Sends the full transcript to an LLM in a single request for ad detection. Boundary and word-level refinement do not apply to one-shot processing.',
+    chapter: 'Removes chapters matching filter strings (requires chapter metadata). Uses CBR encoding for accurate chapter seeking, instead of the default VBR.',
+    chapter_insert: 'Preserves audio and only inserts chapter metadata into the processed file/output description.',
+  };
+
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
@@ -172,23 +182,19 @@ export default function FeedSettingsModal({
             </label>
             <select
               value={strategy}
-              onChange={(e) =>
-                setStrategy(e.target.value as 'llm' | 'chapter' | 'chapter_insert')
-              }
+              onChange={(e) => setStrategy(e.target.value as StrategyValue)}
               className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
             >
-              <option value="llm">LLM (AI-based)</option>
+              <option value="inherit">Use global default</option>
+              <option value="llm">LLM (chunked)</option>
+              <option value="oneshot">One-shot LLM</option>
               <option value="chapter">Chapter-based</option>
               <option value="chapter_insert">
                 Chapter insertion only (no ad removal)
               </option>
             </select>
             <p className="text-xs text-gray-500 mt-1">
-              {strategy === 'llm'
-                ? 'Uses AI transcription and classification to detect ads'
-                : strategy === 'chapter'
-                  ? 'Removes chapters matching filter strings (requires chapter metadata). Uses CBR encoding for accurate chapter seeking, instead of the default VBR.'
-                  : 'Preserves audio and only inserts chapter metadata into the processed file/output description.'}
+              {strategyDescription[strategy]}
             </p>
 
             {strategy === 'chapter' && (

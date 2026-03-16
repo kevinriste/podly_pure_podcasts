@@ -86,7 +86,7 @@ def _build_feed_settings_updates(
 
     if "ad_detection_strategy" in payload:
         strategy = payload["ad_detection_strategy"]
-        if strategy not in ("llm", "chapter", "chapter_insert"):
+        if strategy not in ("inherit", "llm", "oneshot", "chapter", "chapter_insert"):
             return (
                 None,
                 (
@@ -94,7 +94,7 @@ def _build_feed_settings_updates(
                         {
                             "error": (
                                 "Invalid ad_detection_strategy. Must be "
-                                "'llm', 'chapter', or 'chapter_insert'"
+                                "'inherit', 'llm', 'oneshot', 'chapter', or 'chapter_insert'"
                             )
                         }
                     ),
@@ -885,7 +885,7 @@ def _serialize_feed(
         "member_count": len(member_ids),
         "is_member": is_member,
         "is_active_subscription": is_active_subscription,
-        "ad_detection_strategy": getattr(feed, "ad_detection_strategy", "llm"),
+        "ad_detection_strategy": getattr(feed, "ad_detection_strategy", "inherit"),
         "chapter_filter_strings": getattr(feed, "chapter_filter_strings", None),
         "enable_llm_chapter_fallback_tagging": getattr(
             feed, "enable_llm_chapter_fallback_tagging", None
