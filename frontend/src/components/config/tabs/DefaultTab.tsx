@@ -9,6 +9,7 @@ export default function DefaultTab() {
     updatePending,
     llmStatus,
     whisperStatus,
+    oneshotStatus,
     probeConnections,
     getEnvHint,
     getWhisperApiKey,
@@ -60,7 +61,7 @@ export default function DefaultTab() {
   return (
     <div className="space-y-6">
       <Section title="Connection Status">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <ConnectionStatusCard
             title="LLM"
             status={llmStatus.status}
@@ -73,6 +74,13 @@ export default function DefaultTab() {
             status={whisperStatus.status}
             message={whisperStatus.message}
             error={whisperStatus.error}
+            onRetry={() => void probeConnections()}
+          />
+          <ConnectionStatusCard
+            title="One-shot"
+            status={oneshotStatus.status}
+            message={oneshotStatus.message}
+            error={oneshotStatus.error}
             onRetry={() => void probeConnections()}
           />
         </div>

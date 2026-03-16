@@ -2,6 +2,7 @@ export const ENV_FIELD_LABELS: Record<string, string> = {
   'groq.api_key': 'Groq API Key',
   'llm.llm_api_key': 'LLM API Key',
   'llm.llm_model': 'LLM Model',
+  'llm.oneshot_model': 'One-shot Model',
   'llm.openai_base_url': 'LLM Base URL',
   'whisper.whisper_type': 'Whisper Mode',
   'whisper.api_key': 'Whisper API Key',
