@@ -846,7 +846,16 @@ def api_reprocess_info(p_guid: str) -> ResponseReturnValue:
     existing_whisper = (
         ModelCall.query.filter_by(post_id=post.id, status="success")
         .filter(
-            ~ModelCall.model_name.like("oneshot:%"),
+            db.or_(
+                ModelCall.model_name.like("groq_%"),
+                ModelCall.model_name.like("local_%"),
+                ModelCall.model_name.like("%whisper%"),
+                ModelCall.model_name.like("deepdml/%"),
+                ModelCall.model_name.like("Systran/%"),
+                ModelCall.model_name.like("guillaumekln/%"),
+                ModelCall.model_name == "test_whisper",
+                ModelCall.model_name == "mock_transcriber",
+            )
         )
         .order_by(ModelCall.timestamp.desc())
         .first()

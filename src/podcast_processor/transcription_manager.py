@@ -81,13 +81,24 @@ class TranscriptionManager:
         # Look for any successful whisper model call, not just the current model.
         # This prevents unnecessary re-transcription when the whisper backend changes
         # (e.g. switching from Groq to a self-hosted API).
+        from sqlalchemy import or_
+
         existing_whisper_call = (
             model_call_query.filter_by(
                 post_id=post.id,
                 status="success",
             )
             .filter(
-                ~ModelCall.model_name.like("oneshot:%"),
+                or_(
+                    ModelCall.model_name.like("groq_%"),
+                    ModelCall.model_name.like("local_%"),
+                    ModelCall.model_name.like("%whisper%"),
+                    ModelCall.model_name.like("deepdml/%"),
+                    ModelCall.model_name.like("Systran/%"),
+                    ModelCall.model_name.like("guillaumekln/%"),
+                    ModelCall.model_name == "test_whisper",
+                    ModelCall.model_name == "mock_transcriber",
+                )
             )
             .order_by(ModelCall.timestamp.desc())
             .first()
