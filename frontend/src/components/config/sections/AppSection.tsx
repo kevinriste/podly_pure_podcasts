@@ -68,6 +68,21 @@ export default function AppSection() {
               }
             />
           </Field>
+          <Field label="Cost Rate Per Hour ($)">
+            <input
+              className="input"
+              type="number"
+              step="0.01"
+              min="0"
+              value={pending?.app?.cost_rate_per_hour ?? 0.04}
+              onChange={(e) =>
+                setField(
+                  ['app', 'cost_rate_per_hour'],
+                  Number(e.target.value)
+                )
+              }
+            />
+          </Field>
           <div className="col-span-1 md:col-span-2 flex items-center gap-3">
             <label className="flex items-center gap-2 text-sm text-gray-700 font-medium">
               <input

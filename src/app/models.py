@@ -528,6 +528,11 @@ class AppSettings(db.Model):  # type: ignore[name-defined, misc]
         nullable=False,
         default=DEFAULTS.APP_AUTOPROCESS_ON_DOWNLOAD,
     )
+    cost_rate_per_hour = db.Column(
+        db.Float,
+        nullable=False,
+        default=DEFAULTS.APP_COST_RATE_PER_HOUR,
+    )
 
     # Hash of the environment variables used to seed configuration.
     # Used to detect changes in environment variables between restarts.

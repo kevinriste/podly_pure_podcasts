@@ -8,6 +8,7 @@ import PlayButton from './PlayButton';
 import ProcessingStatsButton from './ProcessingStatsButton';
 import EpisodeProcessingStatus from './EpisodeProcessingStatus';
 import FeedSettingsModal from './FeedSettingsModal';
+import FeedSubscribersModal from './FeedSubscribersModal';
 import { useAuth } from '../contexts/AuthContext';
 import { copyToClipboard } from '../utils/clipboard';
 import { emitDiagnosticError } from '../utils/diagnostics';
@@ -84,6 +85,7 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
     setEpisodeDescriptionView(view);
     persistEpisodeDescriptionView(currentFeed.id, view);
   };
+  const [showSubscribersModal, setShowSubscribersModal] = useState(false);
 
   const isAdmin = !requireAuth || user?.role === 'admin';
   const whitelistedOnly = requireAuth && !isAdmin;
@@ -700,6 +702,13 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
                 </div>
                 {requireAuth && isAdmin && (
                   <div className="mt-2 flex items-center gap-2 flex-wrap text-sm">
+                    <button
+                      onClick={() => setShowSubscribersModal(true)}
+                      className="px-2 py-1 rounded-full text-xs font-medium border bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 transition-colors"
+                      title="View subscribers"
+                    >
+                      {currentFeed.member_count ?? 0} subscriber{(currentFeed.member_count ?? 0) !== 1 ? 's' : ''}
+                    </button>
                     <span
                       className={`px-2 py-1 rounded-full text-xs font-medium border ${
                         isMember
@@ -1291,6 +1300,14 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
         episodeDescriptionView={episodeDescriptionView}
         onEpisodeDescriptionViewChange={handleEpisodeDescriptionViewChange}
       />
+
+      {showSubscribersModal && (
+        <FeedSubscribersModal
+          feedId={currentFeed.id}
+          feedTitle={currentFeed.title}
+          onClose={() => setShowSubscribersModal(false)}
+        />
+      )}
     </div>
   );
 }

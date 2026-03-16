@@ -158,6 +158,7 @@ def ensure_defaults() -> None:
             "enable_public_landing_page": DEFAULTS.APP_ENABLE_PUBLIC_LANDING_PAGE,
             "user_limit_total": DEFAULTS.APP_USER_LIMIT_TOTAL,
             "autoprocess_on_download": DEFAULTS.APP_AUTOPROCESS_ON_DOWNLOAD,
+            "cost_rate_per_hour": DEFAULTS.APP_COST_RATE_PER_HOUR,
         },
     )
 
@@ -471,6 +472,7 @@ def read_combined() -> dict[str, Any]:
             "enable_public_landing_page": app_s.enable_public_landing_page,
             "user_limit_total": app_s.user_limit_total,
             "autoprocess_on_download": app_s.autoprocess_on_download,
+            "cost_rate_per_hour": app_s.cost_rate_per_hour,
         },
     }
 
@@ -606,6 +608,7 @@ def _update_section_app(data: dict[str, Any]) -> tuple[int | None, int | None]:
         "enable_public_landing_page",
         "user_limit_total",
         "autoprocess_on_download",
+        "cost_rate_per_hour",
     ]:
         if key in data:
             setattr(row, key, data[key])
@@ -805,6 +808,12 @@ def to_pydantic_config() -> PydanticConfig:
             data["app"].get(
                 "autoprocess_on_download",
                 DEFAULTS.APP_AUTOPROCESS_ON_DOWNLOAD,
+            )
+        ),
+        cost_rate_per_hour=float(
+            data["app"].get(
+                "cost_rate_per_hour",
+                DEFAULTS.APP_COST_RATE_PER_HOUR,
             )
         ),
     )
