@@ -24,6 +24,7 @@ from app.feeds import (
 )
 from app.models import Feed, Post
 from app.runtime_config import config as runtime_config
+from app.writer.actions.feeds import refresh_feed_action
 
 logger = logging.getLogger("global_logger")
 
@@ -43,6 +44,7 @@ class MockPost:
         duration=None,
         image_url=None,
         whitelisted=False,
+        processed_audio_path=None,
     ):
         self.id = id
         self.title = title
@@ -54,6 +56,7 @@ class MockPost:
         self.duration = duration
         self.image_url = image_url
         self.whitelisted = whitelisted
+        self.processed_audio_path = processed_audio_path
         self._audio_len_bytes = 1024
         self.whitelisted = False
 
@@ -322,6 +325,66 @@ def test_refresh_feed_whitelists_when_member_exists(
     mock_writer_client.action.assert_called_once()
 
 
+@mock.patch("app.feeds.writer_client")
+@mock.patch("app.feeds._should_auto_whitelist_new_posts")
+@mock.patch("app.feeds.make_post")
+@mock.patch("app.feeds.fetch_feed")
+def test_refresh_feed_backfills_existing_unprocessed_post_duration(
+    mock_fetch_feed,
+    mock_make_post,
+    mock_should_auto_whitelist,
+    mock_writer_client,
+    mock_feed,
+    mock_feed_data,
+    mock_db_session,
+):
+    existing_post = MockPost(id=42, guid=mock_feed_data.entries[0].id, duration=None)
+    existing_post.processed_audio_path = None
+    mock_feed.posts = [existing_post]
+
+    mock_fetch_feed.return_value = mock_feed_data
+    mock_should_auto_whitelist.return_value = True
+    mock_make_post.return_value = MockPost(guid=str(uuid.uuid4()))
+
+    refresh_feed(mock_feed)
+
+    mock_make_post.assert_called_once()
+    mock_writer_client.action.assert_called_once()
+    action_name = mock_writer_client.action.call_args.args[0]
+    payload = mock_writer_client.action.call_args.args[1]
+    assert action_name == "refresh_feed"
+    assert payload["existing_post_updates"] == [{"post_id": 42, "duration": 3600}]
+
+
+def test_refresh_feed_action_updates_existing_post_duration(app):
+    with app.app_context():
+        feed = Feed(title="Test Feed", rss_url="https://example.com/feed.xml")
+        db.session.add(feed)
+        db.session.commit()
+
+        post = Post(
+            feed_id=feed.id,
+            guid="existing-guid",
+            download_url="https://example.com/episode.mp3",
+            title="Existing Episode",
+            duration=None,
+        )
+        db.session.add(post)
+        db.session.commit()
+
+        result = refresh_feed_action(
+            {
+                "feed_id": feed.id,
+                "existing_post_updates": [{"post_id": post.id, "duration": 3600}],
+            }
+        )
+        db.session.commit()
+        db.session.refresh(post)
+
+        assert result["updated_posts_count"] == 1
+        assert post.duration == 3600
+
+
 @mock.patch("app.feeds.fetch_feed")
 @mock.patch("app.feeds.refresh_feed")
 def test_add_or_refresh_feed_existing(
@@ -433,7 +496,7 @@ def test_feed_item(mock_post, app):
     # Check enclosure
     enclosure = result.enclosure
     assert enclosure is not None
-    assert enclosure.url == "http://podly.com:5001/api/posts/test-guid/download"
+    assert enclosure.url == "http://podly.com:5001/post/test-guid.mp3"
     assert enclosure.type == "audio/mpeg"
     assert enclosure.length == mock_post._audio_len_bytes
 
@@ -499,7 +562,7 @@ def test_feed_item_with_reverse_proxy(mock_post, app):
     # Check enclosure - should use HTTP/2 pseudo-headers
     enclosure = result.enclosure
     assert enclosure is not None
-    assert enclosure.url == "http://podly.com:5001/api/posts/test-guid/download"
+    assert enclosure.url == "http://podly.com:5001/post/test-guid.mp3"
     assert enclosure.type == "audio/mpeg"
     assert enclosure.length == mock_post._audio_len_bytes
 
@@ -533,9 +596,117 @@ def test_feed_item_with_reverse_proxy_custom_port(mock_post, app):
     # Check enclosure - should use HTTPS with custom port
     enclosure = result.enclosure
     assert enclosure is not None
-    assert enclosure.url == "https://podly.com:8443/api/posts/test-guid/download"
+    assert enclosure.url == "https://podly.com:8443/post/test-guid.mp3"
     assert enclosure.type == "audio/mpeg"
     assert enclosure.length == mock_post._audio_len_bytes
+
+
+def test_feed_item_includes_itunes_duration(mock_post, app):
+    mock_post.duration = 3723
+
+    headers_dict = {"Host": "podly.com:5001"}
+    mock_headers = mock.MagicMock()
+    mock_headers.get.side_effect = headers_dict.get
+
+    mock_environ = mock.MagicMock()
+    mock_environ.get.return_value = None
+
+    mock_request = mock.MagicMock()
+    mock_request.headers = mock_headers
+    mock_request.environ = mock_environ
+    mock_request.is_secure = False
+
+    with app.app_context(), mock.patch("app.feeds.request", mock_request):
+        item = feed_item(mock_post)
+
+    rss = PyRSS2Gen.RSS2(
+        title="Test Feed",
+        link="http://podly.com:5001/feed/1",
+        description="Test feed",
+        items=[item],
+    )
+    rss.rss_attrs["xmlns:itunes"] = "http://www.itunes.com/dtds/podcast-1.0.dtd"
+
+    xml = rss.to_xml("utf-8")
+    if isinstance(xml, bytes):
+        xml = xml.decode("utf-8")
+    assert "<itunes:duration>1:02:03</itunes:duration>" in xml
+
+
+def test_feed_item_falls_back_to_processed_audio_duration(mock_post, app):
+    mock_post.duration = None
+    mock_post.processed_audio_path = "/tmp/test-output.mp3"
+
+    headers_dict = {"Host": "podly.com:5001"}
+    mock_headers = mock.MagicMock()
+    mock_headers.get.side_effect = headers_dict.get
+
+    mock_environ = mock.MagicMock()
+    mock_environ.get.return_value = None
+
+    mock_request = mock.MagicMock()
+    mock_request.headers = mock_headers
+    mock_request.environ = mock_environ
+    mock_request.is_secure = False
+
+    with (
+        app.app_context(),
+        mock.patch("app.feeds.request", mock_request),
+        mock.patch("app.feeds.get_audio_duration_ms", return_value=4_194_000),
+    ):
+        item = feed_item(mock_post)
+
+    rss = PyRSS2Gen.RSS2(
+        title="Test Feed",
+        link="http://podly.com:5001/feed/1",
+        description="Test feed",
+        items=[item],
+    )
+    rss.rss_attrs["xmlns:itunes"] = "http://www.itunes.com/dtds/podcast-1.0.dtd"
+
+    xml = rss.to_xml("utf-8")
+    if isinstance(xml, bytes):
+        xml = xml.decode("utf-8")
+    assert "<itunes:duration>1:09:54</itunes:duration>" in xml
+
+
+def test_feed_item_prefers_processed_audio_duration_over_stored_duration(
+    mock_post, app
+):
+    mock_post.duration = 3723
+    mock_post.processed_audio_path = "/tmp/test-output.mp3"
+
+    headers_dict = {"Host": "podly.com:5001"}
+    mock_headers = mock.MagicMock()
+    mock_headers.get.side_effect = headers_dict.get
+
+    mock_environ = mock.MagicMock()
+    mock_environ.get.return_value = None
+
+    mock_request = mock.MagicMock()
+    mock_request.headers = mock_headers
+    mock_request.environ = mock_environ
+    mock_request.is_secure = False
+
+    with (
+        app.app_context(),
+        mock.patch("app.feeds.request", mock_request),
+        mock.patch("app.feeds.get_audio_duration_ms", return_value=3_600_000),
+    ):
+        item = feed_item(mock_post)
+
+    rss = PyRSS2Gen.RSS2(
+        title="Test Feed",
+        link="http://podly.com:5001/feed/1",
+        description="Test feed",
+        items=[item],
+    )
+    rss.rss_attrs["xmlns:itunes"] = "http://www.itunes.com/dtds/podcast-1.0.dtd"
+
+    xml = rss.to_xml("utf-8")
+    if isinstance(xml, bytes):
+        xml = xml.decode("utf-8")
+    assert "<itunes:duration>1:00:00</itunes:duration>" in xml
 
 
 def test_get_base_url_without_reverse_proxy():
@@ -817,6 +988,24 @@ def test_get_duration_with_valid_duration():
     result = get_duration(entry)
 
     assert result == 3600
+
+
+def test_get_duration_with_hms_duration():
+    """Test get_duration with an HH:MM:SS duration."""
+    entry = {"itunes_duration": "1:02:03"}
+
+    result = get_duration(entry)
+
+    assert result == 3723
+
+
+def test_get_duration_with_fallback_duration_field():
+    """Test get_duration falls back to a generic duration field."""
+    entry = {"duration": "12:34"}
+
+    result = get_duration(entry)
+
+    assert result == 754
 
 
 def test_get_duration_with_invalid_duration():

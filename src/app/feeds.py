@@ -16,9 +16,61 @@ from app.extensions import db
 from app.models import Feed, Post, User, UserFeed
 from app.runtime_config import config
 from app.writer.client import writer_client
+from podcast_processor.audio import get_audio_duration_ms
 from podcast_processor.podcast_downloader import find_audio_link
 
 logger = logging.getLogger("global_logger")
+
+
+def _format_itunes_duration(duration_seconds: int) -> str:
+    total_seconds = max(0, int(duration_seconds))
+    hours, rem = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(rem, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
+
+
+def _parse_duration_seconds(value: Any) -> int | None:
+    if value is None:
+        return None
+
+    if isinstance(value, bool):
+        return None
+
+    if isinstance(value, int):
+        return value if value >= 0 else None
+
+    if isinstance(value, float):
+        return int(value) if value >= 0 else None
+
+    raw_value = str(value).strip()
+    if not raw_value:
+        return None
+
+    try:
+        parsed = int(raw_value)
+    except ValueError:
+        parsed = None
+
+    if parsed is not None:
+        return parsed if parsed >= 0 else None
+
+    parts = [part.strip() for part in raw_value.split(":")]
+    if len(parts) not in {2, 3} or any(not part for part in parts):
+        return None
+
+    try:
+        seconds = float(parts[-1])
+        minutes = int(parts[-2])
+        hours = int(parts[0]) if len(parts) == 3 else 0
+    except ValueError:
+        return None
+
+    if hours < 0 or minutes < 0 or seconds < 0:
+        return None
+
+    return int((hours * 3600) + (minutes * 60) + seconds)
 
 
 def _format_chapter_timestamp(seconds: float) -> str:
@@ -217,7 +269,7 @@ def refresh_feed(feed: Feed) -> None:
         if feed.image_url != new_image_url:
             updates["image_url"] = new_image_url
 
-    existing_posts = {post.guid for post in feed.posts}  # type: ignore[attr-defined]
+    existing_posts = {post.guid: post for post in feed.posts}  # type: ignore[attr-defined]
     oldest_post = min(
         (post for post in feed.posts if post.release_date),  # type: ignore[attr-defined]
         key=lambda p: p.release_date,
@@ -225,8 +277,10 @@ def refresh_feed(feed: Feed) -> None:
     )
 
     new_posts = []
+    existing_post_updates = []
     for entry in feed_data.entries:
-        if entry.id not in existing_posts:
+        existing_post = existing_posts.get(entry.id)
+        if existing_post is None:
             logger.debug("found new podcast: %s", entry.title)
             p = make_post(feed, entry)
             # do not allow automatic download of any backcatalog added to the feed
@@ -256,11 +310,27 @@ number_of_episodes_to_whitelist_from_archive_of_new_feed setting: {entry.title}"
                 "feed_id": feed.id,
             }
             new_posts.append(post_data)
+            continue
 
-    if updates or new_posts:
+        parsed_duration = get_duration(entry)
+        if (
+            existing_post.processed_audio_path is None
+            and parsed_duration is not None
+            and existing_post.duration != parsed_duration
+        ):
+            existing_post_updates.append(
+                {"post_id": existing_post.id, "duration": parsed_duration}
+            )
+
+    if updates or new_posts or existing_post_updates:
         writer_client.action(
             "refresh_feed",
-            {"feed_id": feed.id, "updates": updates, "new_posts": new_posts},
+            {
+                "feed_id": feed.id,
+                "updates": updates,
+                "new_posts": new_posts,
+                "existing_post_updates": existing_post_updates,
+            },
             wait=True,
         )
 
@@ -354,9 +424,11 @@ class ItunesRSSItem(PyRSS2Gen.RSSItem):
         guid: str,
         pubDate: str | None,
         image_url: str | None = None,
+        duration_seconds: int | None = None,
         **kwargs: Any,
     ) -> None:
         self.image_url = image_url
+        self.duration_seconds = duration_seconds
         super().__init__(
             title=title,
             enclosure=enclosure,
@@ -370,7 +442,26 @@ class ItunesRSSItem(PyRSS2Gen.RSSItem):
         if self.image_url:
             handler.startElement("itunes:image", {"href": self.image_url})
             handler.endElement("itunes:image")
+        if self.duration_seconds:
+            handler.startElement("itunes:duration", {})
+            handler.characters(_format_itunes_duration(self.duration_seconds))
+            handler.endElement("itunes:duration")
         super().publish_extensions(handler)
+
+
+def _feed_item_duration_seconds(post: Post) -> int | None:
+    processed_audio_path = getattr(post, "processed_audio_path", None)
+    if processed_audio_path:
+        duration_ms = get_audio_duration_ms(processed_audio_path)
+        if duration_ms is not None and duration_ms > 0:
+            return round(duration_ms / 1000.0)
+
+    raw_duration = getattr(post, "duration", None)
+    if raw_duration is None:
+        return None
+
+    duration_seconds = int(raw_duration)
+    return duration_seconds if duration_seconds > 0 else None
 
 
 def feed_item(post: Post, prepend_feed_title: bool = False) -> PyRSS2Gen.RSSItem:
@@ -381,13 +472,16 @@ def feed_item(post: Post, prepend_feed_title: bool = False) -> PyRSS2Gen.RSSItem
 
     base_url = _get_base_url()
 
-    # Generate URLs that will be proxied by the frontend to the backend
-    audio_url = _append_feed_token_params(f"{base_url}/api/posts/{post.guid}/download")
+    # Podcast clients stream enclosure URLs directly, so use the inline MP3 route
+    # rather than the attachment-style download endpoint.
+    audio_url = _append_feed_token_params(f"{base_url}/post/{post.guid}.mp3")
     description = build_post_feed_description_html(post)
 
     title = post.title
     if prepend_feed_title and post.feed:
         title = f"[{post.feed.title}] {title}"
+
+    duration_seconds = _feed_item_duration_seconds(post)
 
     item = ItunesRSSItem(
         title=title,
@@ -400,6 +494,7 @@ def feed_item(post: Post, prepend_feed_title: bool = False) -> PyRSS2Gen.RSSItem
         guid=post.guid,
         pubDate=_format_pub_date(post.release_date),
         image_url=post.image_url,
+        duration_seconds=duration_seconds,
     )
 
     return item
@@ -592,7 +687,9 @@ def make_post(feed: Feed, entry: feedparser.FeedParserDict) -> Post:
     )
 
 
-def _get_entry_field(entry: feedparser.FeedParserDict, field: str) -> Any | None:
+def _get_entry_field(
+    entry: feedparser.FeedParserDict | dict[str, Any], field: str
+) -> Any | None:
     value = getattr(entry, field, None)
     return value if value is not None else entry.get(field)
 
@@ -670,9 +767,9 @@ def get_guid(entry: feedparser.FeedParserDict) -> str:
 
 
 def get_duration(entry: feedparser.FeedParserDict | dict[str, Any]) -> int | None:
-    try:
-        return int(entry["itunes_duration"])
-    except Exception:  # noqa: BLE001
-        logger.error("Failed to get duration")
-        logger.error("Failed to get duration")
-        return None
+    for field in ("itunes_duration", "duration"):
+        parsed_duration = _parse_duration_seconds(_get_entry_field(entry, field))
+        if parsed_duration is not None:
+            return parsed_duration
+
+    return None

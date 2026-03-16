@@ -66,6 +66,130 @@ def test_download_endpoints_increment_counter(app, tmp_path):
             assert post.download_count == 2
 
 
+def test_audio_endpoint_supports_range_requests(app, tmp_path):
+    app.testing = True
+    app.register_blueprint(post_bp)
+
+    with app.app_context():
+        feed = Feed(title="Test Feed", rss_url="https://example.com/feed.xml")
+        db.session.add(feed)
+        db.session.commit()
+
+        processed_audio = tmp_path / "processed.mp3"
+        processed_audio.write_bytes(b"processed audio")
+
+        post = Post(
+            feed_id=feed.id,
+            guid="stream-guid",
+            download_url="https://example.com/audio.mp3",
+            title="Stream Episode",
+            processed_audio_path=str(processed_audio),
+            whitelisted=True,
+        )
+        db.session.add(post)
+        db.session.commit()
+        post_guid = post.guid
+
+    client = app.test_client()
+    response = client.get(
+        f"/api/posts/{post_guid}/audio",
+        headers={"Range": "bytes=0-8"},
+    )
+
+    assert response.status_code == 206
+    assert response.data == b"processed"
+    assert response.headers["Accept-Ranges"] == "bytes"
+    assert "attachment" not in response.headers.get("Content-Disposition", "").lower()
+
+
+def test_audio_triggers_processing_when_enabled(app):
+    """Start processing when streamed audio is missing and toggle is enabled."""
+    app.testing = True
+    app.register_blueprint(post_bp)
+
+    with app.app_context():
+        feed = Feed(title="Test Feed", rss_url="https://example.com/feed.xml")
+        db.session.add(feed)
+        db.session.commit()
+
+        post = Post(
+            feed_id=feed.id,
+            guid="missing-stream-guid",
+            download_url="https://example.com/audio.mp3",
+            title="Missing Stream Audio",
+            whitelisted=True,
+        )
+        db.session.add(post)
+        db.session.commit()
+        post_guid = post.guid
+
+    client = app.test_client()
+    original_flag = runtime_config.autoprocess_on_download
+    runtime_config.autoprocess_on_download = True
+    try:
+        with mock.patch("app.routes.post_utils.get_jobs_manager") as mock_mgr:
+            mock_mgr.return_value.start_post_processing.return_value = {
+                "status": "started",
+                "job_id": "job-stream-123",
+            }
+            response = client.get(f"/post/{post_guid}.mp3")
+            assert response.status_code == 202
+            payload = response.get_json()
+            assert payload["status"] == "started"
+            mock_mgr.return_value.start_post_processing.assert_called_once_with(
+                post_guid,
+                priority="download",
+                requested_by_user_id=None,
+                billing_user_id=None,
+            )
+    finally:
+        runtime_config.autoprocess_on_download = original_flag
+
+
+def test_audio_auto_whitelists_post(app, tmp_path):
+    """Inline audio request should whitelist the post automatically."""
+    app.testing = True
+    app.register_blueprint(post_bp)
+
+    with app.app_context():
+        feed = Feed(title="Test Feed", rss_url="https://example.com/feed.xml")
+        db.session.add(feed)
+        db.session.commit()
+
+        processed_audio = tmp_path / "processed.mp3"
+        processed_audio.write_bytes(b"processed audio")
+
+        post = Post(
+            feed_id=feed.id,
+            guid="stream-auto-whitelist-guid",
+            download_url="https://example.com/audio.mp3",
+            title="Auto Whitelist Stream Episode",
+            processed_audio_path=str(processed_audio),
+            whitelisted=False,
+        )
+        db.session.add(post)
+        db.session.commit()
+        post_guid = post.guid
+        post_id = post.id
+
+    client = app.test_client()
+
+    original_flag = runtime_config.autoprocess_on_download
+    runtime_config.autoprocess_on_download = True
+    try:
+        with mock.patch("app.routes.post_utils.writer_client") as mock_writer:
+            mock_writer.action.return_value = SimpleNamespace(success=True, data=None)
+            response = client.get(f"/post/{post_guid}.mp3")
+            assert response.status_code == 200
+            mock_writer.action.assert_called_once_with(
+                "whitelist_post",
+                {"post_id": post_id},
+                wait=True,
+            )
+    finally:
+        runtime_config.autoprocess_on_download = original_flag
+
+
 def test_download_triggers_processing_when_enabled(app):
     """Start processing when processed audio is missing and toggle is enabled."""
     app.testing = True

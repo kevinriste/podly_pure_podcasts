@@ -1123,6 +1123,10 @@ def api_post_status(p_guid: str) -> ResponseReturnValue:
 @post_bp.route("/api/posts/<string:p_guid>/audio", methods=["GET"])
 def api_get_post_audio(p_guid: str) -> ResponseReturnValue:
     """API endpoint to serve processed audio files with proper CORS headers."""
+    current_user = getattr(g, "current_user", None)
+    if current_user:
+        update_user_last_active(current_user.id)
+
     logger.info(f"API request for audio file with GUID: {p_guid}")
 
     post = Post.query.filter_by(guid=p_guid).first()
@@ -1132,31 +1136,19 @@ def api_get_post_audio(p_guid: str) -> ResponseReturnValue:
             jsonify({"error": "Post not found", "error_code": "NOT_FOUND"}), 404
         )
 
-    if not post.whitelisted:
-        logger.warning(f"Post: {post.title} is not whitelisted")
-        return flask.make_response(
-            jsonify({"error": "Post not whitelisted", "error_code": "NOT_WHITELISTED"}),
-            403,
-        )
+    whitelist_response = ensure_whitelisted_for_download(post, p_guid)
+    if whitelist_response:
+        return whitelist_response
 
     if not post.processed_audio_path or not Path(post.processed_audio_path).exists():
-        logger.warning(f"Processed audio not found for post: {post.id}")
-        return flask.make_response(
-            jsonify(
-                {
-                    "error": "Processed audio not available",
-                    "error_code": "AUDIO_NOT_READY",
-                    "message": "Post needs to be processed first",
-                }
-            ),
-            404,
-        )
+        return missing_processed_audio_response(post, p_guid)
 
     try:
         response = send_file(
             path_or_file=Path(post.processed_audio_path).resolve(),
             mimetype="audio/mpeg",
             as_attachment=False,
+            conditional=True,
         )
         response.headers["Accept-Ranges"] = "bytes"
         return response
@@ -1196,7 +1188,9 @@ def api_download_post(p_guid: str) -> flask.Response:
             mimetype="audio/mpeg",
             as_attachment=True,
             download_name=f"{post.title}.mp3",
+            conditional=True,
         )
+        response.headers["Accept-Ranges"] = "bytes"
     except Exception as e:  # noqa: BLE001
         logger.error(f"Error serving file for {p_guid}: {e}")
         return flask.make_response(("Error serving file", 500))
@@ -1242,8 +1236,8 @@ def api_download_original_post(p_guid: str) -> flask.Response:
 
 # Legacy endpoints for backward compatibility
 @post_bp.route("/post/<string:p_guid>.mp3", methods=["GET"])
-def download_post_legacy(p_guid: str) -> flask.Response:
-    return api_download_post(p_guid)
+def download_post_legacy(p_guid: str) -> ResponseReturnValue:
+    return api_get_post_audio(p_guid)
 
 
 @post_bp.route("/post/<string:p_guid>/original.mp3", methods=["GET"])

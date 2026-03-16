@@ -21,7 +21,11 @@ logger = logging.getLogger("global_logger")
 costs_bp = Blueprint("costs", __name__)
 
 from app.config_store import read_combined
-def _compute_cost_per_subscriber(duration_seconds: int, subscriber_count: int, cost_rate: float) -> float:
+
+
+def _compute_cost_per_subscriber(
+    duration_seconds: int, subscriber_count: int, cost_rate: float
+) -> float:
     """Cost attributed per subscriber for one episode."""
     if subscriber_count <= 0 or duration_seconds <= 0:
         return 0.0
@@ -114,10 +118,10 @@ def api_admin_costs() -> flask.Response:
         duration = post.duration or 0
         feed_id = post.feed_id
         subscriber_count = feed_subscriber_count.get(feed_id, 0)
-        cost_per_sub = _compute_cost_per_subscriber(duration, subscriber_count, cost_rate)
-        total_episode_cost = (
-            cost_rate * (duration / 3600.0) if duration > 0 else 0.0
+        cost_per_sub = _compute_cost_per_subscriber(
+            duration, subscriber_count, cost_rate
         )
+        total_episode_cost = cost_rate * (duration / 3600.0) if duration > 0 else 0.0
 
         feed_costs[feed_id] = feed_costs.get(feed_id, 0.0) + total_episode_cost
         feed_episode_counts[feed_id] = feed_episode_counts.get(feed_id, 0) + 1

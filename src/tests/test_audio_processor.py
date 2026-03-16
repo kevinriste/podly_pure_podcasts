@@ -177,7 +177,7 @@ def test_process_audio(
             patch.object(processor, "get_ad_segments", return_value=[(5.0, 10.0)]),
             patch(
                 "podcast_processor.audio_processor.get_audio_duration_ms",
-                return_value=30000,
+                side_effect=[30000, 24000],
             ),
             patch(
                 "podcast_processor.audio_processor.clip_segments_with_fade"
@@ -188,7 +188,7 @@ def test_process_audio(
 
             refreshed = db.session.get(Post, post.id)
             assert refreshed is not None
-            assert refreshed.duration == 30.0  # 30000ms / 1000 = 30s
+            assert refreshed.duration == 24.0  # processed output duration
             assert refreshed.processed_audio_path == output_path
             # The default test config extends a final ad segment to the end when
             # it is within the minimum separation threshold of the episode end.
