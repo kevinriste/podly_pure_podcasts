@@ -25,6 +25,7 @@ from podcast_processor.chapter_fallback import (
     generate_chapters_from_transcript,
     generate_topic_chapters_from_transcript_with_llm,
     refine_generated_chapter_titles_with_llm,
+    refine_transcript_chapters_with_word_refiner,
     resolve_llm_path_chapters,
 )
 from podcast_processor.chapter_filter import parse_filter_strings
@@ -640,11 +641,17 @@ class PodcastProcessor:
             logger_override=self.logger,
         )
         if topic_chapters:
+            refined_topic_chapters = refine_transcript_chapters_with_word_refiner(
+                topic_chapters,
+                transcript_segments,
+                config=self.config,
+                logger_override=self.logger,
+            )
             self.logger.info(
                 "Using %d topic-based transcript chapters from LLM",
-                len(topic_chapters),
+                len(refined_topic_chapters),
             )
-            return topic_chapters
+            return refined_topic_chapters
 
         self.logger.warning(
             "Topic-based transcript chapter generation returned no usable plan; "
