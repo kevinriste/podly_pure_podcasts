@@ -181,6 +181,7 @@ class CommandExecutor:
                             "[WRITER] Rolling back TRANSACTION command id=%s", cmd.id
                         )
                         db.session.rollback()
+                    db.session.expunge_all()
                     return result
 
                 # Single operation
@@ -199,6 +200,7 @@ class CommandExecutor:
                 else:
                     logger.info("[WRITER] Rolling back single command id=%s", cmd.id)
                     db.session.rollback()
+                db.session.expunge_all()
                 return result
 
             except Exception as e:
@@ -209,6 +211,7 @@ class CommandExecutor:
                     exc_info=True,
                 )
                 db.session.rollback()
+                db.session.expunge_all()
                 return WriteResult(cmd.id, False, error=str(e))
 
     def _execute_single_command(self, cmd: WriteCommand) -> WriteResult:
