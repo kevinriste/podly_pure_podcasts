@@ -317,13 +317,15 @@ class AudioProcessor:
             return [*ad_segments[:-1], (ad_segments[-1][0], audio_duration_seconds)]
         return ad_segments
 
-    def process_audio(self, post: Post, output_path: str) -> None:
+    def process_audio(self, post: Post, output_path: str) -> list[tuple[int, int]]:
         """
         Process the podcast audio by removing ad segments.
 
         Args:
             post: The Post object containing the podcast to process
             output_path: Path where the processed audio file should be saved
+        Returns:
+            The merged ad segments that were removed, as millisecond windows.
         """
         ad_segments = self.get_ad_segments(post)
 
@@ -373,3 +375,4 @@ class AudioProcessor:
         self.logger.info(
             f"Audio processing complete for post {post.id}, saved to {output_path}"
         )
+        return merged_ad_segments

@@ -1,4 +1,6 @@
 import datetime
+import html
+import json
 import logging
 import uuid
 from collections.abc import Iterable
@@ -17,6 +19,80 @@ from app.writer.client import writer_client
 from podcast_processor.podcast_downloader import find_audio_link
 
 logger = logging.getLogger("global_logger")
+
+
+def _format_chapter_timestamp(seconds: float) -> str:
+    total_seconds = max(0, int(seconds))
+    hours, rem = divmod(total_seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def _chapters_for_description(post: Post) -> list[tuple[float, str]]:
+    raw_chapter_data = getattr(post, "chapter_data", None)
+    if not raw_chapter_data:
+        return []
+
+    try:
+        chapter_data = (
+            json.loads(raw_chapter_data)
+            if isinstance(raw_chapter_data, str)
+            else raw_chapter_data
+        )
+    except Exception:  # noqa: BLE001
+        return []
+
+    if not isinstance(chapter_data, dict):
+        return []
+
+    chapters = chapter_data.get("chapters_for_output") or chapter_data.get(
+        "chapters_kept"
+    )
+    if not isinstance(chapters, list):
+        return []
+
+    out: list[tuple[float, str]] = []
+    for chapter in chapters:
+        if not isinstance(chapter, dict):
+            continue
+        title = str(chapter.get("title") or "").strip()
+        if not title:
+            continue
+        try:
+            start_time = float(chapter.get("start_time", 0.0))
+        except Exception:  # noqa: BLE001
+            continue
+        out.append((max(0.0, start_time), title))
+
+    out.sort(key=lambda item: item[0])
+    return out
+
+
+def _render_podly_chapters_html(post: Post) -> str:
+    chapters = _chapters_for_description(post)
+    if not chapters:
+        return ""
+
+    items = "".join(
+        (f"<li>{_format_chapter_timestamp(start_time)} {html.escape(title)}</li>")
+        for start_time, title in chapters
+    )
+    return f"<p><strong>Podly Chapters</strong></p><ul>{items}</ul>"
+
+
+def build_post_feed_description_html(post: Post) -> str:
+    """Build the description shown in Podly-generated RSS items for a post."""
+    description_parts: list[str] = []
+    if post.description:
+        description_parts.append(post.description)
+
+    chapters_html = _render_podly_chapters_html(post)
+    if chapters_html:
+        description_parts.append(chapters_html)
+
+    return "\n".join(description_parts)
 
 
 def is_feed_active_for_user(feed_id: int, user: User) -> bool:
@@ -307,11 +383,7 @@ def feed_item(post: Post, prepend_feed_title: bool = False) -> PyRSS2Gen.RSSItem
 
     # Generate URLs that will be proxied by the frontend to the backend
     audio_url = _append_feed_token_params(f"{base_url}/api/posts/{post.guid}/download")
-    post_details_url = _append_feed_token_params(f"{base_url}/api/posts/{post.guid}")
-
-    description = (
-        f'{post.description}\n<p><a href="{post_details_url}">Podly Post Page</a></p>'
-    )
+    description = build_post_feed_description_html(post)
 
     title = post.title
     if prepend_feed_title and post.feed:

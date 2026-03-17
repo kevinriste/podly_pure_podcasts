@@ -151,7 +151,9 @@ def clear_post_processing_data(post: Post) -> None:
         )
 
         logger.info(
-            f"Successfully cleared all processing data for post: {post.title} (ID: {post.id})"
+            "Successfully cleared all processing data for post: %s (ID: %s)",
+            post.title,
+            post.id,
         )
 
     except Exception as e:
@@ -160,6 +162,45 @@ def clear_post_processing_data(post: Post) -> None:
             exc_info=True,
         )
         raise PostException(f"Failed to clear processing data: {e!s}") from e
+
+
+def clear_post_processing_data_keep_transcript(post: Post) -> None:
+    """
+    Clear processing outputs while preserving transcript/model-call data needed to
+    resume at the post-transcription stage.
+    """
+    try:
+        logger.info(
+            "Starting transcript-preserving processing data clear for post: "
+            "%s (ID: %s)",
+            post.title,
+            post.id,
+        )
+
+        remove_associated_files(post)
+
+        writer_client.action(
+            "clear_post_processing_data_keep_transcript",
+            {"post_id": post.id},
+            wait=True,
+        )
+
+        logger.info(
+            "Successfully cleared processing outputs (kept transcript) for post: %s "
+            "(ID: %s)",
+            post.title,
+            post.id,
+        )
+    except Exception as e:
+        logger.error(
+            "Error clearing processing outputs (keeping transcript) for post %s: %s",
+            post.id,
+            e,
+            exc_info=True,
+        )
+        raise PostException(
+            f"Failed to clear processing data (keep transcript): {e!s}"
+        ) from e
 
 
 class PostException(Exception):

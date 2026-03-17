@@ -1,4 +1,5 @@
 import datetime
+import json
 import logging
 import uuid
 from types import SimpleNamespace
@@ -435,6 +436,38 @@ def test_feed_item(mock_post, app):
     assert enclosure.url == "http://podly.com:5001/api/posts/test-guid/download"
     assert enclosure.type == "audio/mpeg"
     assert enclosure.length == mock_post._audio_len_bytes
+
+
+def test_feed_item_appends_podly_chapters(mock_post, app):
+    mock_post.chapter_data = json.dumps(
+        {
+            "chapter_source": "transcript",
+            "chapters_for_output": [
+                {"title": "Episode intro", "start_time": 0.0, "end_time": 45.0},
+                {"title": "Gold mission", "start_time": 485.0, "end_time": 970.0},
+            ],
+        }
+    )
+
+    headers_dict = {"Host": "podly.com:5001"}
+    mock_headers = mock.MagicMock()
+    mock_headers.get.side_effect = headers_dict.get
+    mock_environ = mock.MagicMock()
+    mock_environ.get.return_value = None
+    mock_request = mock.MagicMock()
+    mock_request.headers = mock_headers
+    mock_request.environ = mock_environ
+    mock_request.is_secure = False
+
+    with app.app_context(), mock.patch("app.feeds.request", mock_request):
+        result = feed_item(mock_post)
+
+    description = result.description
+    assert isinstance(description, str)
+    assert "Podly Chapters" in description
+    assert "<li>00:00 Episode intro</li>" in description
+    assert "<li>08:05 Gold mission</li>" in description
+    assert "Podly Post JSON" not in description
 
 
 def test_feed_item_with_reverse_proxy(mock_post, app):

@@ -187,11 +187,19 @@ export const feedsApi = {
     return response.data;
   },
 
+  reprocessPostKeepTranscript: async (
+    guid: string
+  ): Promise<{ status: string; job_id?: string; message: string; download_url?: string }> => {
+    const response = await api.post(`/api/posts/${guid}/reprocess/keep-transcript`);
+    return response.data;
+  },
+
   getPostStatus: async (guid: string): Promise<{
     status: string;
     step: number;
     step_name: string;
     total_steps: number;
+    progress_percentage?: number;
     message: string;
     download_url?: string;
     error?: string;
@@ -266,7 +274,7 @@ export const feedsApi = {
       whitelisted: boolean;
       has_processed_audio: boolean;
     };
-    ad_detection_strategy: 'llm' | 'chapter';
+    ad_detection_strategy: 'llm' | 'chapter' | 'chapter_insert';
     processing_stats: {
       total_segments: number;
       total_model_calls: number;
@@ -405,6 +413,7 @@ export const feedsApi = {
     step: number;
     step_name: string;
     total_steps: number;
+    progress_percentage?: number;
     message: string;
     download_url?: string;
     error?: string;

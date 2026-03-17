@@ -184,10 +184,13 @@ def test_process_audio(
             ) as mock_clip,
         ):
             # Call the method
-            processor.process_audio(post, output_path)
+            removed_segments = processor.process_audio(post, output_path)
 
             refreshed = db.session.get(Post, post.id)
             assert refreshed is not None
             assert refreshed.duration == 30.0  # 30000ms / 1000 = 30s
             assert refreshed.processed_audio_path == output_path
+            # The default test config extends a final ad segment to the end when
+            # it is within the minimum separation threshold of the episode end.
+            assert removed_segments == [(5000, 30000)]
             mock_clip.assert_called_once()

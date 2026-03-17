@@ -105,6 +105,13 @@ class Config(BaseModel):
         default=DEFAULTS.ENABLE_WORD_LEVEL_BOUNDARY_REFINDER,
         description="Enable word-level (heuristic-timed) ad boundary refinement",
     )
+    enable_llm_chapter_fallback_tagging: bool = Field(
+        default=DEFAULTS.ENABLE_LLM_CHAPTER_FALLBACK_TAGGING,
+        description=(
+            "When enabled, LLM processing will preserve embedded chapters or "
+            "generate fallback chapter tags from description/transcript."
+        ),
+    )
     developer_mode: bool = Field(
         default=False,
         description="Enable developer mode features like test feeds",

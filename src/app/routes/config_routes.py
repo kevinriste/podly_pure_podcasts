@@ -124,6 +124,21 @@ def _hydrate_llm_config(data: dict[str, Any]) -> None:
         "llm_max_input_tokens_per_minute",
         llm.get("llm_max_input_tokens_per_minute"),
     )
+    llm["enable_boundary_refinement"] = getattr(
+        runtime_config,
+        "enable_boundary_refinement",
+        llm.get("enable_boundary_refinement"),
+    )
+    llm["enable_word_level_boundary_refinder"] = getattr(
+        runtime_config,
+        "enable_word_level_boundary_refinder",
+        llm.get("enable_word_level_boundary_refinder"),
+    )
+    llm["enable_llm_chapter_fallback_tagging"] = getattr(
+        runtime_config,
+        "enable_llm_chapter_fallback_tagging",
+        llm.get("enable_llm_chapter_fallback_tagging"),
+    )
 
 
 def _hydrate_whisper_config(data: dict[str, Any]) -> None:

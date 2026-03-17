@@ -9,14 +9,16 @@ export interface Feed {
   member_count?: number;
   is_member?: boolean;
   is_active_subscription?: boolean;
-  ad_detection_strategy?: 'llm' | 'chapter';
+  ad_detection_strategy?: 'llm' | 'chapter' | 'chapter_insert';
   chapter_filter_strings?: string | null;
+  enable_llm_chapter_fallback_tagging?: boolean | null;
   auto_whitelist_new_episodes_override?: boolean | null;
 }
 
 export interface FeedSettingsUpdate {
-  ad_detection_strategy?: 'llm' | 'chapter';
+  ad_detection_strategy?: 'llm' | 'chapter' | 'chapter_insert';
   chapter_filter_strings?: string | null;
+  enable_llm_chapter_fallback_tagging?: boolean | null;
   auto_whitelist_new_episodes_override?: boolean | null;
 }
 
@@ -25,6 +27,7 @@ export interface Episode {
   guid: string;
   title: string;
   description: string;
+  podly_description_html?: string | null;
   release_date: string | null;
   duration: number | null;
   whitelisted: boolean;
@@ -114,6 +117,7 @@ export interface LLMConfig {
   llm_max_input_tokens_per_minute?: number | null;
   enable_boundary_refinement: boolean;
   enable_word_level_boundary_refinder?: boolean;
+  enable_llm_chapter_fallback_tagging?: boolean;
 }
 
 export type WhisperConfig =

@@ -21,6 +21,36 @@ interface FeedDetailProps {
 }
 
 type SortOption = 'newest' | 'oldest' | 'title';
+type EpisodeDescriptionView = 'source' | 'podly';
+
+const EPISODE_DESCRIPTION_VIEW_STORAGE_KEY_PREFIX = 'podly:episode-description-view:feed:';
+
+function getEpisodeDescriptionViewStorageKey(feedId: number): string {
+  return `${EPISODE_DESCRIPTION_VIEW_STORAGE_KEY_PREFIX}${feedId}`;
+}
+
+function loadEpisodeDescriptionView(feedId: number): EpisodeDescriptionView {
+  if (typeof window === 'undefined') {
+    return 'source';
+  }
+  const rawValue = window.localStorage.getItem(
+    getEpisodeDescriptionViewStorageKey(feedId)
+  );
+  return rawValue === 'podly' ? 'podly' : 'source';
+}
+
+function persistEpisodeDescriptionView(
+  feedId: number,
+  view: EpisodeDescriptionView
+): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  window.localStorage.setItem(
+    getEpisodeDescriptionViewStorageKey(feedId),
+    view
+  );
+}
 
 interface ProcessingEstimate {
   post_guid: string;
@@ -49,6 +79,12 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
   const [estimateError, setEstimateError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [episodeDescriptionView, setEpisodeDescriptionView] =
+    useState<EpisodeDescriptionView>(() => loadEpisodeDescriptionView(feed.id));
+  const handleEpisodeDescriptionViewChange = (view: EpisodeDescriptionView) => {
+    setEpisodeDescriptionView(view);
+    persistEpisodeDescriptionView(currentFeed.id, view);
+  };
   const [showSubscribersModal, setShowSubscribersModal] = useState(false);
 
   const isAdmin = !requireAuth || user?.role === 'admin';
@@ -357,8 +393,12 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
   }, [feed]);
 
   useEffect(() => {
+    setEpisodeDescriptionView(loadEpisodeDescriptionView(currentFeed.id));
+  }, [currentFeed.id]);
+
+  useEffect(() => {
     setExpandedDescriptions(new Set());
-  }, [feed.id]);
+  }, [feed.id, episodeDescriptionView]);
 
   useEffect(() => {
     setPage(1);
@@ -1000,10 +1040,18 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
                     </div>
 
                     {/* Episode Description */}
-                    {episode.description && (
+                    {(
+                      episodeDescriptionView === 'podly'
+                        ? (episode.podly_description_html || episode.description)
+                        : episode.description
+                    ) && (
                       <div className="text-left">
                         {(() => {
-                          const descriptionTokens = tokenizeDescription(episode.description);
+                          const descriptionHtml =
+                            episodeDescriptionView === 'podly'
+                              ? (episode.podly_description_html || episode.description)
+                              : episode.description;
+                          const descriptionTokens = tokenizeDescription(descriptionHtml);
                           const descriptionLength = descriptionTokens.reduce((total, token) => {
                             if (token.type === 'text') {
                               return total + token.value.length;
@@ -1131,6 +1179,7 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
                           <ProcessingStatsButton
                             episodeGuid={episode.guid}
                             hasProcessedAudio={episode.has_processed_audio}
+                            adDetectionStrategy={currentFeed.ad_detection_strategy}
                           />
                         </div>
 
@@ -1245,6 +1294,11 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
         isOpen={showSettingsModal}
         onClose={() => setShowSettingsModal(false)}
         autoWhitelistGlobalDefault={appAutoWhitelistDefault}
+        llmChapterFallbackGlobalDefault={
+          configResponse?.config?.llm?.enable_llm_chapter_fallback_tagging
+        }
+        episodeDescriptionView={episodeDescriptionView}
+        onEpisodeDescriptionViewChange={handleEpisodeDescriptionViewChange}
       />
 
       {showSubscribersModal && (

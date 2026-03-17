@@ -119,6 +119,14 @@ class TranscriptionManager:
             )
         return None
 
+    def get_reusable_transcription(self, post: Post) -> list[TranscriptSegment] | None:
+        """Return existing transcript segments only when they are reusable as-is.
+
+        Reuse requires a successful Whisper model call for the active transcriber
+        model and a matching set of persisted transcript segments.
+        """
+        return self._check_existing_transcription(post)
+
     def _get_or_create_whisper_model_call(self, post: Post) -> ModelCall:
         """Create or reuse the placeholder ModelCall row for a Whisper run via writer."""
         result = writer_client.action(
@@ -157,7 +165,7 @@ class TranscriptionManager:
             f"Starting transcription process for post {post.id} using {self.transcriber.model_name}"
         )
 
-        existing_segments = self._check_existing_transcription(post)
+        existing_segments = self.get_reusable_transcription(post)
         if existing_segments is not None:
             return existing_segments
 

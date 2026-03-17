@@ -113,6 +113,21 @@ class TestConfigurationErrorHandling:
         )
         assert config.llm_enable_token_rate_limiting is False
 
+        config = Config(
+            llm_api_key="test-key",
+            enable_llm_chapter_fallback_tagging=True,
+            output=OutputConfig(
+                fade_ms=3000,
+                min_ad_segement_separation_seconds=60,
+                min_ad_segment_length_seconds=14,
+                min_confidence=0.8,
+            ),
+            processing=ProcessingConfig(
+                num_segments_to_input_to_prompt=30,
+            ),
+        )
+        assert config.enable_llm_chapter_fallback_tagging is True
+
 
 class TestEnvKeyValidation:
     """Tests for environment-based API key validation."""

@@ -72,6 +72,7 @@ export default function DownloadButton({
         step: 0,
         step_name: 'Starting',
         total_steps: 4,
+        progress_percentage: 0,
         message: 'Requesting processing...'
       });
 

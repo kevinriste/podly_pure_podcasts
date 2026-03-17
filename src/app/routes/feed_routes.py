@@ -56,6 +56,113 @@ logger = logging.getLogger("global_logger")
 
 
 feed_bp = Blueprint("feed", __name__)
+_MISSING = object()
+
+
+def _parse_optional_feed_bool(
+    payload: dict[str, Any],
+    field_name: str,
+) -> tuple[object, ResponseReturnValue | None]:
+    if field_name not in payload:
+        return _MISSING, None
+
+    value = payload[field_name]
+    if value is not None and not isinstance(value, bool):
+        return (
+            _MISSING,
+            (
+                jsonify({"error": f"{field_name} must be a boolean or null."}),
+                400,
+            ),
+        )
+    return value, None
+
+
+def _build_feed_settings_updates(
+    feed: Feed,
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any] | None, ResponseReturnValue | None]:
+    updates: dict[str, Any] = {}
+
+    if "ad_detection_strategy" in payload:
+        strategy = payload["ad_detection_strategy"]
+        if strategy not in ("llm", "chapter", "chapter_insert"):
+            return (
+                None,
+                (
+                    jsonify(
+                        {
+                            "error": (
+                                "Invalid ad_detection_strategy. Must be "
+                                "'llm', 'chapter', or 'chapter_insert'"
+                            )
+                        }
+                    ),
+                    400,
+                ),
+            )
+        updates["ad_detection_strategy"] = strategy
+
+    if "chapter_filter_strings" in payload:
+        filter_strings = payload["chapter_filter_strings"]
+        if filter_strings is not None and not isinstance(filter_strings, str):
+            return (
+                None,
+                (
+                    jsonify(
+                        {"error": "chapter_filter_strings must be a string or null"}
+                    ),
+                    400,
+                ),
+            )
+        updates["chapter_filter_strings"] = filter_strings
+
+    chapter_fallback_enabled, error_response = _parse_optional_feed_bool(
+        payload,
+        "enable_llm_chapter_fallback_tagging",
+    )
+    if error_response is not None:
+        return None, error_response
+    if chapter_fallback_enabled is not _MISSING:
+        updates["enable_llm_chapter_fallback_tagging"] = chapter_fallback_enabled
+
+    auto_whitelist_override, error_response = _parse_optional_feed_bool(
+        payload,
+        "auto_whitelist_new_episodes_override",
+    )
+    if error_response is not None:
+        return None, error_response
+    if auto_whitelist_override is not _MISSING:
+        updates["auto_whitelist_new_episodes_override"] = auto_whitelist_override
+
+    resolved_strategy = updates.get(
+        "ad_detection_strategy",
+        getattr(feed, "ad_detection_strategy", "llm"),
+    )
+    if (
+        resolved_strategy == "chapter_insert"
+        and chapter_fallback_enabled is not _MISSING
+        and chapter_fallback_enabled is False
+    ):
+        return (
+            None,
+            (
+                jsonify(
+                    {
+                        "error": (
+                            "enable_llm_chapter_fallback_tagging cannot be false "
+                            "when ad_detection_strategy is 'chapter_insert'"
+                        )
+                    }
+                ),
+                400,
+            ),
+        )
+
+    if not updates:
+        return None, (jsonify({"error": "No settings provided."}), 400)
+
+    return updates, None
 
 
 @feed_bp.route("/feed", methods=["POST"])
@@ -344,32 +451,25 @@ def update_feed_settings_endpoint(feed_id: int) -> ResponseReturnValue:
     if error_response is not None:
         return error_response
 
+    feed = Feed.query.get_or_404(feed_id)
     payload = request.get_json(silent=True) or {}
-    if "auto_whitelist_new_episodes_override" not in payload:
+    updates, error_response = _build_feed_settings_updates(feed, payload)
+    if error_response is not None:
+        return error_response
+    if updates is None:
         return jsonify({"error": "No settings provided."}), 400
 
-    override = payload.get("auto_whitelist_new_episodes_override")
-    if override is not None and not isinstance(override, bool):
-        return (
-            jsonify(
-                {
-                    "error": "auto_whitelist_new_episodes_override must be a boolean or null."
-                }
-            ),
-            400,
-        )
-
-    result = writer_client.action(
-        "update_feed_settings",
-        {"feed_id": feed_id, "auto_whitelist_new_episodes_override": override},
-        wait=True,
-    )
+    result = writer_client.update("Feed", feed_id, updates, wait=True)
     if result is None or not result.success:
         return (
             jsonify({"error": getattr(result, "error", "Failed to update feed")}),
             500,
         )
 
+    # The writer may commit in a separate process/session; expire local state so the
+    # response reflects the newly persisted values instead of any cached identity-map
+    # object loaded earlier in this request.
+    db.session.expire_all()
     feed = db.session.get(Feed, feed_id)
     if feed is None:
         return jsonify({"error": "Feed not found"}), 404
@@ -747,67 +847,6 @@ def _require_user_or_error(
     return user, None
 
 
-@feed_bp.route("/api/feeds/<int:feed_id>/settings", methods=["PATCH"])
-def update_feed_settings(feed_id: int) -> ResponseReturnValue:
-    """Update feed settings (ad detection strategy, chapter filter strings)."""
-    user, error = _require_user_or_error(allow_missing_auth=True)
-    if error:
-        return error
-
-    # Only admins can change feed settings
-    if user is not None and user.role != "admin":
-        return jsonify({"error": "Only administrators can modify feed settings."}), 403
-
-    feed = Feed.query.get_or_404(feed_id)
-
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "No data provided"}), 400
-
-    updates = {}
-
-    # Validate and extract ad_detection_strategy
-    if "ad_detection_strategy" in data:
-        strategy = data["ad_detection_strategy"]
-        if strategy not in ("llm", "chapter"):
-            return (
-                jsonify(
-                    {
-                        "error": "Invalid ad_detection_strategy. Must be 'llm' or 'chapter'"
-                    }
-                ),
-                400,
-            )
-        updates["ad_detection_strategy"] = strategy
-
-    # Validate and extract chapter_filter_strings
-    if "chapter_filter_strings" in data:
-        filter_strings = data["chapter_filter_strings"]
-        if filter_strings is not None and not isinstance(filter_strings, str):
-            return (
-                jsonify({"error": "chapter_filter_strings must be a string or null"}),
-                400,
-            )
-        updates["chapter_filter_strings"] = filter_strings
-
-    if not updates:
-        return jsonify({"error": "No valid fields to update"}), 400
-
-    result = writer_client.update("Feed", feed.id, updates, wait=True)
-    if not result or not result.success:
-        return (
-            jsonify(
-                {"error": getattr(result, "error", "Failed to update feed settings")}
-            ),
-            500,
-        )
-
-    # Refresh and return updated feed
-    refreshed = Feed.query.get(feed_id)
-    current_user = getattr(g, "current_user", None)
-    return jsonify(_serialize_feed(refreshed or feed, current_user=current_user)), 200
-
-
 def _serialize_feed(
     feed: Feed,
     *,
@@ -848,5 +887,8 @@ def _serialize_feed(
         "is_active_subscription": is_active_subscription,
         "ad_detection_strategy": getattr(feed, "ad_detection_strategy", "llm"),
         "chapter_filter_strings": getattr(feed, "chapter_filter_strings", None),
+        "enable_llm_chapter_fallback_tagging": getattr(
+            feed, "enable_llm_chapter_fallback_tagging", None
+        ),
     }
     return feed_payload

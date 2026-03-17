@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import shutil
@@ -20,8 +21,17 @@ from podcast_processor.chapter_ad_detector import (
     ChapterAdDetector,
     ChapterDetectionError,
 )
+from podcast_processor.chapter_fallback import (
+    generate_chapters_from_transcript,
+    generate_topic_chapters_from_transcript_with_llm,
+    refine_generated_chapter_titles_with_llm,
+    resolve_llm_path_chapters,
+)
 from podcast_processor.chapter_filter import parse_filter_strings
-from podcast_processor.chapter_writer import write_adjusted_chapters
+from podcast_processor.chapter_writer import (
+    recalculate_chapter_times,
+    write_adjusted_chapters,
+)
 from podcast_processor.podcast_downloader import PodcastDownloader, sanitize_title
 from podcast_processor.processing_status_manager import ProcessingStatusManager
 from podcast_processor.prompt import (
@@ -166,6 +176,12 @@ class PodcastProcessor:
         cached_chapter_filter_strings = getattr(
             post.feed, "chapter_filter_strings", None
         )
+        cached_enable_llm_chapter_fallback_tagging = (
+            self._resolve_llm_chapter_fallback_tagging_enabled(
+                getattr(post, "feed", None),
+                ad_detection_strategy=cached_ad_detection_strategy,
+            )
+        )
 
         try:
             self.logger.debug(
@@ -245,6 +261,7 @@ class PodcastProcessor:
                     cancel_callback,
                     cached_ad_detection_strategy,
                     cached_chapter_filter_strings,
+                    cached_enable_llm_chapter_fallback_tagging,
                 )
 
                 self.logger.info(f"Processing podcast: {post} complete")
@@ -347,6 +364,7 @@ class PodcastProcessor:
         cancel_callback: Callable[[], bool] | None = None,
         ad_detection_strategy: str = "llm",
         chapter_filter_strings: str | None = None,
+        enable_llm_chapter_fallback_tagging: bool | None = None,
     ) -> None:
         """
         Perform the main processing steps based on the ad detection strategy.
@@ -356,17 +374,44 @@ class PodcastProcessor:
             job: The ProcessingJob for tracking
             processed_audio_path: Path where the processed audio will be saved
             cancel_callback: Optional callback to check for cancellation
-            ad_detection_strategy: "llm" or "chapter"
+            ad_detection_strategy: "llm", "chapter", or "chapter_insert"
             chapter_filter_strings: Comma-separated filter strings for chapter strategy
         """
         if ad_detection_strategy == "chapter":
             self._perform_chapter_based_processing(
                 post, job, processed_audio_path, cancel_callback, chapter_filter_strings
             )
-        else:
-            self._perform_llm_based_processing(
+        elif ad_detection_strategy == "chapter_insert":
+            self._perform_chapter_insertion_only_processing(
                 post, job, processed_audio_path, cancel_callback
             )
+        else:
+            self._perform_llm_based_processing(
+                post,
+                job,
+                processed_audio_path,
+                cancel_callback,
+                enable_llm_chapter_fallback_tagging,
+            )
+
+    def _resolve_llm_chapter_fallback_tagging_enabled(
+        self,
+        feed: Any | None,
+        *,
+        ad_detection_strategy: str,
+    ) -> bool:
+        if ad_detection_strategy == "chapter_insert":
+            return True
+
+        feed_override = (
+            getattr(feed, "enable_llm_chapter_fallback_tagging", None)
+            if feed is not None
+            else None
+        )
+        if feed_override is not None:
+            return bool(feed_override)
+
+        return bool(getattr(self.config, "enable_llm_chapter_fallback_tagging", False))
 
     def _perform_llm_based_processing(
         self,
@@ -374,6 +419,7 @@ class PodcastProcessor:
         job: ProcessingJob,
         processed_audio_path: str,
         cancel_callback: Callable[[], bool] | None = None,
+        enable_llm_chapter_fallback_tagging: bool | None = None,
     ) -> None:
         """
         Perform LLM-based ad detection: transcription, classification, and audio processing.
@@ -384,6 +430,10 @@ class PodcastProcessor:
         )
         transcript_segments = self.transcription_manager.transcribe(post)
         self._raise_if_cancelled(job, 2, cancel_callback)
+        unprocessed_audio_path = (
+            str(post.unprocessed_audio_path) if post.unprocessed_audio_path else None
+        )
+        post_description = post.description
 
         # Step 3: Classify ad segments
         self._classify_ad_segments(post, job, transcript_segments)
@@ -393,9 +443,290 @@ class PodcastProcessor:
         self.status_manager.update_job_status(
             job, "running", 4, "Processing audio", 90.0
         )
-        self.audio_processor.process_audio(post, processed_audio_path)
+        removed_segments_ms = self.audio_processor.process_audio(
+            post, processed_audio_path
+        )
+        removed_segments_sec = [
+            (start_ms / 1000.0, end_ms / 1000.0)
+            for start_ms, end_ms in removed_segments_ms
+        ]
 
-        self._finalize_processing(post, job, processed_audio_path)
+        chapters_for_output = []
+        chapter_source = "none"
+        chapter_fallback_enabled = (
+            bool(enable_llm_chapter_fallback_tagging)
+            if enable_llm_chapter_fallback_tagging is not None
+            else bool(
+                getattr(self.config, "enable_llm_chapter_fallback_tagging", False)
+            )
+        )
+        if chapter_fallback_enabled:
+            chapters_for_output, chapter_source = resolve_llm_path_chapters(
+                unprocessed_audio_path=unprocessed_audio_path,
+                description=post_description,
+                transcript_segments=transcript_segments,
+                logger_override=self.logger,
+            )
+            if chapter_source == "transcript" and chapters_for_output:
+                transcript_segments_for_chapters = (
+                    self._filter_transcript_segments_for_chapters(
+                        transcript_segments, removed_segments_ms
+                    )
+                )
+                if not transcript_segments_for_chapters:
+                    self.logger.warning(
+                        "All transcript segments overlap removed ad windows for post "
+                        "%s; retaining original transcript-derived chapters",
+                        post.id,
+                    )
+                    transcript_segments_for_chapters = transcript_segments
+
+                chapters_for_output = self._refine_transcript_sourced_chapters(
+                    chapters_for_output=chapters_for_output,
+                    transcript_segments=transcript_segments_for_chapters,
+                    post_id=post.id,
+                )
+            if chapters_for_output:
+                self.logger.info(
+                    "LLM path chapter fallback resolved %d chapters via %s",
+                    len(chapters_for_output),
+                    chapter_source,
+                )
+
+        chapter_data_json: str | None = None
+        if chapters_for_output:
+            write_adjusted_chapters(
+                audio_path=processed_audio_path,
+                chapters_to_keep=chapters_for_output,
+                removed_segments=removed_segments_sec,
+            )
+            adjusted_chapters = recalculate_chapter_times(
+                chapters_for_output, removed_segments_sec
+            )
+            chapter_data_json = json.dumps(
+                {
+                    "chapter_source": chapter_source,
+                    "chapters_for_output": [
+                        {
+                            "title": ch.title,
+                            "start_time": round(ch.start_time_ms / 1000.0, 1),
+                            "end_time": round(ch.end_time_ms / 1000.0, 1),
+                        }
+                        for ch in adjusted_chapters
+                    ],
+                }
+            )
+
+        self._finalize_processing(
+            post,
+            job,
+            processed_audio_path,
+            chapter_data=chapter_data_json,
+        )
+
+    def _perform_chapter_insertion_only_processing(
+        self,
+        post: Post,
+        job: ProcessingJob,
+        processed_audio_path: str,
+        cancel_callback: Callable[[], bool] | None = None,
+    ) -> None:
+        """
+        Resolve and write chapters without ad detection or ad removal.
+        """
+        unprocessed_audio_path = (
+            str(post.unprocessed_audio_path) if post.unprocessed_audio_path else None
+        )
+        if not unprocessed_audio_path:
+            raise ProcessorException(
+                "No unprocessed audio available for chapter insert"
+            )
+
+        post_description = post.description
+        transcript_segments: list[Any] = []
+
+        # First attempt chapter resolution without transcription
+        self.status_manager.update_job_status(
+            job, "running", 2, "Resolving chapters", 50.0
+        )
+        chapters_for_output, chapter_source = resolve_llm_path_chapters(
+            unprocessed_audio_path=unprocessed_audio_path,
+            description=post_description,
+            transcript_segments=transcript_segments,
+            logger_override=self.logger,
+        )
+        self._raise_if_cancelled(job, 2, cancel_callback)
+
+        # Only transcribe if we still need transcript-based fallback chapters
+        if chapter_source == "none":
+            self.status_manager.update_job_status(
+                job, "running", 3, "Transcribing audio for chapter generation", 75.0
+            )
+            transcript_segments = self.transcription_manager.transcribe(post)
+            self._raise_if_cancelled(job, 3, cancel_callback)
+
+            chapters_for_output, chapter_source = resolve_llm_path_chapters(
+                unprocessed_audio_path=unprocessed_audio_path,
+                description=post_description,
+                transcript_segments=transcript_segments,
+                logger_override=self.logger,
+            )
+        else:
+            self.status_manager.update_job_status(
+                job, "running", 3, "Chapters resolved", 75.0
+            )
+            self._raise_if_cancelled(job, 3, cancel_callback)
+
+        if (
+            chapter_source == "transcript"
+            and chapters_for_output
+            and transcript_segments
+        ):
+            chapters_for_output = self._refine_transcript_sourced_chapters(
+                chapters_for_output=chapters_for_output,
+                transcript_segments=transcript_segments,
+                post_id=post.id,
+            )
+
+        self.status_manager.update_job_status(
+            job, "running", 4, "Copying audio and writing chapters", 90.0
+        )
+        shutil.copyfile(unprocessed_audio_path, processed_audio_path)
+
+        chapter_data_json: str | None = None
+        if chapters_for_output:
+            write_adjusted_chapters(
+                audio_path=processed_audio_path,
+                chapters_to_keep=chapters_for_output,
+                removed_segments=[],
+            )
+            chapter_data_json = json.dumps(
+                {
+                    "chapter_source": chapter_source,
+                    "chapters_for_output": [
+                        {
+                            "title": ch.title,
+                            "start_time": round(ch.start_time_ms / 1000.0, 1),
+                            "end_time": round(ch.end_time_ms / 1000.0, 1),
+                        }
+                        for ch in chapters_for_output
+                    ],
+                }
+            )
+
+        self._finalize_processing(
+            post,
+            job,
+            processed_audio_path,
+            chapter_data=chapter_data_json,
+        )
+
+    def _refine_transcript_sourced_chapters(
+        self,
+        *,
+        chapters_for_output: list[Any],
+        transcript_segments: list[Any],
+        post_id: int | None,
+    ) -> list[Any]:
+        if not chapters_for_output or not transcript_segments:
+            return chapters_for_output
+
+        topic_chapters = generate_topic_chapters_from_transcript_with_llm(
+            transcript_segments,
+            llm_model=getattr(self.config, "llm_model", None),
+            llm_api_key=getattr(self.config, "llm_api_key", None),
+            openai_base_url=getattr(self.config, "openai_base_url", None),
+            openai_timeout_sec=int(getattr(self.config, "openai_timeout", 300)),
+            logger_override=self.logger,
+        )
+        if topic_chapters:
+            self.logger.info(
+                "Using %d topic-based transcript chapters from LLM",
+                len(topic_chapters),
+            )
+            return topic_chapters
+
+        self.logger.warning(
+            "Topic-based transcript chapter generation returned no usable plan; "
+            "falling back to heuristic transcript chapter boundaries for post %s",
+            post_id,
+        )
+        fallback_chapters = generate_chapters_from_transcript(transcript_segments)
+        if fallback_chapters:
+            refined_fallback = refine_generated_chapter_titles_with_llm(
+                fallback_chapters,
+                transcript_segments,
+                llm_model=getattr(self.config, "llm_model", None),
+                llm_api_key=getattr(self.config, "llm_api_key", None),
+                openai_base_url=getattr(self.config, "openai_base_url", None),
+                openai_timeout_sec=int(getattr(self.config, "openai_timeout", 300)),
+                logger_override=self.logger,
+            )
+            self.logger.info(
+                "Heuristic transcript chapter boundaries retained after LLM "
+                "title refinement (count=%d)",
+                len(refined_fallback),
+            )
+            return refined_fallback
+
+        self.logger.warning(
+            "No usable transcript segments remained for chapter fallback on post %s; "
+            "retaining original transcript-derived chapters",
+            post_id,
+        )
+        return chapters_for_output
+
+    @staticmethod
+    def _segment_overlaps_removed_audio(
+        segment_start_ms: int,
+        segment_end_ms: int,
+        removed_segments_ms: list[tuple[int, int]],
+    ) -> bool:
+        for removed_start_ms, removed_end_ms in removed_segments_ms:
+            if removed_end_ms <= segment_start_ms:
+                continue
+            if removed_start_ms >= segment_end_ms:
+                return False
+            return True
+        return False
+
+    def _filter_transcript_segments_for_chapters(
+        self,
+        transcript_segments: list[Any],
+        removed_segments_ms: list[tuple[int, int]],
+    ) -> list[Any]:
+        if not transcript_segments or not removed_segments_ms:
+            return transcript_segments
+
+        sorted_removed_segments = sorted(
+            removed_segments_ms, key=lambda window: window[0]
+        )
+        kept_segments: list[Any] = []
+
+        for segment in transcript_segments:
+            segment_start_ms = int(float(getattr(segment, "start_time", 0.0)) * 1000)
+            segment_end_ms = int(float(getattr(segment, "end_time", 0.0)) * 1000)
+            segment_end_ms = max(segment_start_ms, segment_end_ms)
+
+            if self._segment_overlaps_removed_audio(
+                segment_start_ms,
+                segment_end_ms,
+                sorted_removed_segments,
+            ):
+                continue
+
+            kept_segments.append(segment)
+
+        removed_count = len(transcript_segments) - len(kept_segments)
+        if removed_count > 0:
+            self.logger.info(
+                "Excluded %d/%d transcript segments from transcript chapter "
+                "generation because they overlap removed ad windows",
+                removed_count,
+                len(transcript_segments),
+            )
+
+        return kept_segments
 
     def _perform_chapter_based_processing(
         self,
@@ -463,10 +794,19 @@ class PodcastProcessor:
         )
 
         # Build chapter data for stats
-        import json
-
+        adjusted_kept_chapters = recalculate_chapter_times(
+            chapters_to_keep, ad_segments
+        )
         chapter_data = {
             "filter_strings": filter_strings,
+            "chapters_for_output": [
+                {
+                    "title": ch.title,
+                    "start_time": round(ch.start_time_ms / 1000.0, 1),
+                    "end_time": round(ch.end_time_ms / 1000.0, 1),
+                }
+                for ch in adjusted_kept_chapters
+            ],
             "chapters_kept": [
                 {
                     "title": ch.title,
