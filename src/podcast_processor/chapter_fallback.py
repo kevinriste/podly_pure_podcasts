@@ -23,13 +23,23 @@ from shared.llm_utils import model_uses_max_completion_tokens
 
 logger = logging.getLogger("global_logger")
 
+# Enough room for compact JSON chapter plans without inviting verbose responses.
 TOPIC_CHAPTER_LLM_MAX_OUTPUT_TOKENS = 4096
+# Aim for about 60 transcript blocks so long episodes still fit in one prompt.
 TOPIC_CHAPTER_TARGET_BLOCK_COUNT = 60
+# One-minute blocks are the minimum useful granularity before prompt size balloons.
 TOPIC_CHAPTER_MIN_BLOCK_SECONDS = 60
+# Two-minute blocks are the largest window we allow before chapter starts get too coarse.
+TOPIC_CHAPTER_MAX_BLOCK_SECONDS = 2 * 60
+# Keep only a short snippet per block; ~220 chars is enough topic signal for the LLM.
 TOPIC_CHAPTER_MAX_CHARS_PER_BLOCK = 220
+# For long episodes, cap chapter counts to roughly one chapter every five minutes.
 TOPIC_CHAPTER_CAP_WINDOW_SECONDS = 5 * 60
+# Treat episodes under an hour as "short" when applying the hard chapter-count cap.
 TOPIC_CHAPTER_SHORT_EPISODE_SECONDS = 60 * 60
+# Short episodes top out at 10 chapters to avoid noisy over-segmentation.
 TOPIC_CHAPTER_SHORT_EPISODE_CAP = 10
+# Retry prompts keep one overlapping block so truncated responses retain local context.
 TOPIC_CHAPTER_RETRY_OVERLAP_BLOCKS = 1
 
 
@@ -102,7 +112,8 @@ def refine_description_chapters_with_word_refiner(
     if not all_segments:
         return list(chapters)
 
-    refiner = WordBoundaryRefiner(config=config, logger=log)
+    refiner_logger = log if isinstance(log, logging.Logger) else None
+    refiner = WordBoundaryRefiner(config=config, logger=refiner_logger)
     max_shift_ms = max(0, int(max_shift_seconds * 1000))
 
     sorted_chapters = sorted(list(chapters), key=lambda ch: ch.start_time_ms)
@@ -160,6 +171,100 @@ def refine_description_chapters_with_word_refiner(
         log.info(
             "Refined %d description chapter boundary starts using word-level "
             "refiner heuristics",
+            refined_count,
+        )
+    return adjusted
+
+
+def refine_transcript_chapters_with_word_refiner(
+    chapters: Sequence[Chapter],
+    transcript_segments: Sequence[Any],
+    *,
+    config: Any,
+    logger_override: Any = None,
+    max_shift_seconds: float = 5 * 60,
+) -> list[Chapter]:
+    """
+    Pull coarse transcript-generated chapter starts back to matching transcript text.
+
+    Topic chapters are generated from coarse transcript blocks, so their chosen block
+    can lag behind the actual first mention of the topic by a couple of minutes on
+    long episodes. This reuses the word-level phrase matcher locally to tighten the
+    start timestamp without making any extra LLM calls.
+    """
+    log = logger_override or logger
+    if not chapters or not transcript_segments:
+        return list(chapters)
+
+    all_segments = _segments_for_word_refiner(transcript_segments)
+    if not all_segments:
+        return list(chapters)
+
+    refiner_logger = log if isinstance(log, logging.Logger) else None
+    refiner = WordBoundaryRefiner(config=config, logger=refiner_logger)
+    max_shift_ms = max(0, int(max_shift_seconds * 1000))
+    context_window_seconds = max(60.0, float(max_shift_seconds))
+
+    sorted_chapters = sorted(list(chapters), key=lambda ch: ch.start_time_ms)
+    candidate_starts_ms: list[int] = []
+    refined_count = 0
+
+    for idx, chapter in enumerate(sorted_chapters):
+        original_start_ms = int(chapter.start_time_ms)
+        if idx == 0:
+            candidate_starts_ms.append(original_start_ms)
+            continue
+
+        context_segments = _context_segments_around_time(
+            all_segments,
+            time_seconds=original_start_ms / 1000.0,
+            window_seconds=context_window_seconds,
+        )
+        estimated_start = refiner._estimate_phrase_time(
+            all_segments=all_segments,
+            context_segments=context_segments,
+            preferred_segment_seq=None,
+            phrase=chapter.title,
+            direction="start",
+        )
+
+        new_start_ms = original_start_ms
+        if estimated_start is not None:
+            candidate_ms = round(float(estimated_start) * 1000.0)
+            if (
+                candidate_ms <= original_start_ms
+                and (original_start_ms - candidate_ms) <= max_shift_ms
+            ):
+                new_start_ms = candidate_ms
+
+        candidate_starts_ms.append(new_start_ms)
+        if new_start_ms != original_start_ms:
+            refined_count += 1
+
+    adjusted: list[Chapter] = []
+    last_start_ms = -1
+    for idx, chapter in enumerate(sorted_chapters):
+        start_ms = max(candidate_starts_ms[idx], last_start_ms + 1 if adjusted else 0)
+        if idx + 1 < len(sorted_chapters):
+            next_candidate = candidate_starts_ms[idx + 1]
+            end_ms = max(start_ms, next_candidate)
+        else:
+            end_ms = max(start_ms, int(chapter.end_time_ms))
+
+        adjusted.append(
+            Chapter(
+                element_id=chapter.element_id,
+                title=chapter.title,
+                start_time_ms=start_ms,
+                end_time_ms=end_ms,
+            )
+        )
+        last_start_ms = start_ms
+
+    if refined_count > 0:
+        log.info(
+            "Refined %d transcript topic chapter boundary starts using word-level "
+            "phrase matching",
             refined_count,
         )
     return adjusted
@@ -619,20 +724,25 @@ def _build_topic_blocks(
     total_duration_ms: int,
     target_block_count: int = TOPIC_CHAPTER_TARGET_BLOCK_COUNT,
     min_block_seconds: int = TOPIC_CHAPTER_MIN_BLOCK_SECONDS,
+    max_block_seconds: int = TOPIC_CHAPTER_MAX_BLOCK_SECONDS,
     max_chars_per_block: int = TOPIC_CHAPTER_MAX_CHARS_PER_BLOCK,
 ) -> list[dict[str, Any]]:
     if not transcript_segments:
         return []
 
-    # Aim for a bounded prompt size by grouping transcript into ~60 coarse blocks.
+    # Aim for a bounded prompt size by grouping transcript into ~60 coarse blocks,
+    # but never let long episodes drift past a 2-minute timing window.
     raw_window_ms = max(1, total_duration_ms // max(1, target_block_count))
-    block_window_ms = max(min_block_seconds * 1000, raw_window_ms)
+    min_block_ms = max(1, min_block_seconds * 1000)
+    max_block_ms = max(min_block_ms, max_block_seconds * 1000)
+    block_window_ms = min(max_block_ms, max(min_block_ms, raw_window_ms))
     # Round to 30-second increments for cleaner boundaries.
     round_ms = 30_000
     block_window_ms = max(
         round_ms,
         ((block_window_ms + round_ms - 1) // round_ms) * round_ms,
     )
+    block_window_ms = min(max_block_ms, block_window_ms)
 
     blocks: list[dict[str, Any]] = []
     current_start_ms: int | None = None

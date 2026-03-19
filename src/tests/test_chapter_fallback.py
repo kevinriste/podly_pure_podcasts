@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from podcast_processor.chapter_fallback import (
     TOPIC_CHAPTER_CAP_WINDOW_SECONDS,
+    TOPIC_CHAPTER_MAX_BLOCK_SECONDS,
     TOPIC_CHAPTER_MAX_CHARS_PER_BLOCK,
     TOPIC_CHAPTER_SHORT_EPISODE_CAP,
     TOPIC_CHAPTER_SHORT_EPISODE_SECONDS,
@@ -355,6 +356,29 @@ def test_build_topic_blocks_reduces_prompt_payload_for_long_transcript() -> None
     for block in blocks:
         assert isinstance(block["text"], str)
         assert len(block["text"]) <= TOPIC_CHAPTER_MAX_CHARS_PER_BLOCK
+
+
+def test_build_topic_blocks_caps_long_episode_window_at_two_minutes() -> None:
+    segments = [
+        SimpleNamespace(
+            start_time=float(i * 60),
+            end_time=float(i * 60 + 20),
+            text=f"segment {i}",
+        )
+        for i in range(180)
+    ]
+
+    blocks = _build_topic_blocks(
+        segments,
+        total_duration_ms=10_800_000,  # 3h
+    )
+
+    assert len(blocks) > TOPIC_CHAPTER_TARGET_BLOCK_COUNT
+    assert len(blocks) <= 10_800_000 // (TOPIC_CHAPTER_MAX_BLOCK_SECONDS * 1000) + 1
+    assert blocks[0]["start_ms"] == 0
+    assert blocks[1]["start_ms"] - blocks[0]["start_ms"] <= (
+        TOPIC_CHAPTER_MAX_BLOCK_SECONDS * 1000
+    )
 
 
 def test_parse_topic_chapter_response_salvages_truncated_json(caplog) -> None:

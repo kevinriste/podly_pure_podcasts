@@ -335,9 +335,6 @@ class AudioProcessor:
                 f"Could not determine duration for audio: {post.unprocessed_audio_path}"
             )
 
-        # Store duration in seconds
-        post.duration = duration_ms / 1000.0
-
         merged_ad_segments = self.merge_ad_segments(
             duration_ms=duration_ms,
             ad_segments=ad_segments,
@@ -358,6 +355,19 @@ class AudioProcessor:
             use_vbr=True,
         )
 
+        processed_duration_ms = get_audio_duration_ms(output_path)
+        if processed_duration_ms is None:
+            self.logger.warning(
+                "Could not determine processed audio duration for post %s at %s; "
+                "falling back to source duration",
+                post.id,
+                output_path,
+            )
+            processed_duration_ms = duration_ms
+
+        # Persist the final MP3 runtime so downstream RSS/stats reflect ad-removed
+        # audio rather than the source episode length.
+        post.duration = processed_duration_ms / 1000.0
         post.processed_audio_path = output_path
         result = writer_client.update(
             "Post",

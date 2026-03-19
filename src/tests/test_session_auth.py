@@ -70,6 +70,14 @@ def auth_app() -> Generator[Flask, None, None]:
             return Response("missing user", status=500)
         return Response("download", mimetype="text/plain")
 
+    @app.route("/post/<string:guid>.mp3", methods=["GET"])
+    def stream(guid: str) -> Response:
+        del guid
+        current = getattr(g, "current_user", None)
+        if current is None:
+            return Response("missing user", status=500)
+        return Response("stream", mimetype="audio/mpeg")
+
     yield app
 
     with app.app_context():
@@ -173,6 +181,12 @@ def test_share_link_generates_token_and_allows_query_access(auth_app: Flask) -> 
         query_string={"feed_token": token_id, "feed_secret": secret},
     )
     assert download_response.status_code == 200
+
+    stream_response = anon_client.get(
+        "/post/episode-1.mp3",
+        query_string={"feed_token": token_id, "feed_secret": secret},
+    )
+    assert stream_response.status_code == 200
 
 
 def test_share_link_returns_same_token_for_user_and_feed(auth_app: Flask) -> None:

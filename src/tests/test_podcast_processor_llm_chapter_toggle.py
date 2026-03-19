@@ -200,7 +200,10 @@ def test_llm_transcript_chapters_exclude_removed_ad_overlap_segments() -> None:
     topic_input_segments = topic_mock.call_args.args[0]
     assert [segment.sequence_num for segment in topic_input_segments] == [0, 2]
 
-    assert write_mock.call_args.kwargs["chapters_to_keep"] == topic_chapters
+    assert write_mock.call_args.kwargs["chapters_to_keep"] == [
+        Chapter("topic0", "Intro", 0, 20_000),
+        Chapter("topic1", "Main discussion", 20_000, 30_000),
+    ]
     assert write_mock.call_args.kwargs["removed_segments"] == [(10.0, 20.0)]
 
     chapter_data = json.loads(
@@ -210,6 +213,64 @@ def test_llm_transcript_chapters_exclude_removed_ad_overlap_segments() -> None:
     assert chapter_data["chapters_for_output"] == [
         {"title": "Intro", "start_time": 0.0, "end_time": 10.0},
         {"title": "Main discussion", "start_time": 10.0, "end_time": 20.0},
+    ]
+
+
+def test_transcript_topic_chapters_pull_coarse_boundary_back_to_title_match() -> None:
+    config = create_standard_test_config()
+
+    processor = object.__new__(PodcastProcessor)
+    processor.config = config
+    processor.logger = MagicMock()
+
+    transcript_segments = [
+        SimpleNamespace(
+            sequence_num=0,
+            start_time=0.0,
+            end_time=120.0,
+            text="Xbox strategy and leadership discussion continues.",
+        ),
+        SimpleNamespace(
+            sequence_num=1,
+            start_time=225.0,
+            end_time=235.0,
+            text="Harlem Globetrotters are back in video game form.",
+        ),
+        SimpleNamespace(
+            sequence_num=2,
+            start_time=236.0,
+            end_time=390.0,
+            text="More on the Harlem Globetrotters game announcement.",
+        ),
+        SimpleNamespace(
+            sequence_num=3,
+            start_time=390.0,
+            end_time=540.0,
+            text="They keep talking about the game and Acclaim.",
+        ),
+    ]
+
+    coarse_topic_chapters = [
+        Chapter("topic0", "Xbox strategy and leadership", 0, 390_000),
+        Chapter("topic1", "Harlem Globetrotters game", 390_000, 540_000),
+    ]
+
+    with patch(
+        "podcast_processor.podcast_processor."
+        "generate_topic_chapters_from_transcript_with_llm",
+        return_value=coarse_topic_chapters,
+    ):
+        refined = processor._refine_transcript_sourced_chapters(
+            chapters_for_output=[Chapter("seed0", "Seed", 0, 540_000)],
+            transcript_segments=transcript_segments,
+            post_id=1,
+        )
+
+    assert [ch.start_time_ms for ch in refined] == [0, 225_000]
+    assert [ch.end_time_ms for ch in refined] == [225_000, 540_000]
+    assert [ch.title for ch in refined] == [
+        "Xbox strategy and leadership",
+        "Harlem Globetrotters game",
     ]
 
 

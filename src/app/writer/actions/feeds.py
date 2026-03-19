@@ -24,6 +24,7 @@ def refresh_feed_action(params: dict[str, Any]) -> dict[str, Any]:
     feed_id = params.get("feed_id")
     updates = params.get("updates", {})
     new_posts_data = params.get("new_posts", [])
+    existing_post_updates = params.get("existing_post_updates", [])
 
     feed = db.session.get(Feed, feed_id)
     if not feed:
@@ -59,9 +60,26 @@ def refresh_feed_action(params: dict[str, Any]) -> dict[str, Any]:
             )
             db.session.add(job)
 
+    updated_posts_count = 0
+    for post_update in existing_post_updates:
+        post_id = post_update.get("post_id")
+        if not post_id:
+            continue
+        post = db.session.get(Post, int(post_id))
+        if not post or post.feed_id != feed.id:
+            continue
+
+        if "duration" in post_update:
+            post.duration = post_update["duration"]
+            updated_posts_count += 1
+
     recalculate_run_counts(db.session)
 
-    return {"feed_id": feed.id, "new_posts_count": len(created_posts)}
+    return {
+        "feed_id": feed.id,
+        "new_posts_count": len(created_posts),
+        "updated_posts_count": updated_posts_count,
+    }
 
 
 def add_feed_action(params: dict[str, Any]) -> dict[str, Any]:
