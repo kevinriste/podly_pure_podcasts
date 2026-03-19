@@ -308,3 +308,96 @@ class TestEnvOverriddenFieldStripping:
         assert len(stripped) == 0
         assert cleaned["llm"]["llm_api_key"] == "user-key"
         assert cleaned["llm"]["llm_model"] == "user-model"
+
+
+class TestParseHelpers:
+    """Test _parse_int and _parse_bool edge cases."""
+
+    def test_parse_int_valid(self) -> None:
+        from app.config_store import _parse_int
+
+        assert _parse_int("42") == 42
+        assert _parse_int("0") == 0
+        assert _parse_int("-1") == -1
+
+    def test_parse_int_invalid_returns_none(self) -> None:
+        from app.config_store import _parse_int
+
+        assert _parse_int("abc", env_name="TEST") is None
+        assert _parse_int("3.5", env_name="TEST") is None
+        assert _parse_int("", env_name="TEST") is None
+        assert _parse_int(None) is None
+
+    def test_parse_bool_valid(self) -> None:
+        from app.config_store import _parse_bool
+
+        for val in ("1", "true", "True", "TRUE", "yes", "on"):
+            assert _parse_bool(val) is True, f"Expected True for {val!r}"
+        for val in ("0", "false", "False", "FALSE", "no", "off"):
+            assert _parse_bool(val) is False, f"Expected False for {val!r}"
+
+    def test_parse_bool_invalid_returns_none(self) -> None:
+        from app.config_store import _parse_bool
+
+        assert _parse_bool("maybe", env_name="TEST") is None
+        assert _parse_bool("", env_name="TEST") is None
+        assert _parse_bool(None) is None
+
+    def test_parse_bool_false_through_runtime_overlay(
+        self, app: Any, monkeypatch: Any
+    ) -> None:
+        """Verify that LLM_ENABLE_TOKEN_RATE_LIMITING=false actively overrides to False."""
+        monkeypatch.setenv("LLM_ENABLE_TOKEN_RATE_LIMITING", "false")
+
+        with app.app_context():
+            from app.config_store import hydrate_runtime_config_inplace
+            from app.runtime_config import config as runtime_config
+
+            _create_default_settings()
+            hydrate_runtime_config_inplace()
+
+            assert runtime_config.llm_enable_token_rate_limiting is False
+
+
+class TestWhisperRuntimeOverlay:
+    """Test that whisper env vars are applied to runtime config."""
+
+    def test_remote_whisper_env_overlay(self, app: Any, monkeypatch: Any) -> None:
+        """Verify remote whisper env vars are overlaid on runtime config."""
+        monkeypatch.setenv("WHISPER_TYPE", "remote")
+        monkeypatch.setenv("WHISPER_REMOTE_API_KEY", "env-remote-key")
+        monkeypatch.setenv("WHISPER_REMOTE_TIMEOUT_SEC", "120")
+        monkeypatch.setenv("WHISPER_REMOTE_CHUNKSIZE_MB", "48")
+
+        with app.app_context():
+            from app.config_store import hydrate_runtime_config_inplace
+            from app.runtime_config import config as runtime_config
+
+            _create_default_settings()
+            hydrate_runtime_config_inplace()
+
+            assert runtime_config.whisper is not None
+            assert runtime_config.whisper.whisper_type == "remote"
+            assert runtime_config.whisper.api_key == "env-remote-key"
+            assert runtime_config.whisper.timeout_sec == 120
+            assert runtime_config.whisper.chunksize_mb == 48
+
+    def test_groq_whisper_env_overlay(self, app: Any, monkeypatch: Any) -> None:
+        """Verify groq whisper env vars are overlaid on runtime config."""
+        monkeypatch.setenv("WHISPER_TYPE", "groq")
+        monkeypatch.setenv("GROQ_API_KEY", "env-groq-key")
+        monkeypatch.setenv("GROQ_WHISPER_MODEL", "custom-model")
+        monkeypatch.setenv("GROQ_MAX_RETRIES", "5")
+
+        with app.app_context():
+            from app.config_store import hydrate_runtime_config_inplace
+            from app.runtime_config import config as runtime_config
+
+            _create_default_settings()
+            hydrate_runtime_config_inplace()
+
+            assert runtime_config.whisper is not None
+            assert runtime_config.whisper.whisper_type == "groq"
+            assert runtime_config.whisper.api_key == "env-groq-key"
+            assert runtime_config.whisper.model == "custom-model"
+            assert runtime_config.whisper.max_retries == 5
