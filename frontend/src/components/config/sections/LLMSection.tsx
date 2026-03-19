@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { toast } from 'react-hot-toast';
 import { configApi } from '../../../services/api';
 import { useConfigContext } from '../ConfigContext';
-import { Section, Field, SaveButton, TestButton } from '../shared';
+import { Section, Field, SaveButton, TestButton, EnvVarHint } from '../shared';
 import type { LLMConfig } from '../../../types';
 
 const LLM_MODEL_ALIASES: string[] = [
@@ -26,6 +26,16 @@ export default function LLMSection() {
   const apiKeyReadOnly = isFieldReadOnly('llm.llm_api_key');
   const baseUrlReadOnly = isFieldReadOnly('llm.openai_base_url');
   const modelReadOnly = isFieldReadOnly('llm.llm_model');
+  const timeoutReadOnly = isFieldReadOnly('llm.openai_timeout');
+  const maxTokensReadOnly = isFieldReadOnly('llm.openai_max_tokens');
+  const maxConcurrentReadOnly = isFieldReadOnly('llm.llm_max_concurrent_calls');
+  const maxRetriesReadOnly = isFieldReadOnly('llm.llm_max_retry_attempts');
+  const tokenRateLimitReadOnly = isFieldReadOnly('llm.llm_enable_token_rate_limiting');
+  const maxInputPerCallReadOnly = isFieldReadOnly('llm.llm_max_input_tokens_per_call');
+  const maxInputPerMinReadOnly = isFieldReadOnly('llm.llm_max_input_tokens_per_minute');
+
+  const inputClass = (readOnly: boolean) =>
+    readOnly ? 'input bg-gray-100 cursor-not-allowed' : 'input';
 
   const handleTestLLM = () => {
     toast.promise(configApi.testLLM({ llm: pending.llm as LLMConfig }), {
@@ -51,7 +61,7 @@ export default function LLMSection() {
       <Section title="LLM">
         <Field label="API Key" envMeta={getEnvHint('llm.llm_api_key')}>
           <input
-            className={`input ${apiKeyReadOnly ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+            className={inputClass(apiKeyReadOnly)}
             type="text"
             placeholder={pending?.llm?.llm_api_key_preview || ''}
             value={pending?.llm?.llm_api_key || ''}
@@ -73,15 +83,11 @@ export default function LLMSection() {
                 ⓘ
               </button>
             </div>
-            {getEnvHint('llm.openai_base_url')?.env_var && (
-              <code className="mt-1 block text-xs text-gray-500 font-mono">
-                {getEnvHint('llm.openai_base_url')?.env_var}
-              </code>
-            )}
+            <EnvVarHint meta={getEnvHint('llm.openai_base_url')} />
           </div>
           <div className="flex-1 space-y-2">
             <input
-              className={`input ${baseUrlReadOnly ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+              className={inputClass(baseUrlReadOnly)}
               type="text"
               placeholder="https://api.openai.com/v1"
               value={pending?.llm?.openai_base_url || ''}
@@ -97,7 +103,7 @@ export default function LLMSection() {
             <div className="relative">
               <input
                 list="llm-model-datalist"
-                className={`input ${modelReadOnly ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                className={inputClass(modelReadOnly)}
                 type="text"
                 value={pending?.llm?.llm_model ?? ''}
                 onChange={(e) => setField(['llm', 'llm_model'], e.target.value)}
@@ -106,43 +112,48 @@ export default function LLMSection() {
               />
             </div>
           </Field>
-          <Field label="OpenAI Timeout (sec)">
+          <Field label="OpenAI Timeout (sec)" envMeta={getEnvHint('llm.openai_timeout')}>
             <input
-              className="input"
+              className={inputClass(timeoutReadOnly)}
               type="number"
               value={pending?.llm?.openai_timeout ?? 300}
               onChange={(e) => setField(['llm', 'openai_timeout'], Number(e.target.value))}
+              disabled={timeoutReadOnly}
             />
           </Field>
-          <Field label="OpenAI Max Tokens">
+          <Field label="OpenAI Max Tokens" envMeta={getEnvHint('llm.openai_max_tokens')}>
             <input
-              className="input"
+              className={inputClass(maxTokensReadOnly)}
               type="number"
               value={pending?.llm?.openai_max_tokens ?? 4096}
               onChange={(e) => setField(['llm', 'openai_max_tokens'], Number(e.target.value))}
+              disabled={maxTokensReadOnly}
             />
           </Field>
-          <Field label="Max Concurrent LLM Calls">
+          <Field label="Max Concurrent LLM Calls" envMeta={getEnvHint('llm.llm_max_concurrent_calls')}>
             <input
-              className="input"
+              className={inputClass(maxConcurrentReadOnly)}
               type="number"
               value={pending?.llm?.llm_max_concurrent_calls ?? 3}
               onChange={(e) => setField(['llm', 'llm_max_concurrent_calls'], Number(e.target.value))}
+              disabled={maxConcurrentReadOnly}
             />
           </Field>
-          <Field label="Max Retry Attempts">
+          <Field label="Max Retry Attempts" envMeta={getEnvHint('llm.llm_max_retry_attempts')}>
             <input
-              className="input"
+              className={inputClass(maxRetriesReadOnly)}
               type="number"
               value={pending?.llm?.llm_max_retry_attempts ?? 5}
               onChange={(e) => setField(['llm', 'llm_max_retry_attempts'], Number(e.target.value))}
+              disabled={maxRetriesReadOnly}
             />
           </Field>
-          <Field label="Enable Token Rate Limiting">
+          <Field label="Enable Token Rate Limiting" envMeta={getEnvHint('llm.llm_enable_token_rate_limiting')}>
             <input
               type="checkbox"
               checked={!!pending?.llm?.llm_enable_token_rate_limiting}
               onChange={(e) => setField(['llm', 'llm_enable_token_rate_limiting'], e.target.checked)}
+              disabled={tokenRateLimitReadOnly}
             />
           </Field>
           <Field label="Enable Boundary Refinement" hint="LLM-based ad boundary refinement for improved precision">
@@ -179,9 +190,9 @@ export default function LLMSection() {
               }
             />
           </Field>
-          <Field label="Max Input Tokens Per Call (optional)">
+          <Field label="Max Input Tokens Per Call (optional)" envMeta={getEnvHint('llm.llm_max_input_tokens_per_call')}>
             <input
-              className="input"
+              className={inputClass(maxInputPerCallReadOnly)}
               type="number"
               value={pending?.llm?.llm_max_input_tokens_per_call ?? ''}
               onChange={(e) =>
@@ -190,11 +201,12 @@ export default function LLMSection() {
                   e.target.value === '' ? null : Number(e.target.value)
                 )
               }
+              disabled={maxInputPerCallReadOnly}
             />
           </Field>
-          <Field label="Max Input Tokens Per Minute (optional)">
+          <Field label="Max Input Tokens Per Minute (optional)" envMeta={getEnvHint('llm.llm_max_input_tokens_per_minute')}>
             <input
-              className="input"
+              className={inputClass(maxInputPerMinReadOnly)}
               type="number"
               value={pending?.llm?.llm_max_input_tokens_per_minute ?? ''}
               onChange={(e) =>
@@ -203,6 +215,7 @@ export default function LLMSection() {
                   e.target.value === '' ? null : Number(e.target.value)
                 )
               }
+              disabled={maxInputPerMinReadOnly}
             />
           </Field>
         </div>
