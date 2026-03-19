@@ -32,6 +32,24 @@ def _is_empty(value: Any) -> bool:
     return value is None or value == ""
 
 
+def _parse_int(val: Any) -> int | None:
+    try:
+        return int(val) if val is not None else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _parse_bool(val: Any) -> bool | None:
+    if val is None:
+        return None
+    s = str(val).strip().lower()
+    if s in {"1", "true", "yes", "on"}:
+        return True
+    if s in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
 def _ensure_row(model: type, defaults: dict[str, Any]) -> Any:
     row = db.session.get(model, 1)
     if row is None:
@@ -590,36 +608,75 @@ def _apply_top_level_env_overrides(cfg: PydanticConfig) -> None:
     if env_openai_base_url:
         cfg.openai_base_url = env_openai_base_url
 
+    env_openai_timeout = _parse_int(os.environ.get("OPENAI_TIMEOUT"))
+    if env_openai_timeout is not None:
+        cfg.openai_timeout = env_openai_timeout
+
+    env_openai_max_tokens = _parse_int(os.environ.get("OPENAI_MAX_TOKENS"))
+    if env_openai_max_tokens is not None:
+        cfg.openai_max_tokens = env_openai_max_tokens
+
+    env_llm_max_concurrent = _parse_int(os.environ.get("LLM_MAX_CONCURRENT_CALLS"))
+    if env_llm_max_concurrent is not None:
+        cfg.llm_max_concurrent_calls = env_llm_max_concurrent
+
+    env_llm_max_retries = _parse_int(os.environ.get("LLM_MAX_RETRY_ATTEMPTS"))
+    if env_llm_max_retries is not None:
+        cfg.llm_max_retry_attempts = env_llm_max_retries
+
+    env_llm_enable_token_rl = _parse_bool(os.environ.get("LLM_ENABLE_TOKEN_RATE_LIMITING"))
+    if env_llm_enable_token_rl is not None:
+        cfg.llm_enable_token_rate_limiting = env_llm_enable_token_rl
+
+    env_llm_max_input_per_call = _parse_int(os.environ.get("LLM_MAX_INPUT_TOKENS_PER_CALL"))
+    if env_llm_max_input_per_call is not None:
+        cfg.llm_max_input_tokens_per_call = env_llm_max_input_per_call
+
+    env_llm_max_input_per_min = _parse_int(os.environ.get("LLM_MAX_INPUT_TOKENS_PER_MINUTE"))
+    if env_llm_max_input_per_min is not None:
+        cfg.llm_max_input_tokens_per_minute = env_llm_max_input_per_min
+
+
+def _apply_remote_whisper_runtime_overrides(whisper: RemoteWhisperConfig) -> None:
+    """Apply env var overrides to remote whisper runtime config."""
+    remote_key = os.environ.get("WHISPER_REMOTE_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    if remote_key:
+        whisper.api_key = remote_key
+    remote_base = os.environ.get("WHISPER_REMOTE_BASE_URL") or os.environ.get("OPENAI_BASE_URL")
+    if remote_base:
+        whisper.base_url = remote_base
+    remote_model = os.environ.get("WHISPER_REMOTE_MODEL")
+    if remote_model:
+        whisper.model = remote_model
+    remote_timeout = _parse_int(os.environ.get("WHISPER_REMOTE_TIMEOUT_SEC"))
+    if remote_timeout is not None:
+        whisper.timeout_sec = remote_timeout
+    remote_chunksize = _parse_int(os.environ.get("WHISPER_REMOTE_CHUNKSIZE_MB"))
+    if remote_chunksize is not None:
+        whisper.chunksize_mb = remote_chunksize
+
+
+def _apply_groq_whisper_runtime_overrides(whisper: GroqWhisperConfig) -> None:
+    """Apply env var overrides to groq whisper runtime config."""
+    groq_key = os.environ.get("GROQ_API_KEY")
+    if groq_key:
+        whisper.api_key = groq_key
+    groq_model = os.environ.get("GROQ_WHISPER_MODEL") or os.environ.get("WHISPER_GROQ_MODEL")
+    if groq_model:
+        whisper.model = groq_model
+    groq_max_retries = _parse_int(os.environ.get("GROQ_MAX_RETRIES"))
+    if groq_max_retries is not None:
+        whisper.max_retries = groq_max_retries
+
 
 def _apply_whisper_env_overrides(cfg: PydanticConfig) -> None:
     if cfg.whisper is None:
         return
     wtype = getattr(cfg.whisper, "whisper_type", None)
-    if wtype == "remote":
-        remote_key = os.environ.get("WHISPER_REMOTE_API_KEY") or os.environ.get(
-            "OPENAI_API_KEY"
-        )
-        remote_base = os.environ.get("WHISPER_REMOTE_BASE_URL") or os.environ.get(
-            "OPENAI_BASE_URL"
-        )
-        remote_model = os.environ.get("WHISPER_REMOTE_MODEL")
-        if isinstance(cfg.whisper, RemoteWhisperConfig):
-            if remote_key:
-                cfg.whisper.api_key = remote_key
-            if remote_base:
-                cfg.whisper.base_url = remote_base
-            if remote_model:
-                cfg.whisper.model = remote_model
-    elif wtype == "groq":
-        groq_key = os.environ.get("GROQ_API_KEY")
-        groq_model = os.environ.get("GROQ_WHISPER_MODEL") or os.environ.get(
-            "WHISPER_GROQ_MODEL"
-        )
-        if isinstance(cfg.whisper, GroqWhisperConfig):
-            if groq_key:
-                cfg.whisper.api_key = groq_key
-            if groq_model:
-                cfg.whisper.model = groq_model
+    if wtype == "remote" and isinstance(cfg.whisper, RemoteWhisperConfig):
+        _apply_remote_whisper_runtime_overrides(cfg.whisper)
+    elif wtype == "groq" and isinstance(cfg.whisper, GroqWhisperConfig):
+        _apply_groq_whisper_runtime_overrides(cfg.whisper)
     elif wtype == "local":
         loc_model = os.environ.get("WHISPER_LOCAL_MODEL")
         if isinstance(cfg.whisper, LocalWhisperConfig) and loc_model:

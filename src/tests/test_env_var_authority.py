@@ -119,6 +119,13 @@ class TestEnvVarAuthority:
         """Verify that runtime config has env var overlays applied."""
         monkeypatch.setenv("LLM_API_KEY", "runtime-env-key")
         monkeypatch.setenv("LLM_MODEL", "runtime-env-model")
+        monkeypatch.setenv("OPENAI_TIMEOUT", "120")
+        monkeypatch.setenv("OPENAI_MAX_TOKENS", "8192")
+        monkeypatch.setenv("LLM_MAX_CONCURRENT_CALLS", "10")
+        monkeypatch.setenv("LLM_MAX_RETRY_ATTEMPTS", "7")
+        monkeypatch.setenv("LLM_ENABLE_TOKEN_RATE_LIMITING", "true")
+        monkeypatch.setenv("LLM_MAX_INPUT_TOKENS_PER_CALL", "5000")
+        monkeypatch.setenv("LLM_MAX_INPUT_TOKENS_PER_MINUTE", "50000")
 
         with app.app_context():
             from app.config_store import hydrate_runtime_config_inplace
@@ -130,6 +137,13 @@ class TestEnvVarAuthority:
             # Runtime config should have env values
             assert runtime_config.llm_api_key == "runtime-env-key"
             assert runtime_config.llm_model == "runtime-env-model"
+            assert runtime_config.openai_timeout == 120
+            assert runtime_config.openai_max_tokens == 8192
+            assert runtime_config.llm_max_concurrent_calls == 10
+            assert runtime_config.llm_max_retry_attempts == 7
+            assert runtime_config.llm_enable_token_rate_limiting is True
+            assert runtime_config.llm_max_input_tokens_per_call == 5000
+            assert runtime_config.llm_max_input_tokens_per_minute == 50000
 
     def test_hydrate_preserves_db_values_when_no_env_override(
         self, app: Any, monkeypatch: Any
@@ -179,6 +193,40 @@ class TestEnvOverrideMetadata:
                 "GROQ_API_KEY",
             ]
 
+    def test_env_override_metadata_for_all_llm_fields(
+        self, app: Any, monkeypatch: Any
+    ) -> None:
+        """Verify that all LLM env vars produce read_only metadata."""
+        monkeypatch.setenv("OPENAI_TIMEOUT", "120")
+        monkeypatch.setenv("OPENAI_MAX_TOKENS", "8192")
+        monkeypatch.setenv("LLM_MAX_CONCURRENT_CALLS", "10")
+        monkeypatch.setenv("LLM_MAX_RETRY_ATTEMPTS", "7")
+        monkeypatch.setenv("LLM_ENABLE_TOKEN_RATE_LIMITING", "true")
+        monkeypatch.setenv("LLM_MAX_INPUT_TOKENS_PER_CALL", "5000")
+        monkeypatch.setenv("LLM_MAX_INPUT_TOKENS_PER_MINUTE", "50000")
+
+        with app.app_context():
+            from app.routes.config_routes import _build_env_override_metadata
+
+            data = {
+                "llm": {},
+                "whisper": {"whisper_type": "groq"},
+            }
+
+            metadata = _build_env_override_metadata(data)
+
+            for field_path in [
+                "llm.openai_timeout",
+                "llm.openai_max_tokens",
+                "llm.llm_max_concurrent_calls",
+                "llm.llm_max_retry_attempts",
+                "llm.llm_enable_token_rate_limiting",
+                "llm.llm_max_input_tokens_per_call",
+                "llm.llm_max_input_tokens_per_minute",
+            ]:
+                assert field_path in metadata, f"{field_path} missing from metadata"
+                assert metadata[field_path]["read_only"] is True
+
 
 class TestEnvOverriddenFieldStripping:
     """Test that PUT /api/config strips env-overridden fields."""
@@ -187,6 +235,7 @@ class TestEnvOverriddenFieldStripping:
         """Verify that env-overridden fields are removed from update payload."""
         monkeypatch.setenv("LLM_API_KEY", "env-key")
         monkeypatch.setenv("LLM_MODEL", "env-model")
+        monkeypatch.setenv("OPENAI_TIMEOUT", "120")
 
         from app.routes.config_routes import _strip_env_overridden_fields
 
@@ -194,7 +243,8 @@ class TestEnvOverriddenFieldStripping:
             "llm": {
                 "llm_api_key": "user-submitted-key",  # Should be stripped
                 "llm_model": "user-model",  # Should be stripped
-                "openai_timeout": 300,  # Should be kept
+                "openai_timeout": 300,  # Should be stripped (env override set)
+                "openai_max_tokens": 4096,  # Should be kept (no env override)
             },
             "whisper": {
                 "whisper_type": "groq",
@@ -206,11 +256,37 @@ class TestEnvOverriddenFieldStripping:
         # Verify stripped fields
         assert "llm.llm_api_key" in stripped
         assert "llm.llm_model" in stripped
+        assert "llm.openai_timeout" in stripped
         assert "llm_api_key" not in cleaned["llm"]
         assert "llm_model" not in cleaned["llm"]
+        assert "openai_timeout" not in cleaned["llm"]
 
         # Verify kept fields
-        assert cleaned["llm"]["openai_timeout"] == 300
+        assert cleaned["llm"]["openai_max_tokens"] == 4096
+
+    def test_strip_whisper_env_overridden_fields(self, monkeypatch: Any) -> None:
+        """Verify that whisper env-overridden fields are stripped."""
+        monkeypatch.setenv("WHISPER_REMOTE_TIMEOUT_SEC", "120")
+        monkeypatch.setenv("WHISPER_REMOTE_CHUNKSIZE_MB", "48")
+
+        from app.routes.config_routes import _strip_env_overridden_fields
+
+        payload = {
+            "whisper": {
+                "whisper_type": "remote",
+                "timeout_sec": 600,  # Should be stripped
+                "chunksize_mb": 24,  # Should be stripped
+                "model": "whisper-1",  # Should be kept
+            },
+        }
+
+        cleaned, stripped = _strip_env_overridden_fields(payload)
+
+        assert "whisper.timeout_sec" in stripped
+        assert "whisper.chunksize_mb" in stripped
+        assert "timeout_sec" not in cleaned["whisper"]
+        assert "chunksize_mb" not in cleaned["whisper"]
+        assert cleaned["whisper"]["model"] == "whisper-1"
 
     def test_no_stripping_when_no_env_vars(self, monkeypatch: Any) -> None:
         """Verify that fields are kept when no env vars are set."""

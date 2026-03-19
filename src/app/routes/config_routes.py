@@ -275,6 +275,34 @@ def _register_llm_overrides(overrides: dict[str, Any]) -> None:
     if llm_model:
         _register_override(overrides, "llm.llm_model", "LLM_MODEL", llm_model)
 
+    openai_timeout = os.environ.get("OPENAI_TIMEOUT")
+    if openai_timeout:
+        _register_override(overrides, "llm.openai_timeout", "OPENAI_TIMEOUT", openai_timeout)
+
+    openai_max_tokens = os.environ.get("OPENAI_MAX_TOKENS")
+    if openai_max_tokens:
+        _register_override(overrides, "llm.openai_max_tokens", "OPENAI_MAX_TOKENS", openai_max_tokens)
+
+    llm_max_concurrent = os.environ.get("LLM_MAX_CONCURRENT_CALLS")
+    if llm_max_concurrent:
+        _register_override(overrides, "llm.llm_max_concurrent_calls", "LLM_MAX_CONCURRENT_CALLS", llm_max_concurrent)
+
+    llm_max_retries = os.environ.get("LLM_MAX_RETRY_ATTEMPTS")
+    if llm_max_retries:
+        _register_override(overrides, "llm.llm_max_retry_attempts", "LLM_MAX_RETRY_ATTEMPTS", llm_max_retries)
+
+    llm_enable_token_rl = os.environ.get("LLM_ENABLE_TOKEN_RATE_LIMITING")
+    if llm_enable_token_rl:
+        _register_override(overrides, "llm.llm_enable_token_rate_limiting", "LLM_ENABLE_TOKEN_RATE_LIMITING", llm_enable_token_rl)
+
+    llm_max_input_per_call = os.environ.get("LLM_MAX_INPUT_TOKENS_PER_CALL")
+    if llm_max_input_per_call:
+        _register_override(overrides, "llm.llm_max_input_tokens_per_call", "LLM_MAX_INPUT_TOKENS_PER_CALL", llm_max_input_per_call)
+
+    llm_max_input_per_min = os.environ.get("LLM_MAX_INPUT_TOKENS_PER_MINUTE")
+    if llm_max_input_per_min:
+        _register_override(overrides, "llm.llm_max_input_tokens_per_minute", "LLM_MAX_INPUT_TOKENS_PER_MINUTE", llm_max_input_per_min)
+
 
 def _register_groq_shared_overrides(overrides: dict[str, Any]) -> None:
     """Register shared Groq API key override metadata."""
@@ -394,14 +422,10 @@ def _build_env_override_metadata(data: dict[str, Any]) -> dict[str, Any]:
     return overrides
 
 
-def _get_env_overridden_fields() -> set[str]:
-    """Return set of field paths that are overridden by environment variables.
-
-    These fields should not be modified via the API - env vars are authoritative.
-    """
+def _get_llm_overridden_fields() -> set[str]:
+    """Return set of LLM field paths overridden by environment variables."""
     overridden: set[str] = set()
 
-    # LLM API key
     if (
         os.environ.get("LLM_API_KEY")
         or os.environ.get("OPENAI_API_KEY")
@@ -409,13 +433,29 @@ def _get_env_overridden_fields() -> set[str]:
     ):
         overridden.add("llm.llm_api_key")
 
-    if os.environ.get("OPENAI_BASE_URL"):
-        overridden.add("llm.openai_base_url")
+    # Simple 1:1 env var to field path mappings
+    _simple_llm_env_map = {
+        "OPENAI_BASE_URL": "llm.openai_base_url",
+        "LLM_MODEL": "llm.llm_model",
+        "OPENAI_TIMEOUT": "llm.openai_timeout",
+        "OPENAI_MAX_TOKENS": "llm.openai_max_tokens",
+        "LLM_MAX_CONCURRENT_CALLS": "llm.llm_max_concurrent_calls",
+        "LLM_MAX_RETRY_ATTEMPTS": "llm.llm_max_retry_attempts",
+        "LLM_ENABLE_TOKEN_RATE_LIMITING": "llm.llm_enable_token_rate_limiting",
+        "LLM_MAX_INPUT_TOKENS_PER_CALL": "llm.llm_max_input_tokens_per_call",
+        "LLM_MAX_INPUT_TOKENS_PER_MINUTE": "llm.llm_max_input_tokens_per_minute",
+    }
+    for env_key, field_path in _simple_llm_env_map.items():
+        if os.environ.get(env_key):
+            overridden.add(field_path)
 
-    if os.environ.get("LLM_MODEL"):
-        overridden.add("llm.llm_model")
+    return overridden
 
-    # Whisper type
+
+def _get_whisper_overridden_fields() -> set[str]:
+    """Return set of whisper field paths overridden by environment variables."""
+    overridden: set[str] = set()
+
     if os.environ.get("WHISPER_TYPE"):
         overridden.add("whisper.whisper_type")
 
@@ -426,18 +466,32 @@ def _get_env_overridden_fields() -> set[str]:
         overridden.add("whisper.base_url")
     if os.environ.get("WHISPER_REMOTE_MODEL"):
         overridden.add("whisper.model")
+    if os.environ.get("WHISPER_REMOTE_TIMEOUT_SEC"):
+        overridden.add("whisper.timeout_sec")
+    if os.environ.get("WHISPER_REMOTE_CHUNKSIZE_MB"):
+        overridden.add("whisper.chunksize_mb")
 
     # Groq whisper
     if os.environ.get("GROQ_API_KEY"):
         overridden.add("whisper.api_key")
     if os.environ.get("GROQ_WHISPER_MODEL") or os.environ.get("WHISPER_GROQ_MODEL"):
         overridden.add("whisper.model")
+    if os.environ.get("GROQ_MAX_RETRIES"):
+        overridden.add("whisper.max_retries")
 
     # Local whisper
     if os.environ.get("WHISPER_LOCAL_MODEL"):
         overridden.add("whisper.model")
 
     return overridden
+
+
+def _get_env_overridden_fields() -> set[str]:
+    """Return set of field paths that are overridden by environment variables.
+
+    These fields should not be modified via the API - env vars are authoritative.
+    """
+    return _get_llm_overridden_fields() | _get_whisper_overridden_fields()
 
 
 def _strip_env_overridden_fields(
@@ -452,32 +506,38 @@ def _strip_env_overridden_fields(
     llm = cleaned.get("llm")
     if isinstance(llm, dict):
         llm = dict(llm)
-        if "llm.llm_api_key" in overridden and "llm_api_key" in llm:
-            llm.pop("llm_api_key")
-            stripped.append("llm.llm_api_key")
-        if "llm.openai_base_url" in overridden and "openai_base_url" in llm:
-            llm.pop("openai_base_url")
-            stripped.append("llm.openai_base_url")
-        if "llm.llm_model" in overridden and "llm_model" in llm:
-            llm.pop("llm_model")
-            stripped.append("llm.llm_model")
+        for field_path, field_key in [
+            ("llm.llm_api_key", "llm_api_key"),
+            ("llm.openai_base_url", "openai_base_url"),
+            ("llm.llm_model", "llm_model"),
+            ("llm.openai_timeout", "openai_timeout"),
+            ("llm.openai_max_tokens", "openai_max_tokens"),
+            ("llm.llm_max_concurrent_calls", "llm_max_concurrent_calls"),
+            ("llm.llm_max_retry_attempts", "llm_max_retry_attempts"),
+            ("llm.llm_enable_token_rate_limiting", "llm_enable_token_rate_limiting"),
+            ("llm.llm_max_input_tokens_per_call", "llm_max_input_tokens_per_call"),
+            ("llm.llm_max_input_tokens_per_minute", "llm_max_input_tokens_per_minute"),
+        ]:
+            if field_path in overridden and field_key in llm:
+                llm.pop(field_key)
+                stripped.append(field_path)
         cleaned["llm"] = llm
 
     whisper = cleaned.get("whisper")
     if isinstance(whisper, dict):
         whisper = dict(whisper)
-        if "whisper.whisper_type" in overridden and "whisper_type" in whisper:
-            whisper.pop("whisper_type")
-            stripped.append("whisper.whisper_type")
-        if "whisper.api_key" in overridden and "api_key" in whisper:
-            whisper.pop("api_key")
-            stripped.append("whisper.api_key")
-        if "whisper.base_url" in overridden and "base_url" in whisper:
-            whisper.pop("base_url")
-            stripped.append("whisper.base_url")
-        if "whisper.model" in overridden and "model" in whisper:
-            whisper.pop("model")
-            stripped.append("whisper.model")
+        for field_path, field_key in [
+            ("whisper.whisper_type", "whisper_type"),
+            ("whisper.api_key", "api_key"),
+            ("whisper.base_url", "base_url"),
+            ("whisper.model", "model"),
+            ("whisper.timeout_sec", "timeout_sec"),
+            ("whisper.chunksize_mb", "chunksize_mb"),
+            ("whisper.max_retries", "max_retries"),
+        ]:
+            if field_path in overridden and field_key in whisper:
+                whisper.pop(field_key)
+                stripped.append(field_path)
         cleaned["whisper"] = whisper
 
     return cleaned, stripped
