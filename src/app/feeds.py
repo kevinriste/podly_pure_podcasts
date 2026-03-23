@@ -147,6 +147,28 @@ def build_post_feed_description_html(post: Post) -> str:
     return "\n".join(description_parts)
 
 
+def _write_cdata(handler: Any, value: str) -> None:
+    if not value:
+        return
+
+    escaped_value = value.replace("]]>", "]]]]><![CDATA[>")
+    writer = getattr(handler, "_write", None)
+    if callable(writer):
+        writer(f"<![CDATA[{escaped_value}]]>")
+        return
+
+    handler.characters(value)
+
+
+def _publish_cdata_opt_element(handler: Any, name: str, value: str | None) -> None:
+    if value is None:
+        return
+
+    handler.startElement(name, {})
+    _write_cdata(handler, value)
+    handler.endElement(name)
+
+
 def is_feed_active_for_user(feed_id: int, user: User) -> bool:
     """Check if the feed is within the user's allowance based on subscription date."""
     if user.role == "admin":
@@ -312,15 +334,30 @@ number_of_episodes_to_whitelist_from_archive_of_new_feed setting: {entry.title}"
             new_posts.append(post_data)
             continue
 
+        post_update: dict[str, Any] = {"post_id": existing_post.id}
+
+        updated_title = str(getattr(entry, "title", "") or "").strip()
+        if updated_title and existing_post.title != updated_title:
+            post_update["title"] = updated_title
+
+        updated_description = _extract_post_description(entry)
+        if existing_post.description != updated_description:
+            post_update["description"] = updated_description
+
+        updated_image_url = _extract_episode_image_url(entry, feed)
+        if existing_post.image_url != updated_image_url:
+            post_update["image_url"] = updated_image_url
+
         parsed_duration = get_duration(entry)
         if (
             existing_post.processed_audio_path is None
             and parsed_duration is not None
             and existing_post.duration != parsed_duration
         ):
-            existing_post_updates.append(
-                {"post_id": existing_post.id, "duration": parsed_duration}
-            )
+            post_update["duration"] = parsed_duration
+
+        if len(post_update) > 1:
+            existing_post_updates.append(post_update)
 
     if updates or new_posts or existing_post_updates:
         writer_client.action(
@@ -333,6 +370,9 @@ number_of_episodes_to_whitelist_from_archive_of_new_feed setting: {entry.title}"
             },
             wait=True,
         )
+        # Refreshes are written through the separate writer service, so expire the
+        # current request session before serializing the feed response.
+        db.session.expire_all()
 
     logger.info(f"Feed with ID: {feed.id} refreshed")
 
@@ -446,7 +486,41 @@ class ItunesRSSItem(PyRSS2Gen.RSSItem):
             handler.startElement("itunes:duration", {})
             handler.characters(_format_itunes_duration(self.duration_seconds))
             handler.endElement("itunes:duration")
+        _publish_cdata_opt_element(handler, "content:encoded", self.description)
         super().publish_extensions(handler)
+
+    def publish(self, handler: Any) -> None:
+        # PyRSS2Gen escapes item descriptions with handler.characters(), which
+        # flattens rich HTML from source feeds and the appended Podly chapters.
+        handler.startElement("item", self.element_attrs)
+        PyRSS2Gen._opt_element(handler, "title", self.title)
+        PyRSS2Gen._opt_element(handler, "link", self.link)
+        self.publish_extensions(handler)
+        _publish_cdata_opt_element(handler, "description", self.description)
+        PyRSS2Gen._opt_element(handler, "author", self.author)
+
+        for item_category in self.categories:
+            category = (
+                PyRSS2Gen.Category(item_category)
+                if isinstance(item_category, str)
+                else item_category
+            )
+            category.publish(handler)
+
+        PyRSS2Gen._opt_element(handler, "comments", self.comments)
+        if self.enclosure is not None:
+            self.enclosure.publish(handler)
+        PyRSS2Gen._opt_element(handler, "guid", self.guid)
+
+        pub_date = self.pubDate
+        if isinstance(pub_date, datetime.datetime):
+            pub_date = PyRSS2Gen.DateElement("pubDate", pub_date)
+        PyRSS2Gen._opt_element(handler, "pubDate", pub_date)
+
+        if self.source is not None:
+            self.source.publish(handler)
+
+        handler.endElement("item")
 
 
 def _feed_item_duration_seconds(post: Post) -> int | None:
@@ -639,8 +713,11 @@ def _append_feed_token_params(url: str) -> str:
     return urlunparse(parsed._replace(query=new_query))
 
 
-def make_post(feed: Feed, entry: feedparser.FeedParserDict) -> Post:
-    # Extract episode image URL, fallback to feed image
+def _extract_episode_image_url(
+    entry: feedparser.FeedParserDict,
+    feed: Feed,
+) -> str | None:
+    """Prefer episode-level artwork when the source feed exposes it."""
     episode_image_url = None
 
     # Try to get episode-specific image from various RSS fields
@@ -666,24 +743,41 @@ def make_post(feed: Feed, entry: feedparser.FeedParserDict) -> Post:
     if not episode_image_url:
         episode_image_url = feed.image_url
 
-    # Try multiple description fields in order of preference
-    description = entry.get("description", "")
-    if not description:
-        description = entry.get("summary", "")
-    if not description and hasattr(entry, "content") and entry.content:
-        description = entry.content[0].get("value", "")
-    if not description:
-        description = entry.get("subtitle", "")
+    return episode_image_url
 
+
+def _extract_post_description(entry: feedparser.FeedParserDict) -> str:
+    """Prefer rich HTML payloads when a source feed exposes them."""
+    content_items = getattr(entry, "content", None) or []
+    for content in content_items:
+        value = str(content.get("value", "") or "").strip()
+        content_type = str(content.get("type", "") or "").strip().lower()
+        if value and content_type in {"text/html", "application/xhtml+xml"}:
+            return value
+
+    for field in ("description", "summary"):
+        value = str(entry.get(field, "") or "").strip()
+        if value:
+            return value
+
+    for content in content_items:
+        value = str(content.get("value", "") or "").strip()
+        if value:
+            return value
+
+    return str(entry.get("subtitle", "") or "").strip()
+
+
+def make_post(feed: Feed, entry: feedparser.FeedParserDict) -> Post:
     return Post(
         feed_id=feed.id,
         guid=get_guid(entry),
         download_url=find_audio_link(entry),
         title=entry.title,
-        description=description,
+        description=_extract_post_description(entry),
         release_date=_parse_release_date(entry),
         duration=get_duration(entry),
-        image_url=episode_image_url,
+        image_url=_extract_episode_image_url(entry, feed),
     )
 
 

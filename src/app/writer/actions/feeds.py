@@ -69,8 +69,14 @@ def refresh_feed_action(params: dict[str, Any]) -> dict[str, Any]:
         if not post or post.feed_id != feed.id:
             continue
 
-        if "duration" in post_update:
-            post.duration = post_update["duration"]
+        updated = False
+        for field_name in ("title", "description", "image_url", "duration"):
+            if field_name not in post_update:
+                continue
+            setattr(post, field_name, post_update[field_name])
+            updated = True
+
+        if updated:
             updated_posts_count += 1
 
     recalculate_run_counts(db.session)

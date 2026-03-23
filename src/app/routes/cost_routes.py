@@ -12,6 +12,7 @@ import flask
 from flask import Blueprint, jsonify, request
 
 from app.auth.guards import require_admin
+from app.config_store import read_combined
 from app.extensions import db
 from app.models import Feed, ModelCall, Post, ProcessingJob, User, UserFeed
 from app.writer.client import writer_client
@@ -19,8 +20,6 @@ from app.writer.client import writer_client
 logger = logging.getLogger("global_logger")
 
 costs_bp = Blueprint("costs", __name__)
-
-from app.config_store import read_combined
 
 
 def _compute_cost_per_subscriber(
