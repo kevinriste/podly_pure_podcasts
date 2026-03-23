@@ -18,6 +18,7 @@ from app.models import (
     WhisperSettings,
 )
 from shared import defaults as DEFAULTS
+from shared.config import GroqWhisperConfig, RemoteWhisperConfig
 
 
 def _create_default_settings() -> None:
@@ -373,14 +374,18 @@ class TestWhisperRuntimeOverlay:
             from app.config_store import hydrate_runtime_config_inplace
             from app.runtime_config import config as runtime_config
 
-            _create_default_settings()
-            hydrate_runtime_config_inplace()
+            original_whisper = runtime_config.whisper
+            try:
+                _create_default_settings()
+                hydrate_runtime_config_inplace()
 
-            assert runtime_config.whisper is not None
-            assert runtime_config.whisper.whisper_type == "remote"
-            assert runtime_config.whisper.api_key == "env-remote-key"
-            assert runtime_config.whisper.timeout_sec == 120
-            assert runtime_config.whisper.chunksize_mb == 48
+                assert isinstance(runtime_config.whisper, RemoteWhisperConfig)
+                assert runtime_config.whisper.whisper_type == "remote"
+                assert runtime_config.whisper.api_key == "env-remote-key"
+                assert runtime_config.whisper.timeout_sec == 120
+                assert runtime_config.whisper.chunksize_mb == 48
+            finally:
+                runtime_config.whisper = original_whisper
 
     def test_groq_whisper_env_overlay(self, app: Any, monkeypatch: Any) -> None:
         """Verify groq whisper env vars are overlaid on runtime config."""
@@ -393,11 +398,15 @@ class TestWhisperRuntimeOverlay:
             from app.config_store import hydrate_runtime_config_inplace
             from app.runtime_config import config as runtime_config
 
-            _create_default_settings()
-            hydrate_runtime_config_inplace()
+            original_whisper = runtime_config.whisper
+            try:
+                _create_default_settings()
+                hydrate_runtime_config_inplace()
 
-            assert runtime_config.whisper is not None
-            assert runtime_config.whisper.whisper_type == "groq"
-            assert runtime_config.whisper.api_key == "env-groq-key"
-            assert runtime_config.whisper.model == "custom-model"
-            assert runtime_config.whisper.max_retries == 5
+                assert isinstance(runtime_config.whisper, GroqWhisperConfig)
+                assert runtime_config.whisper.whisper_type == "groq"
+                assert runtime_config.whisper.api_key == "env-groq-key"
+                assert runtime_config.whisper.model == "custom-model"
+                assert runtime_config.whisper.max_retries == 5
+            finally:
+                runtime_config.whisper = original_whisper
