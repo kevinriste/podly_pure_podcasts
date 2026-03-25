@@ -22,8 +22,8 @@ export default function ProcessingStatsButton({
     adDetectionStrategy === 'chapter' ||
     adDetectionStrategy === 'chapter_insert'
   ) {
-    return <ChapterProcessingStats episodeGuid={episodeGuid} hasProcessedAudio={hasProcessedAudio} className={className} />;
+    return <ChapterProcessingStats episodeGuid={episodeGuid} isStatsReady={hasProcessedAudio} className={className} />;
   }
 
-  return <LLMProcessingStats episodeGuid={episodeGuid} hasProcessedAudio={hasProcessedAudio} className={className} />;
+  return <LLMProcessingStats episodeGuid={episodeGuid} isStatsReady={hasProcessedAudio} className={className} />;
 }

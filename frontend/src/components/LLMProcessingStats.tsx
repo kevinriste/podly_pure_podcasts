@@ -67,6 +67,27 @@ export default function LLMProcessingStats({
     setExpandedModelCalls(newExpanded);
   };
 
+  const formatConfidence = (value: number | null | undefined) => {
+    if (value === null || value === undefined) return 'N/A';
+    return value.toFixed(2);
+  };
+
+  const getTranscriptSegmentConfidence = (
+    segment: {
+      primary_label: 'ad' | 'content';
+      identifications: Array<{ label: string; confidence: number | null }>;
+    }
+  ): number | null => {
+    const adConfidences = segment.identifications
+      .filter(i => i.label === 'ad' && i.confidence !== null && i.confidence !== undefined)
+      .map(i => i.confidence as number);
+    if (segment.primary_label === 'ad' && adConfidences.length > 0) return Math.max(...adConfidences);
+    const allConfidences = segment.identifications
+      .filter(i => i.confidence !== null && i.confidence !== undefined)
+      .map(i => i.confidence as number);
+    if (allConfidences.length === 0) return null;
+    return Math.max(...allConfidences);
+  };
 
   if (!isStatsReady) {
     return null;

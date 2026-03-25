@@ -1180,9 +1180,7 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
 
                           <ProcessingStatsButton
                             episodeGuid={episode.guid}
-                            isWhitelisted={episode.whitelisted}
                             hasProcessedAudio={episode.has_processed_audio}
-                            feedId={currentFeed.id}
                           />
                         </div>
 
