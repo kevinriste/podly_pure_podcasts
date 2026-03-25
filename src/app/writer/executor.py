@@ -190,7 +190,6 @@ class CommandExecutor:
                         )
                         db.session.rollback()
                     db.session.expire_all()
-                    db.session.expire_all()
                     return result
 
                 # Single operation
@@ -210,7 +209,6 @@ class CommandExecutor:
                     logger.info("[WRITER] Rolling back single command id=%s", cmd.id)
                     db.session.rollback()
                 db.session.expire_all()
-                db.session.expire_all()
                 return result
 
             except Exception as e:
@@ -221,7 +219,6 @@ class CommandExecutor:
                     exc_info=True,
                 )
                 db.session.rollback()
-                db.session.expire_all()
                 db.session.expire_all()
                 return WriteResult(cmd.id, False, error=str(e))
 
