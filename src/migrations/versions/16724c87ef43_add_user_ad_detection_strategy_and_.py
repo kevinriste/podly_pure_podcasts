@@ -1,7 +1,7 @@
 """Add user ad_detection_strategy and oneshot_model columns
 
 Revision ID: 16724c87ef43
-Revises: a1b2c3d4e5f6
+Revises: 3e5eebc6b3b1
 Create Date: 2026-02-13 07:32:21.580865
 
 """
@@ -11,7 +11,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "16724c87ef43"
-down_revision = "a1b2c3d4e5f6"
+down_revision = "3e5eebc6b3b1"
 branch_labels = None
 depends_on = None
 
