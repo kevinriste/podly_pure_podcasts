@@ -2,6 +2,7 @@ import datetime
 import html
 import json
 import logging
+import re
 import uuid
 from collections.abc import Iterable
 from email.utils import format_datetime, parsedate_to_datetime
@@ -20,6 +21,20 @@ from podcast_processor.audio import get_audio_duration_ms
 from podcast_processor.podcast_downloader import find_audio_link
 
 logger = logging.getLogger("global_logger")
+
+_FORWARDED_PROTO_RE = re.compile(
+    r"(?:^|[;,])\s*proto=(\"?)(https?|[A-Za-z]+)\1", re.IGNORECASE
+)
+_FEED_TEXT_NORMALIZE_TABLE = str.maketrans(
+    {
+        "\u00a0": " ",
+        "\u200b": "",
+        "\u200c": "",
+        "\u200d": "",
+        "\u2060": "",
+        "\ufeff": "",
+    }
+)
 
 
 def _format_itunes_duration(duration_seconds: int) -> str:
@@ -134,11 +149,17 @@ def _render_podly_chapters_html(post: Post) -> str:
     return f"<p><strong>Podly Chapters</strong></p><ul>{items}</ul>"
 
 
+def _normalize_feed_text(value: str | None) -> str:
+    if not value:
+        return ""
+    return value.translate(_FEED_TEXT_NORMALIZE_TABLE)
+
+
 def build_post_feed_description_html(post: Post) -> str:
     """Build the description shown in Podly-generated RSS items for a post."""
     description_parts: list[str] = []
     if post.description:
-        description_parts.append(post.description)
+        description_parts.append(_normalize_feed_text(post.description))
 
     chapters_html = _render_podly_chapters_html(post)
     if chapters_html:
@@ -235,6 +256,13 @@ def _should_auto_whitelist_new_posts(feed: Feed, post: Post | None = None) -> bo
 
 def _get_base_url() -> str:
     try:
+
+        def _normalize_proto(value: Any) -> str | None:
+            if value is None:
+                return None
+            first = str(value).split(",")[0].strip().strip('"').lower()
+            return first if first in {"http", "https"} else None
+
         # Check various ways HTTP/2 pseudo-headers might be available
         http2_scheme = (
             request.headers.get(":scheme")
@@ -253,16 +281,45 @@ def _get_base_url() -> str:
 
         # Fall back to Host header with scheme detection
         if host:
+            forwarded_proto = None
+            for header_name in (
+                "X-Forwarded-Proto",
+                "X-Forwarded-Protocol",
+                "X-Forwarded-Scheme",
+                "X-Url-Scheme",
+            ):
+                forwarded_proto = _normalize_proto(request.headers.get(header_name))
+                if forwarded_proto:
+                    break
+
+            if not forwarded_proto:
+                forwarded = request.headers.get("Forwarded")
+                if forwarded:
+                    match = _FORWARDED_PROTO_RE.search(forwarded)
+                    if match:
+                        forwarded_proto = _normalize_proto(match.group(2))
+
+            if not forwarded_proto:
+                cf_visitor = request.headers.get("CF-Visitor")
+                if cf_visitor:
+                    try:
+                        forwarded_proto = _normalize_proto(
+                            json.loads(cf_visitor).get("scheme")
+                        )
+                    except Exception:  # noqa: BLE001
+                        forwarded_proto = None
+
             # Check multiple indicators for HTTPS
-            is_https = (
+            is_https = forwarded_proto == "https" or (
                 request.is_secure
-                or request.headers.get("X-Forwarded-Proto") == "https"
                 or request.headers.get("Strict-Transport-Security") is not None
                 or request.headers.get("X-Forwarded-Ssl") == "on"
+                or request.headers.get("Front-End-Https") == "on"
+                or request.headers.get("X-Forwarded-Port") == "443"
                 or request.environ.get("HTTPS") == "on"
                 or request.scheme == "https"
             )
-            scheme = "https" if is_https else "http"
+            scheme = forwarded_proto or ("https" if is_https else "http")
             return f"{scheme}://{host}"
     except RuntimeError:
         # Working outside of request context
@@ -602,7 +659,7 @@ def generate_feed_xml(feed: Feed) -> Any:
     rss_feed = PyRSS2Gen.RSS2(
         title="[podly] " + feed.title,
         link=link,
-        description=feed.description,
+        description=_normalize_feed_text(feed.description),
         lastBuildDate=last_build_date,
         image=PyRSS2Gen.Image(url=feed.image_url, title=feed.title, link=link),
         items=items,

@@ -3,7 +3,7 @@ import secrets
 from pathlib import Path
 from threading import Thread
 from typing import Any, cast
-from urllib.parse import urlencode, urlparse, urlunparse
+from urllib.parse import urlencode
 
 import requests
 import validators
@@ -27,6 +27,7 @@ from app.auth.guards import require_admin
 from app.auth.service import update_user_last_active
 from app.extensions import db
 from app.feeds import (
+    _get_base_url,
     add_or_refresh_feed,
     generate_aggregate_feed_xml,
     generate_feed_xml,
@@ -239,12 +240,10 @@ def create_feed_share_link(feed_id: int) -> ResponseReturnValue:
     token_id = str(result.data["token_id"])
     secret = str(result.data["secret"])
 
-    parsed = urlparse(request.host_url)
-    netloc = parsed.netloc
-    scheme = parsed.scheme
+    base_url = _get_base_url()
     path = f"/feed/{feed.id}"
     query = urlencode({"feed_token": token_id, "feed_secret": secret})
-    prefilled_url = urlunparse((scheme, netloc, path, "", query, ""))
+    prefilled_url = f"{base_url}{path}?{query}"
 
     return (
         jsonify(
@@ -747,42 +746,9 @@ def get_aggregate_feed_redirect() -> ResponseReturnValue:
 def create_aggregate_feed_link() -> ResponseReturnValue:
     """Generate a unique RSS link for the current user's aggregate feed."""
     settings = current_app.config.get("AUTH_SETTINGS")
-
-    user = None
-    if not settings or not settings.require_auth:
-        # Auth disabled: Use admin user or first available user
-        user = User.query.filter_by(role="admin").first()
-        if not user:
-            user = User.query.first()
-
-        if not user:
-            # Create a default admin user if none exists
-            default_username = "admin"
-            default_password = secrets.token_urlsafe(16)
-
-            result = writer_client.action(
-                "create_user",
-                {
-                    "username": default_username,
-                    "password": default_password,
-                    "role": "admin",
-                },
-                wait=True,
-            )
-            if result and result.success and isinstance(result.data, dict):
-                user_id = result.data.get("user_id")
-                if user_id:
-                    user = db.session.get(User, user_id)
-
-            if not user:
-                return (
-                    jsonify({"error": "No user found and failed to create one."}),
-                    500,
-                )
-    else:
-        user, error = _require_user_or_error()
-        if error:
-            return error
+    user, error = _resolve_aggregate_link_user_or_error(settings)
+    if error:
+        return error
 
     if user is None:
         return jsonify({"error": "Authentication required."}), 401
@@ -799,9 +765,7 @@ def create_aggregate_feed_link() -> ResponseReturnValue:
     token_id = str(result.data["token_id"])
     secret = str(result.data["secret"])
 
-    parsed = urlparse(request.host_url)
-    netloc = parsed.netloc
-    scheme = parsed.scheme
+    base_url = _get_base_url()
     path = f"/feed/user/{user.id}"
 
     # If auth is disabled, we don't strictly need the token params,
@@ -813,7 +777,9 @@ def create_aggregate_feed_link() -> ResponseReturnValue:
     else:
         query = ""
 
-    full_url = urlunparse((scheme, netloc, path, "", query, ""))
+    full_url = f"{base_url}{path}"
+    if query:
+        full_url = f"{full_url}?{query}"
 
     return (
         jsonify(
@@ -825,6 +791,44 @@ def create_aggregate_feed_link() -> ResponseReturnValue:
         ),
         201,
     )
+
+
+def _resolve_aggregate_link_user_or_error(
+    settings: Any,
+) -> tuple[User | None, ResponseReturnValue | None]:
+    if settings and settings.require_auth:
+        return _require_user_or_error()
+    return _get_or_create_default_aggregate_user()
+
+
+def _get_or_create_default_aggregate_user() -> tuple[
+    User | None, ResponseReturnValue | None
+]:
+    user = User.query.filter_by(role="admin").first() or User.query.first()
+    if user is not None:
+        return user, None
+
+    result = writer_client.action(
+        "create_user",
+        {
+            "username": "admin",
+            "password": secrets.token_urlsafe(16),
+            "role": "admin",
+        },
+        wait=True,
+    )
+    if result and result.success and isinstance(result.data, dict):
+        user_id = result.data.get("user_id")
+        if user_id:
+            user = db.session.get(User, user_id)
+
+    if user is None:
+        return None, (
+            jsonify({"error": "No user found and failed to create one."}),
+            500,
+        )
+
+    return user, None
 
 
 def _require_user_or_error(

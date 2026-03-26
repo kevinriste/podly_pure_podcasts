@@ -775,6 +775,44 @@ def test_feed_item_serializes_rich_description_and_content_encoded(mock_post, ap
     assert "&lt;p&gt;&lt;strong&gt;Podly Chapters&lt;/strong&gt;&lt;/p&gt;" not in xml
 
 
+def test_feed_item_normalizes_problematic_source_whitespace(mock_post, app):
+    mock_post.description = (
+        '<p><a href="https://example.com">Link</a>\u00a0after\u2060joiner</p>'
+    )
+
+    headers_dict = {"Host": "podly.com:5001"}
+    mock_headers = mock.MagicMock()
+    mock_headers.get.side_effect = headers_dict.get
+
+    mock_environ = mock.MagicMock()
+    mock_environ.get.return_value = None
+
+    mock_request = mock.MagicMock()
+    mock_request.headers = mock_headers
+    mock_request.environ = mock_environ
+    mock_request.is_secure = False
+
+    with app.app_context(), mock.patch("app.feeds.request", mock_request):
+        item = feed_item(mock_post)
+
+    rss = PyRSS2Gen.RSS2(
+        title="Test Feed",
+        link="http://podly.com:5001/feed/1",
+        description="Test feed",
+        items=[item],
+    )
+    rss.rss_attrs["xmlns:itunes"] = "http://www.itunes.com/dtds/podcast-1.0.dtd"
+    rss.rss_attrs["xmlns:content"] = "http://purl.org/rss/1.0/modules/content/"
+
+    xml = rss.to_xml("utf-8")
+    if isinstance(xml, bytes):
+        xml = xml.decode("utf-8")
+
+    assert "\u00a0" not in xml
+    assert "\u2060" not in xml
+    assert ">Link</a> afterjoiner</p>" in xml
+
+
 def test_feed_item_falls_back_to_processed_audio_duration(mock_post, app):
     mock_post.duration = None
     mock_post.processed_audio_path = "/tmp/test-output.mp3"
@@ -1261,6 +1299,54 @@ def test_get_base_url_with_strict_transport_security():
 
     # Should use HTTPS because of Strict-Transport-Security header
     assert result == "https://secure.example.com"
+
+
+def test_get_base_url_with_forwarded_proto_header():
+    headers_dict = {
+        "Host": "forwarded.example.com",
+        "Forwarded": "for=203.0.113.43;proto=https;host=forwarded.example.com",
+    }
+
+    mock_headers = mock.MagicMock()
+    mock_headers.get.side_effect = headers_dict.get
+
+    mock_environ = mock.MagicMock()
+    mock_environ.get.return_value = None
+
+    mock_request = mock.MagicMock()
+    mock_request.headers = mock_headers
+    mock_request.environ = mock_environ
+    mock_request.is_secure = False
+    mock_request.scheme = "http"
+
+    with mock.patch("app.feeds.request", mock_request):
+        result = _get_base_url()
+
+    assert result == "https://forwarded.example.com"
+
+
+def test_get_base_url_with_cf_visitor_header():
+    headers_dict = {
+        "Host": "podly.riste.cloud",
+        "CF-Visitor": '{"scheme":"https"}',
+    }
+
+    mock_headers = mock.MagicMock()
+    mock_headers.get.side_effect = headers_dict.get
+
+    mock_environ = mock.MagicMock()
+    mock_environ.get.return_value = None
+
+    mock_request = mock.MagicMock()
+    mock_request.headers = mock_headers
+    mock_request.environ = mock_environ
+    mock_request.is_secure = False
+    mock_request.scheme = "http"
+
+    with mock.patch("app.feeds.request", mock_request):
+        result = _get_base_url()
+
+    assert result == "https://podly.riste.cloud"
 
 
 def test_get_base_url_fallback_http_without_sts():
