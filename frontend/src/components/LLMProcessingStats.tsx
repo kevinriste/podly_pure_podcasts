@@ -163,25 +163,25 @@ export default function LLMProcessingStats({
                       <div>
                         <h3 className="font-semibold text-gray-900 mb-4 text-left">Key Metrics</h3>
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                          <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 text-center">
-                            <div className="text-2xl font-bold text-blue-600">
+                          <div className="rounded-lg border border-transparent bg-gradient-to-br from-blue-50 to-blue-100 p-4 text-center dark:border-blue-800/70 dark:from-blue-950 dark:to-slate-900">
+                            <div className="text-2xl font-bold text-blue-600 dark:text-blue-200">
                               {stats.processing_stats?.total_segments || 0}
                             </div>
-                            <div className="text-sm text-blue-800">Transcript Segments</div>
+                            <div className="text-sm text-blue-800 dark:text-blue-100">Transcript Segments</div>
                           </div>
 
-                          <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-4 text-center">
-                            <div className="text-2xl font-bold text-green-600">
+                          <div className="rounded-lg border border-transparent bg-gradient-to-br from-green-50 to-green-100 p-4 text-center dark:border-green-800/70 dark:from-green-950 dark:to-slate-900">
+                            <div className="text-2xl font-bold text-green-600 dark:text-green-200">
                               {stats.processing_stats?.content_segments || 0}
                             </div>
-                            <div className="text-sm text-green-800">Content Segments</div>
+                            <div className="text-sm text-green-800 dark:text-green-100">Content Segments</div>
                           </div>
 
-                          <div className="bg-gradient-to-br from-red-50 to-red-100 rounded-lg p-4 text-center">
-                            <div className="text-2xl font-bold text-red-600">
+                          <div className="rounded-lg border border-transparent bg-gradient-to-br from-red-50 to-red-100 p-4 text-center dark:border-red-800/70 dark:from-red-950 dark:to-slate-900">
+                            <div className="text-2xl font-bold text-red-600 dark:text-red-200">
                               {stats.processing_stats?.ad_segments_count || 0}
                             </div>
-                            <div className="text-sm text-red-800">Ad Segments Removed</div>
+                            <div className="text-sm text-red-800 dark:text-red-100">Ad Segments Removed</div>
                           </div>
                         </div>
                       </div>

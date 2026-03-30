@@ -15,6 +15,8 @@ import AudioPlayer from './components/AudioPlayer';
 import { billingApi } from './services/api';
 import { DiagnosticsProvider, useDiagnostics } from './contexts/DiagnosticsContext';
 import DiagnosticsModal from './components/DiagnosticsModal';
+import ThemeToggle from './components/ThemeToggle';
+import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import './App.css';
 
 const queryClient = new QueryClient({
@@ -32,6 +34,7 @@ const queryClient = new QueryClient({
 function AppShell() {
   const { status, requireAuth, isAuthenticated, user, logout, landingPageEnabled } = useAuth();
   const { open: openDiagnostics } = useDiagnostics();
+  const { isDark } = useTheme();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const mobileMenuRef = useRef<HTMLDivElement>(null);
   const location = useLocation();
@@ -139,6 +142,7 @@ function AppShell() {
               >
                 Report issue
               </button>
+              <ThemeToggle />
               {requireAuth && user && (
                 <div className="flex items-center gap-3 text-sm text-gray-600 flex-shrink-0">
                   {billingSummary && !isAdmin && (
@@ -186,6 +190,8 @@ function AppShell() {
                   </Link>
                 </>
               )}
+
+              <ThemeToggle />
 
               {/* Hamburger Button */}
               <div className="relative" ref={mobileMenuRef}>
@@ -286,7 +292,23 @@ function AppShell() {
 
       <AudioPlayer />
       <DiagnosticsModal />
-      <Toaster position="top-center" toastOptions={{ duration: 3000 }} />
+      <Toaster
+        position="top-center"
+        toastOptions={{
+          duration: 3000,
+          style: isDark
+            ? {
+                background: '#0f172a',
+                color: '#e2e8f0',
+                border: '1px solid #334155',
+              }
+            : {
+                background: '#ffffff',
+                color: '#111827',
+                border: '1px solid #e5e7eb',
+              },
+        }}
+      />
     </div>
   );
 }
@@ -294,15 +316,17 @@ function AppShell() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <AudioPlayerProvider>
-          <DiagnosticsProvider>
-            <Router>
-              <AppShell />
-            </Router>
-          </DiagnosticsProvider>
-        </AudioPlayerProvider>
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <AudioPlayerProvider>
+            <DiagnosticsProvider>
+              <Router>
+                <AppShell />
+              </Router>
+            </DiagnosticsProvider>
+          </AudioPlayerProvider>
+        </AuthProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }

@@ -142,27 +142,27 @@ export default function ChapterProcessingStats({
                       <div>
                         <h3 className="font-semibold text-gray-900 mb-4 text-left">Key Metrics</h3>
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                          <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg p-4 text-center">
-                            <div className="text-2xl font-bold text-purple-600">
+                          <div className="rounded-lg border border-transparent bg-gradient-to-br from-purple-50 to-purple-100 p-4 text-center dark:border-purple-800/70 dark:from-purple-950 dark:to-slate-900">
+                            <div className="text-2xl font-bold text-purple-600 dark:text-purple-200">
                               {stats.chapters?.total_chapters || 0}
                             </div>
-                            <div className="text-sm text-purple-800">Total Chapters</div>
+                            <div className="text-sm text-purple-800 dark:text-purple-100">Total Chapters</div>
                           </div>
 
-                          <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-4 text-center">
-                            <div className="text-2xl font-bold text-green-600">
+                          <div className="rounded-lg border border-transparent bg-gradient-to-br from-green-50 to-green-100 p-4 text-center dark:border-green-800/70 dark:from-green-950 dark:to-slate-900">
+                            <div className="text-2xl font-bold text-green-600 dark:text-green-200">
                               {stats.chapters?.chapters_kept || 0}
                             </div>
-                            <div className="text-sm text-green-800">
+                            <div className="text-sm text-green-800 dark:text-green-100">
                               {isChapterInsert ? 'Chapters Inserted' : 'Chapters Kept'}
                             </div>
                           </div>
 
-                          <div className="bg-gradient-to-br from-red-50 to-red-100 rounded-lg p-4 text-center">
-                            <div className="text-2xl font-bold text-red-600">
+                          <div className="rounded-lg border border-transparent bg-gradient-to-br from-red-50 to-red-100 p-4 text-center dark:border-red-800/70 dark:from-red-950 dark:to-slate-900">
+                            <div className="text-2xl font-bold text-red-600 dark:text-red-200">
                               {stats.chapters?.chapters_removed || 0}
                             </div>
-                            <div className="text-sm text-red-800">
+                            <div className="text-sm text-red-800 dark:text-red-100">
                               {isChapterInsert ? 'Chapters Removed (N/A)' : 'Chapters Removed'}
                             </div>
                           </div>

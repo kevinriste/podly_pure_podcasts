@@ -5,6 +5,44 @@
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Podly</title>
+    <script>
+      (() => {
+        const storageKey = 'podly-theme';
+
+        try {
+          const storedPreference = window.localStorage.getItem(storageKey);
+          const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          const resolvedTheme =
+            storedPreference === 'light' || storedPreference === 'dark'
+              ? storedPreference
+              : prefersDark
+                ? 'dark'
+                : 'light';
+          const preference =
+            storedPreference === 'system' || storedPreference === 'light' || storedPreference === 'dark'
+              ? storedPreference
+              : 'system';
+
+          if (resolvedTheme === 'dark') {
+            document.documentElement.classList.add('dark');
+          }
+
+          document.documentElement.style.colorScheme = resolvedTheme;
+          document.documentElement.dataset.themePreference = preference;
+        } catch (_error) {
+          const fallbackTheme = window.matchMedia('(prefers-color-scheme: dark)').matches
+            ? 'dark'
+            : 'light';
+
+          if (fallbackTheme === 'dark') {
+            document.documentElement.classList.add('dark');
+          }
+
+          document.documentElement.style.colorScheme = fallbackTheme;
+          document.documentElement.dataset.themePreference = 'system';
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
