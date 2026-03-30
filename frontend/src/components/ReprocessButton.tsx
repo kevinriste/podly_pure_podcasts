@@ -91,6 +91,9 @@ export default function ReprocessButton({
   const confirmButtonLabel = isKeepTranscriptMode
     ? 'Reprocess (Keep Transcript)'
     : 'Reprocess Episode';
+  const keepTranscriptButtonTitle = isReprocessing && activeMode === 'keep-transcript'
+    ? 'Reprocessing from transcript stage...'
+    : 'Reprocess while preserving the existing transcript and restarting after transcription';
 
   return (
     <div className={`${className}`}>
@@ -120,15 +123,19 @@ export default function ReprocessButton({
               ? 'bg-gray-500 text-white cursor-wait border-gray-500'
               : 'bg-white text-blue-700 border-blue-300 hover:bg-blue-50 hover:border-blue-400'
           }`}
-          title={
-            isReprocessing && activeMode === 'keep-transcript'
-              ? 'Reprocessing from transcript stage...'
-              : 'Reprocess while preserving the existing transcript and restarting after transcription'
-          }
+          title={keepTranscriptButtonTitle}
         >
-          {isReprocessing && activeMode === 'keep-transcript'
-            ? '⏳ Reprocessing (Transcript)...'
-            : 'Reprocess (Keep Transcript)'}
+          {isReprocessing && activeMode === 'keep-transcript' ? (
+            <>
+              <span className="sm:hidden">⏳ Reusing...</span>
+              <span className="hidden sm:inline">⏳ Reprocessing (Transcript)...</span>
+            </>
+          ) : (
+            <>
+              <span className="sm:hidden">Reuse Transcript</span>
+              <span className="hidden sm:inline">Reprocess (Keep Transcript)</span>
+            </>
+          )}
         </button>
       </div>
 
