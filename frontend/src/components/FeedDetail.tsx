@@ -617,7 +617,7 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
   };
 
   return (
-    <div className="h-full flex flex-col bg-white relative">
+    <div className="h-full flex flex-col bg-white relative dark:bg-slate-950/40">
       {/* Mobile Header */}
       <div className="flex items-center justify-between p-4 border-b lg:hidden">
         <h2 className="text-lg font-semibold text-gray-900">Podcast Details</h2>
@@ -634,7 +634,7 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
       </div>
 
       {/* Sticky Header - appears when scrolling */}
-      <div className={`absolute top-16 lg:top-0 left-0 right-0 z-10 bg-white border-b transition-all duration-300 ${
+      <div className={`absolute top-16 lg:top-0 left-0 right-0 z-10 bg-white border-b dark:bg-slate-950/95 dark:border-slate-700 transition-all duration-300 ${
         showStickyHeader ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-full pointer-events-none'
       }`}>
         <div className="p-4">

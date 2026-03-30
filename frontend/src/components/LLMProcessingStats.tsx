@@ -302,6 +302,10 @@ export default function LLMProcessingStats({
                           : 0;
                         const cleanSeconds = Math.max(0, durationSeconds - adTimeSeconds);
                         const timelineTicks = [0, 0.25, 0.5, 0.75, 1];
+                        const timelineTrackClass = 'relative h-3 w-full rounded-full bg-gray-200 overflow-hidden';
+                        const timelineContentOverlayClass = 'absolute inset-0 bg-gradient-to-r from-blue-500/20 via-blue-400/15 to-blue-500/20';
+                        const timelineLegendSwatchClass = 'relative h-2.5 w-5 shrink-0 overflow-hidden rounded-full';
+                        const timelineAdSegmentClass = 'bg-rose-500/70';
 
                         return (
                           <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
@@ -339,15 +343,15 @@ export default function LLMProcessingStats({
                                 </div>
                               </div>
 
-                              <div className="relative h-3 w-full rounded-full bg-gray-200 overflow-hidden">
-                                <div className="absolute inset-0 bg-gradient-to-r from-blue-500/20 via-blue-400/15 to-blue-500/20" />
+                              <div className={timelineTrackClass}>
+                                <div className={timelineContentOverlayClass} />
                                 {durationSeconds > 0 && adBlocks.map((block, index) => {
                                   const left = Math.max(0, (block.start / durationSeconds) * 100);
                                   const width = Math.max(0.5, ((block.end - block.start) / durationSeconds) * 100);
                                   return (
                                     <div
                                       key={`${block.start}-${block.end}-${index}`}
-                                      className="absolute top-0 h-full rounded-full bg-rose-500/70"
+                                      className={`absolute top-0 h-full rounded-full ${timelineAdSegmentClass}`}
                                       style={{ left: `${left}%`, width: `${width}%` }}
                                     />
                                   );
@@ -362,11 +366,13 @@ export default function LLMProcessingStats({
 
                               <div className="flex items-center gap-4 text-xs text-gray-500">
                                 <span className="flex items-center gap-2">
-                                  <span className="h-2 w-2 rounded-full bg-blue-500" />
+                                  <span className={`${timelineLegendSwatchClass} bg-gray-200`}>
+                                    <span className={timelineContentOverlayClass} />
+                                  </span>
                                   Content
                                 </span>
                                 <span className="flex items-center gap-2">
-                                  <span className="h-2 w-2 rounded-full bg-rose-500" />
+                                  <span className={`${timelineLegendSwatchClass} ${timelineAdSegmentClass}`} />
                                   Ads removed
                                 </span>
                               </div>

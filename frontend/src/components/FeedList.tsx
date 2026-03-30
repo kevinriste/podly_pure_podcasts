@@ -64,8 +64,8 @@ export default function FeedList({ feeds, onFeedDeleted: _onFeedDeleted, onFeedS
           filteredFeeds.map((feed) => (
             <div 
               key={feed.id} 
-              className={`bg-white rounded-lg shadow border cursor-pointer transition-all hover:shadow-md group ${
-                selectedFeedId === feed.id ? 'ring-2 ring-blue-500 border-blue-200' : ''
+              className={`bg-white rounded-lg shadow border cursor-pointer transition-all hover:shadow-md group dark:bg-slate-900/45 dark:border-slate-700/80 dark:hover:border-slate-500/70 dark:hover:bg-slate-900/70 ${
+                selectedFeedId === feed.id ? 'ring-2 ring-blue-500 border-blue-200 dark:ring-1 dark:ring-blue-400/80 dark:border-blue-400/35 dark:bg-slate-900/80' : ''
               }`}
               onClick={() => onFeedSelected(feed)}
             >
