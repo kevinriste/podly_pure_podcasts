@@ -24,25 +24,24 @@ export default function ReprocessButton({
   const [isReprocessing, setIsReprocessing] = useState(false);
   const [activeMode, setActiveMode] = useState<ReprocessMode | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showModalMode, setShowModalMode] = useState<ReprocessMode | null>(null);
+  const [showModal, setShowModal] = useState(false);
+  const [keepTranscript, setKeepTranscript] = useState(true);
   const queryClient = useQueryClient();
 
-  const handleReprocessClick = async (mode: ReprocessMode) => {
+  const handleReprocessClick = () => {
     if (!isWhitelisted) {
       setError('Post must be whitelisted before reprocessing');
       return;
     }
 
-    setShowModalMode(mode);
+    setKeepTranscript(true);
+    setShowModal(true);
   };
 
   const handleConfirmReprocess = async () => {
-    const mode = showModalMode;
-    if (!mode) {
-      return;
-    }
+    const mode: ReprocessMode = keepTranscript ? 'keep-transcript' : 'full';
 
-    setShowModalMode(null);
+    setShowModal(false);
     setIsReprocessing(true);
     setActiveMode(mode);
     setError(null);
@@ -81,63 +80,35 @@ export default function ReprocessButton({
     return null;
   }
 
-  const isKeepTranscriptMode = showModalMode === 'keep-transcript';
-  const modalTitle = isKeepTranscriptMode
-    ? 'Confirm Reprocess (Keep Transcript)'
-    : 'Confirm Reprocess';
-  const modalMessage = isKeepTranscriptMode
-    ? 'Are you sure you want to reprocess this episode while keeping the existing transcript? This will delete processed outputs and restart processing after transcription (if the existing transcript is reusable).'
-    : 'Are you sure you want to reprocess this episode? This will delete the existing processed data and start fresh processing.';
-  const confirmButtonLabel = isKeepTranscriptMode
-    ? 'Reprocess (Keep Transcript)'
-    : 'Reprocess Episode';
-  const keepTranscriptButtonTitle = isReprocessing && activeMode === 'keep-transcript'
+  const buttonTitle = isReprocessing && activeMode === 'keep-transcript'
     ? 'Reprocessing from transcript stage...'
-    : 'Reprocess while preserving the existing transcript and restarting after transcription';
+    : isReprocessing
+      ? 'Clearing data and reprocessing...'
+      : 'Clear processed data and choose whether to reuse the existing transcript in the confirmation modal';
 
   return (
     <div className={`${className}`}>
-      <div className="flex flex-wrap gap-2">
-        <button
-          onClick={() => handleReprocessClick('full')}
-          disabled={isReprocessing}
-          className={`px-3 py-1 text-xs rounded font-medium transition-colors border ${
-            isReprocessing
-              ? 'bg-gray-500 text-white cursor-wait border-gray-500'
-              : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50 hover:border-gray-400 hover:text-gray-900'
-          }`}
-          title={
-            isReprocessing && activeMode === 'full'
-              ? 'Clearing data and reprocessing...'
-              : 'Clear all processing data and start fresh processing'
-          }
-        >
-          {isReprocessing && activeMode === 'full' ? '⏳ Reprocessing...' : 'Reprocess'}
-        </button>
-
-        <button
-          onClick={() => handleReprocessClick('keep-transcript')}
-          disabled={isReprocessing}
-          className={`px-3 py-1 text-xs rounded font-medium transition-colors border ${
-            isReprocessing
-              ? 'bg-gray-500 text-white cursor-wait border-gray-500'
-              : 'bg-white text-blue-700 border-blue-300 hover:bg-blue-50 hover:border-blue-400'
-          }`}
-          title={keepTranscriptButtonTitle}
-        >
-          {isReprocessing && activeMode === 'keep-transcript' ? (
-            <>
-              <span className="sm:hidden">⏳ Reusing...</span>
-              <span className="hidden sm:inline">⏳ Reprocessing (Transcript)...</span>
-            </>
-          ) : (
-            <>
-              <span className="sm:hidden">Reuse Transcript</span>
-              <span className="hidden sm:inline">Reprocess (Keep Transcript)</span>
-            </>
-          )}
-        </button>
-      </div>
+      <button
+        onClick={handleReprocessClick}
+        disabled={isReprocessing}
+        className={`px-3 py-1 text-xs rounded font-medium transition-colors border ${
+          isReprocessing
+            ? 'bg-gray-500 text-white cursor-wait border-gray-500'
+            : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50 hover:border-gray-400 hover:text-gray-900'
+        }`}
+        title={buttonTitle}
+      >
+        {isReprocessing && activeMode === 'keep-transcript' ? (
+          <>
+            <span className="sm:hidden">⏳ Reusing...</span>
+            <span className="hidden sm:inline">⏳ Reprocessing (Transcript)...</span>
+          </>
+        ) : isReprocessing ? (
+          '⏳ Reprocessing...'
+        ) : (
+          'Reprocess'
+        )}
+      </button>
 
       {error && (
         <div className="text-xs text-red-600 mt-1">
@@ -146,14 +117,14 @@ export default function ReprocessButton({
       )}
 
       {/* Confirmation Modal */}
-      {showModalMode && (
+      {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg max-w-md w-full overflow-hidden">
             {/* Header */}
             <div className="flex items-center justify-between p-6 border-b">
-              <h2 className="text-xl font-bold text-gray-900">{modalTitle}</h2>
+              <h2 className="text-xl font-bold text-gray-900">Confirm Reprocess</h2>
               <button
-                onClick={() => setShowModalMode(null)}
+                onClick={() => setShowModal(false)}
                 className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -165,13 +136,32 @@ export default function ReprocessButton({
             {/* Content */}
             <div className="p-6">
               <p className="text-gray-700 mb-6">
-                {modalMessage}
+                Are you sure you want to reprocess this episode? This will
+                delete the existing processed data and start processing again.
               </p>
+
+              <label className="flex items-start gap-3 rounded-lg border border-gray-200 bg-gray-50 p-4 mb-6">
+                <input
+                  type="checkbox"
+                  checked={keepTranscript}
+                  onChange={(event) => setKeepTranscript(event.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-gray-900">
+                    Keep existing transcript
+                  </span>
+                  <span className="block text-sm text-gray-600">
+                    Reuse the current transcript and restart after
+                    transcription, if that transcript is still reusable.
+                  </span>
+                </span>
+              </label>
 
               {/* Action Buttons */}
               <div className="flex gap-3 justify-end">
                 <button
-                  onClick={() => setShowModalMode(null)}
+                  onClick={() => setShowModal(false)}
                   className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 hover:border-gray-400 transition-colors"
                 >
                   Cancel
@@ -179,12 +169,14 @@ export default function ReprocessButton({
                 <button
                   onClick={handleConfirmReprocess}
                   className={`px-4 py-2 text-sm font-medium text-white rounded-md transition-colors ${
-                    isKeepTranscriptMode
+                    keepTranscript
                       ? 'bg-blue-600 hover:bg-blue-700'
                       : 'bg-orange-600 hover:bg-orange-700'
                   }`}
                 >
-                  {confirmButtonLabel}
+                  {keepTranscript
+                    ? 'Reprocess Episode (Keep Transcript)'
+                    : 'Reprocess Episode'}
                 </button>
               </div>
             </div>

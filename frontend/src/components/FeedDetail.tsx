@@ -1166,7 +1166,8 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
 
                     {/* Bottom Controls - only show if episode is whitelisted */}
                     {episode.whitelisted && (
-                      <div className="flex flex-wrap items-start gap-2 sm:items-center">
+                      <div className="flex items-center gap-2">
+                        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
                           <DownloadButton
                             episodeGuid={episode.guid}
                             isWhitelisted={episode.whitelisted}
@@ -1188,11 +1189,12 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
                             hasProcessedAudio={episode.has_processed_audio}
                             adDetectionStrategy={currentFeed.ad_detection_strategy}
                           />
+                        </div>
 
                         {episode.has_processed_audio && (
                           <PlayButton
                             episode={episode}
-                            className="shrink-0 sm:ml-auto"
+                            className="ml-auto shrink-0"
                           />
                         )}
                       </div>
