@@ -1,15 +1,79 @@
 import { useMemo, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import type { Feed } from '../types';
+import type { FeedSortOption } from '../utils/feedListSort';
+
+function getLatestEpisodeTimestamp(feed: Feed): number | null {
+  if (!feed.latest_episode_release_date) {
+    return null;
+  }
+
+  const timestamp = new Date(feed.latest_episode_release_date).getTime();
+  return Number.isNaN(timestamp) ? null : timestamp;
+}
+
+function compareFeedsByLatestEpisode(
+  leftFeed: Feed,
+  rightFeed: Feed,
+  direction: 'asc' | 'desc'
+): number {
+  const leftTimestamp = getLatestEpisodeTimestamp(leftFeed);
+  const rightTimestamp = getLatestEpisodeTimestamp(rightFeed);
+
+  if (leftTimestamp === null && rightTimestamp === null) {
+    return 0;
+  }
+  if (leftTimestamp === null) {
+    return 1;
+  }
+  if (rightTimestamp === null) {
+    return -1;
+  }
+
+  return direction === 'asc'
+    ? leftTimestamp - rightTimestamp
+    : rightTimestamp - leftTimestamp;
+}
+
+function compareFeedsByTitle(
+  leftFeed: Feed,
+  rightFeed: Feed,
+  direction: 'asc' | 'desc'
+): number {
+  const comparison = leftFeed.title.localeCompare(rightFeed.title, undefined, {
+    sensitivity: 'base',
+    numeric: true,
+  });
+  return direction === 'asc' ? comparison : -comparison;
+}
+
+function compareFeedsByAddedOrder(
+  leftFeed: Feed,
+  rightFeed: Feed,
+  direction: 'asc' | 'desc'
+): number {
+  // Tech debt: Feed does not expose a true created_at yet, so we use the
+  // autoincrementing id as a proxy for "feed added" ordering for now.
+  return direction === 'asc'
+    ? leftFeed.id - rightFeed.id
+    : rightFeed.id - leftFeed.id;
+}
 
 interface FeedListProps {
   feeds: Feed[];
   onFeedDeleted: () => void;
   onFeedSelected: (feed: Feed) => void;
   selectedFeedId?: number;
+  sortBy: FeedSortOption;
 }
 
-export default function FeedList({ feeds, onFeedDeleted: _onFeedDeleted, onFeedSelected, selectedFeedId }: FeedListProps) {
+export default function FeedList({
+  feeds,
+  onFeedDeleted: _onFeedDeleted,
+  onFeedSelected,
+  selectedFeedId,
+  sortBy,
+}: FeedListProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const { requireAuth, user } = useAuth();
   const showMembership = Boolean(requireAuth && user?.role === 'admin');
@@ -17,17 +81,72 @@ export default function FeedList({ feeds, onFeedDeleted: _onFeedDeleted, onFeedS
   // Ensure feeds is an array
   const feedsArray = Array.isArray(feeds) ? feeds : [];
 
-  const filteredFeeds = useMemo(() => {
+  const displayedFeeds = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
-    if (!term) {
-      return feedsArray;
-    }
-    return feedsArray.filter((feed) => {
-      const title = feed.title?.toLowerCase() ?? '';
-      const author = feed.author?.toLowerCase() ?? '';
-      return title.includes(term) || author.includes(term);
-    });
-  }, [feedsArray, searchTerm]);
+    return feedsArray
+      .map((feed, index) => ({ feed, index }))
+      .filter(({ feed }) => {
+        if (!term) {
+          return true;
+        }
+
+        const title = feed.title?.toLowerCase() ?? '';
+        const author = feed.author?.toLowerCase() ?? '';
+        return title.includes(term) || author.includes(term);
+      })
+      .sort((left, right) => {
+        let primarySort = 0;
+
+        switch (sortBy) {
+          case 'title-asc':
+            primarySort = compareFeedsByTitle(left.feed, right.feed, 'asc');
+            break;
+          case 'title-desc':
+            primarySort = compareFeedsByTitle(left.feed, right.feed, 'desc');
+            break;
+          case 'feed-added-oldest':
+            primarySort = compareFeedsByAddedOrder(
+              left.feed,
+              right.feed,
+              'asc'
+            );
+            break;
+          case 'feed-added-newest':
+            primarySort = compareFeedsByAddedOrder(
+              left.feed,
+              right.feed,
+              'desc'
+            );
+            break;
+          case 'oldest':
+            primarySort = compareFeedsByLatestEpisode(
+              left.feed,
+              right.feed,
+              'asc'
+            );
+            break;
+          default:
+            primarySort = compareFeedsByLatestEpisode(
+              left.feed,
+              right.feed,
+              'desc'
+            );
+            break;
+        }
+
+        if (primarySort !== 0) {
+          return primarySort;
+        }
+
+        const titleSort = compareFeedsByTitle(left.feed, right.feed, 'asc');
+        if (titleSort !== 0) {
+          return titleSort;
+        }
+
+        return left.index - right.index;
+      })
+      .map(({ feed }) => feed);
+  }, [feedsArray, searchTerm, sortBy]);
 
   if (feedsArray.length === 0) {
     return (
@@ -54,14 +173,14 @@ export default function FeedList({ feeds, onFeedDeleted: _onFeedDeleted, onFeedS
         />
       </div>
       <div className="space-y-2 overflow-y-auto h-full pb-20">
-        {filteredFeeds.length === 0 ? (
+        {displayedFeeds.length === 0 ? (
           <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-8 text-center">
             <p className="text-sm text-gray-500">
               No podcasts match &quot;{searchTerm}&quot;
             </p>
           </div>
         ) : (
-          filteredFeeds.map((feed) => (
+          displayedFeeds.map((feed) => (
             <div 
               key={feed.id} 
               className={`bg-white rounded-lg shadow border cursor-pointer transition-all hover:shadow-md group dark:bg-slate-900/45 dark:border-slate-700/80 dark:hover:border-slate-500/70 dark:hover:bg-slate-900/70 ${

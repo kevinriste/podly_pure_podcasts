@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -225,3 +226,63 @@ def test_share_link_prefers_https_from_forwarded_header(auth_app: Flask) -> None
     payload = share.get_json()
     assert payload is not None
     assert payload["url"].startswith("https://")
+
+
+def test_feeds_endpoint_includes_latest_episode_release_date(auth_app: Flask) -> None:
+    client = auth_app.test_client()
+    latest_release_date = datetime(2024, 2, 1, 15, 30, tzinfo=UTC)
+
+    with auth_app.app_context():
+        dated_feed = Feed(title="Dated Feed", rss_url="https://example.com/dated.xml")
+        undated_feed = Feed(
+            title="Undated Feed",
+            rss_url="https://example.com/undated.xml",
+        )
+        db.session.add_all([dated_feed, undated_feed])
+        db.session.commit()
+
+        db.session.add_all(
+            [
+                Post(
+                    feed_id=dated_feed.id,
+                    guid="dated-episode-1",
+                    download_url="https://example.com/dated-episode-1.mp3",
+                    title="Older Episode",
+                    release_date=datetime(2024, 1, 1, 12, 0, tzinfo=UTC),
+                    whitelisted=True,
+                ),
+                Post(
+                    feed_id=dated_feed.id,
+                    guid="dated-episode-2",
+                    download_url="https://example.com/dated-episode-2.mp3",
+                    title="Newest Episode",
+                    release_date=latest_release_date,
+                    whitelisted=True,
+                ),
+                Post(
+                    feed_id=undated_feed.id,
+                    guid="undated-episode-1",
+                    download_url="https://example.com/undated-episode-1.mp3",
+                    title="Undated Episode",
+                    whitelisted=True,
+                ),
+            ]
+        )
+        db.session.commit()
+
+        dated_feed_id = dated_feed.id
+        undated_feed_id = undated_feed.id
+
+    client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    response = client.get("/feeds")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload is not None
+
+    feeds_by_id = {feed["id"]: feed for feed in payload}
+    assert (
+        feeds_by_id[dated_feed_id]["latest_episode_release_date"]
+        == latest_release_date.isoformat()
+    )
+    assert feeds_by_id[undated_feed_id]["latest_episode_release_date"] is None
