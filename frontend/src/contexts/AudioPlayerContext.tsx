@@ -91,6 +91,12 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       
       audioRef.current.src = audioUrl;
       audioRef.current.load();
+
+      // Start playback immediately so the first click both opens the player and plays audio.
+      audioRef.current.play().catch((error) => {
+        dispatch({ type: 'SET_ERROR', payload: 'Failed to play audio' });
+        console.error('Audio play error:', error);
+      });
     } else {
       console.log('audioRef.current is null');
     }
@@ -279,4 +285,4 @@ export function useAudioPlayer() {
     throw new Error('useAudioPlayer must be used within an AudioPlayerProvider');
   }
   return context;
-} 
+}
