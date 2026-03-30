@@ -375,4 +375,91 @@
   html.dark [class~="text-purple-800"] {
     color: var(--podly-purple-text) !important;
   }
+
+  input.input,
+  select.input,
+  textarea.input {
+    width: 100%;
+    border-radius: 0.5rem;
+    border: 1px solid rgb(203 213 225);
+    background-color: rgb(255 255 255);
+    color: rgb(17 24 39);
+    padding: 0.625rem 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    transition:
+      border-color 150ms ease,
+      background-color 150ms ease,
+      color 150ms ease,
+      box-shadow 150ms ease;
+  }
+
+  input.input::placeholder,
+  select.input::placeholder,
+  textarea.input::placeholder {
+    color: rgb(107 114 128);
+  }
+
+  input.input:focus,
+  select.input:focus,
+  textarea.input:focus {
+    outline: none;
+    border-color: rgb(59 130 246);
+    box-shadow: 0 0 0 3px rgb(59 130 246 / 0.18);
+  }
+
+  html.dark input.input,
+  html.dark select.input,
+  html.dark textarea.input {
+    border-color: rgb(71 85 105);
+    background-color: rgb(15 23 42);
+    color: rgb(241 245 249);
+  }
+
+  html.dark input.input::placeholder,
+  html.dark select.input::placeholder,
+  html.dark textarea.input::placeholder {
+    color: rgb(148 163 184);
+  }
+
+  html.dark input.input:focus,
+  html.dark select.input:focus,
+  html.dark textarea.input:focus {
+    border-color: rgb(96 165 250);
+    box-shadow: 0 0 0 3px rgb(96 165 250 / 0.2);
+  }
+
+  input.input:disabled,
+  select.input:disabled,
+  textarea.input:disabled {
+    cursor: not-allowed;
+    border-color: rgb(203 213 225);
+    background-color: rgb(241 245 249);
+    color: rgb(71 85 105);
+    -webkit-text-fill-color: currentColor;
+    opacity: 1;
+  }
+
+  html.dark input.input:disabled,
+  html.dark select.input:disabled,
+  html.dark textarea.input:disabled {
+    border-color: rgb(71 85 105);
+    background-color: rgb(30 41 59);
+    color: rgb(203 213 225);
+    -webkit-text-fill-color: currentColor;
+    box-shadow: inset 0 0 0 1px rgb(51 65 85 / 0.75);
+    opacity: 1;
+  }
+
+  input.input:disabled::placeholder,
+  select.input:disabled::placeholder,
+  textarea.input:disabled::placeholder {
+    color: rgb(100 116 139);
+  }
+
+  html.dark input.input:disabled::placeholder,
+  html.dark select.input:disabled::placeholder,
+  html.dark textarea.input:disabled::placeholder {
+    color: rgb(148 163 184);
+  }
 }
