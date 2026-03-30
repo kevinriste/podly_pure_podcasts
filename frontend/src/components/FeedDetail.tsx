@@ -780,12 +780,19 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
                       : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                   }`}
                 >
-                  <img
+                  <svg
                     className={`w-4 h-4 ${refreshFeedMutation.isPending ? 'animate-spin' : ''}`}
-                    src="/reload-icon.svg"
-                    alt="Refresh feed"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
                     aria-hidden="true"
-                  />
+                  >
+                    <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                    <path d="M21 3v6h-6" />
+                  </svg>
                   <span>Refresh Feed</span>
                 </button>
               )}

@@ -81,6 +81,10 @@
 }
 
 @layer components {
+  html.dark [class~="border-transparent"] {
+    border-color: transparent !important;
+  }
+
   html.dark [class~="bg-white"] {
     background-color: var(--podly-surface) !important;
   }
