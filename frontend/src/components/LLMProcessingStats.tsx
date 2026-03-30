@@ -163,25 +163,25 @@ export default function LLMProcessingStats({
                       <div>
                         <h3 className="font-semibold text-gray-900 mb-4 text-left">Key Metrics</h3>
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                          <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 text-center">
-                            <div className="text-2xl font-bold text-blue-600">
+                          <div className="rounded-lg border border-transparent bg-gradient-to-br from-blue-50 to-blue-100 p-4 text-center dark:border-blue-800/70 dark:from-blue-950 dark:to-slate-900">
+                            <div className="text-2xl font-bold text-blue-600 dark:text-blue-200">
                               {stats.processing_stats?.total_segments || 0}
                             </div>
-                            <div className="text-sm text-blue-800">Transcript Segments</div>
+                            <div className="text-sm text-blue-800 dark:text-blue-100">Transcript Segments</div>
                           </div>
 
-                          <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-4 text-center">
-                            <div className="text-2xl font-bold text-green-600">
+                          <div className="rounded-lg border border-transparent bg-gradient-to-br from-green-50 to-green-100 p-4 text-center dark:border-green-800/70 dark:from-green-950 dark:to-slate-900">
+                            <div className="text-2xl font-bold text-green-600 dark:text-green-200">
                               {stats.processing_stats?.content_segments || 0}
                             </div>
-                            <div className="text-sm text-green-800">Content Segments</div>
+                            <div className="text-sm text-green-800 dark:text-green-100">Content Segments</div>
                           </div>
 
-                          <div className="bg-gradient-to-br from-red-50 to-red-100 rounded-lg p-4 text-center">
-                            <div className="text-2xl font-bold text-red-600">
+                          <div className="rounded-lg border border-transparent bg-gradient-to-br from-red-50 to-red-100 p-4 text-center dark:border-red-800/70 dark:from-red-950 dark:to-slate-900">
+                            <div className="text-2xl font-bold text-red-600 dark:text-red-200">
                               {stats.processing_stats?.ad_segments_count || 0}
                             </div>
-                            <div className="text-sm text-red-800">Ad Segments Removed</div>
+                            <div className="text-sm text-red-800 dark:text-red-100">Ad Segments Removed</div>
                           </div>
                         </div>
                       </div>
@@ -302,6 +302,10 @@ export default function LLMProcessingStats({
                           : 0;
                         const cleanSeconds = Math.max(0, durationSeconds - adTimeSeconds);
                         const timelineTicks = [0, 0.25, 0.5, 0.75, 1];
+                        const timelineTrackClass = 'relative h-3 w-full rounded-full bg-gray-200 overflow-hidden';
+                        const timelineContentOverlayClass = 'absolute inset-0 bg-gradient-to-r from-blue-500/20 via-blue-400/15 to-blue-500/20';
+                        const timelineLegendSwatchClass = 'relative h-2.5 w-5 shrink-0 overflow-hidden rounded-full';
+                        const timelineAdSegmentClass = 'bg-rose-500/70';
 
                         return (
                           <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
@@ -339,15 +343,15 @@ export default function LLMProcessingStats({
                                 </div>
                               </div>
 
-                              <div className="relative h-3 w-full rounded-full bg-gray-200 overflow-hidden">
-                                <div className="absolute inset-0 bg-gradient-to-r from-blue-500/20 via-blue-400/15 to-blue-500/20" />
+                              <div className={timelineTrackClass}>
+                                <div className={timelineContentOverlayClass} />
                                 {durationSeconds > 0 && adBlocks.map((block, index) => {
                                   const left = Math.max(0, (block.start / durationSeconds) * 100);
                                   const width = Math.max(0.5, ((block.end - block.start) / durationSeconds) * 100);
                                   return (
                                     <div
                                       key={`${block.start}-${block.end}-${index}`}
-                                      className="absolute top-0 h-full rounded-full bg-rose-500/70"
+                                      className={`absolute top-0 h-full rounded-full ${timelineAdSegmentClass}`}
                                       style={{ left: `${left}%`, width: `${width}%` }}
                                     />
                                   );
@@ -362,11 +366,13 @@ export default function LLMProcessingStats({
 
                               <div className="flex items-center gap-4 text-xs text-gray-500">
                                 <span className="flex items-center gap-2">
-                                  <span className="h-2 w-2 rounded-full bg-blue-500" />
+                                  <span className={`${timelineLegendSwatchClass} bg-gray-200`}>
+                                    <span className={timelineContentOverlayClass} />
+                                  </span>
                                   Content
                                 </span>
                                 <span className="flex items-center gap-2">
-                                  <span className="h-2 w-2 rounded-full bg-rose-500" />
+                                  <span className={`${timelineLegendSwatchClass} ${timelineAdSegmentClass}`} />
                                   Ads removed
                                 </span>
                               </div>

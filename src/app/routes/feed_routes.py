@@ -1,3 +1,4 @@
+import datetime
 import logging
 import secrets
 from pathlib import Path
@@ -851,6 +852,28 @@ def _require_user_or_error(
     return user, None
 
 
+def _latest_episode_release_date(feed: Feed) -> str | None:
+    latest_release_date: datetime.datetime | None = None
+
+    for post in cast(list[Any], getattr(feed, "posts", [])):
+        release_date = getattr(post, "release_date", None)
+        if release_date is None:
+            continue
+
+        normalized_release_date = release_date
+        if normalized_release_date.tzinfo is None:
+            normalized_release_date = normalized_release_date.replace(
+                tzinfo=datetime.UTC
+            )
+        else:
+            normalized_release_date = normalized_release_date.astimezone(datetime.UTC)
+
+        if latest_release_date is None or normalized_release_date > latest_release_date:
+            latest_release_date = normalized_release_date
+
+    return latest_release_date.isoformat() if latest_release_date else None
+
+
 def _serialize_feed(
     feed: Feed,
     *,
@@ -886,6 +909,7 @@ def _serialize_feed(
             feed, "auto_whitelist_new_episodes_override", None
         ),
         "posts_count": len(cast(list[Any], feed.posts)),
+        "latest_episode_release_date": _latest_episode_release_date(feed),
         "member_count": len(member_ids),
         "is_member": is_member,
         "is_active_subscription": is_active_subscription,
