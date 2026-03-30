@@ -2,6 +2,7 @@ import datetime
 import html
 import json
 import logging
+import re
 import uuid
 from collections.abc import Iterable
 from email.utils import format_datetime, parsedate_to_datetime
@@ -20,6 +21,20 @@ from podcast_processor.audio import get_audio_duration_ms
 from podcast_processor.podcast_downloader import find_audio_link
 
 logger = logging.getLogger("global_logger")
+
+_FORWARDED_PROTO_RE = re.compile(
+    r"(?:^|[;,])\s*proto=(\"?)(https?|[A-Za-z]+)\1", re.IGNORECASE
+)
+_FEED_TEXT_NORMALIZE_TABLE = str.maketrans(
+    {
+        "\u00a0": " ",
+        "\u200b": "",
+        "\u200c": "",
+        "\u200d": "",
+        "\u2060": "",
+        "\ufeff": "",
+    }
+)
 
 
 def _format_itunes_duration(duration_seconds: int) -> str:
@@ -134,17 +149,45 @@ def _render_podly_chapters_html(post: Post) -> str:
     return f"<p><strong>Podly Chapters</strong></p><ul>{items}</ul>"
 
 
+def _normalize_feed_text(value: str | None) -> str:
+    if not value:
+        return ""
+    return value.translate(_FEED_TEXT_NORMALIZE_TABLE)
+
+
 def build_post_feed_description_html(post: Post) -> str:
     """Build the description shown in Podly-generated RSS items for a post."""
     description_parts: list[str] = []
     if post.description:
-        description_parts.append(post.description)
+        description_parts.append(_normalize_feed_text(post.description))
 
     chapters_html = _render_podly_chapters_html(post)
     if chapters_html:
         description_parts.append(chapters_html)
 
     return "\n".join(description_parts)
+
+
+def _write_cdata(handler: Any, value: str) -> None:
+    if not value:
+        return
+
+    escaped_value = value.replace("]]>", "]]]]><![CDATA[>")
+    writer = getattr(handler, "_write", None)
+    if callable(writer):
+        writer(f"<![CDATA[{escaped_value}]]>")
+        return
+
+    handler.characters(value)
+
+
+def _publish_cdata_opt_element(handler: Any, name: str, value: str | None) -> None:
+    if value is None:
+        return
+
+    handler.startElement(name, {})
+    _write_cdata(handler, value)
+    handler.endElement(name)
 
 
 def is_feed_active_for_user(feed_id: int, user: User) -> bool:
@@ -213,6 +256,13 @@ def _should_auto_whitelist_new_posts(feed: Feed, post: Post | None = None) -> bo
 
 def _get_base_url() -> str:
     try:
+
+        def _normalize_proto(value: Any) -> str | None:
+            if value is None:
+                return None
+            first = str(value).split(",")[0].strip().strip('"').lower()
+            return first if first in {"http", "https"} else None
+
         # Check various ways HTTP/2 pseudo-headers might be available
         http2_scheme = (
             request.headers.get(":scheme")
@@ -231,16 +281,45 @@ def _get_base_url() -> str:
 
         # Fall back to Host header with scheme detection
         if host:
+            forwarded_proto = None
+            for header_name in (
+                "X-Forwarded-Proto",
+                "X-Forwarded-Protocol",
+                "X-Forwarded-Scheme",
+                "X-Url-Scheme",
+            ):
+                forwarded_proto = _normalize_proto(request.headers.get(header_name))
+                if forwarded_proto:
+                    break
+
+            if not forwarded_proto:
+                forwarded = request.headers.get("Forwarded")
+                if forwarded:
+                    match = _FORWARDED_PROTO_RE.search(forwarded)
+                    if match:
+                        forwarded_proto = _normalize_proto(match.group(2))
+
+            if not forwarded_proto:
+                cf_visitor = request.headers.get("CF-Visitor")
+                if cf_visitor:
+                    try:
+                        forwarded_proto = _normalize_proto(
+                            json.loads(cf_visitor).get("scheme")
+                        )
+                    except Exception:  # noqa: BLE001
+                        forwarded_proto = None
+
             # Check multiple indicators for HTTPS
-            is_https = (
+            is_https = forwarded_proto == "https" or (
                 request.is_secure
-                or request.headers.get("X-Forwarded-Proto") == "https"
                 or request.headers.get("Strict-Transport-Security") is not None
                 or request.headers.get("X-Forwarded-Ssl") == "on"
+                or request.headers.get("Front-End-Https") == "on"
+                or request.headers.get("X-Forwarded-Port") == "443"
                 or request.environ.get("HTTPS") == "on"
                 or request.scheme == "https"
             )
-            scheme = "https" if is_https else "http"
+            scheme = forwarded_proto or ("https" if is_https else "http")
             return f"{scheme}://{host}"
     except RuntimeError:
         # Working outside of request context
@@ -312,15 +391,30 @@ number_of_episodes_to_whitelist_from_archive_of_new_feed setting: {entry.title}"
             new_posts.append(post_data)
             continue
 
+        post_update: dict[str, Any] = {"post_id": existing_post.id}
+
+        updated_title = str(getattr(entry, "title", "") or "").strip()
+        if updated_title and existing_post.title != updated_title:
+            post_update["title"] = updated_title
+
+        updated_description = _extract_post_description(entry)
+        if existing_post.description != updated_description:
+            post_update["description"] = updated_description
+
+        updated_image_url = _extract_episode_image_url(entry, feed)
+        if existing_post.image_url != updated_image_url:
+            post_update["image_url"] = updated_image_url
+
         parsed_duration = get_duration(entry)
         if (
             existing_post.processed_audio_path is None
             and parsed_duration is not None
             and existing_post.duration != parsed_duration
         ):
-            existing_post_updates.append(
-                {"post_id": existing_post.id, "duration": parsed_duration}
-            )
+            post_update["duration"] = parsed_duration
+
+        if len(post_update) > 1:
+            existing_post_updates.append(post_update)
 
     if updates or new_posts or existing_post_updates:
         writer_client.action(
@@ -333,6 +427,9 @@ number_of_episodes_to_whitelist_from_archive_of_new_feed setting: {entry.title}"
             },
             wait=True,
         )
+        # Refreshes are written through the separate writer service, so expire the
+        # current request session before serializing the feed response.
+        db.session.expire_all()
 
     logger.info(f"Feed with ID: {feed.id} refreshed")
 
@@ -446,7 +543,41 @@ class ItunesRSSItem(PyRSS2Gen.RSSItem):
             handler.startElement("itunes:duration", {})
             handler.characters(_format_itunes_duration(self.duration_seconds))
             handler.endElement("itunes:duration")
+        _publish_cdata_opt_element(handler, "content:encoded", self.description)
         super().publish_extensions(handler)
+
+    def publish(self, handler: Any) -> None:
+        # PyRSS2Gen escapes item descriptions with handler.characters(), which
+        # flattens rich HTML from source feeds and the appended Podly chapters.
+        handler.startElement("item", self.element_attrs)
+        PyRSS2Gen._opt_element(handler, "title", self.title)
+        PyRSS2Gen._opt_element(handler, "link", self.link)
+        self.publish_extensions(handler)
+        _publish_cdata_opt_element(handler, "description", self.description)
+        PyRSS2Gen._opt_element(handler, "author", self.author)
+
+        for item_category in self.categories:
+            category = (
+                PyRSS2Gen.Category(item_category)
+                if isinstance(item_category, str)
+                else item_category
+            )
+            category.publish(handler)
+
+        PyRSS2Gen._opt_element(handler, "comments", self.comments)
+        if self.enclosure is not None:
+            self.enclosure.publish(handler)
+        PyRSS2Gen._opt_element(handler, "guid", self.guid)
+
+        pub_date = self.pubDate
+        if isinstance(pub_date, datetime.datetime):
+            pub_date = PyRSS2Gen.DateElement("pubDate", pub_date)
+        PyRSS2Gen._opt_element(handler, "pubDate", pub_date)
+
+        if self.source is not None:
+            self.source.publish(handler)
+
+        handler.endElement("item")
 
 
 def _feed_item_duration_seconds(post: Post) -> int | None:
@@ -528,7 +659,7 @@ def generate_feed_xml(feed: Feed) -> Any:
     rss_feed = PyRSS2Gen.RSS2(
         title="[podly] " + feed.title,
         link=link,
-        description=feed.description,
+        description=_normalize_feed_text(feed.description),
         lastBuildDate=last_build_date,
         image=PyRSS2Gen.Image(url=feed.image_url, title=feed.title, link=link),
         items=items,
@@ -639,8 +770,11 @@ def _append_feed_token_params(url: str) -> str:
     return urlunparse(parsed._replace(query=new_query))
 
 
-def make_post(feed: Feed, entry: feedparser.FeedParserDict) -> Post:
-    # Extract episode image URL, fallback to feed image
+def _extract_episode_image_url(
+    entry: feedparser.FeedParserDict,
+    feed: Feed,
+) -> str | None:
+    """Prefer episode-level artwork when the source feed exposes it."""
     episode_image_url = None
 
     # Try to get episode-specific image from various RSS fields
@@ -666,24 +800,41 @@ def make_post(feed: Feed, entry: feedparser.FeedParserDict) -> Post:
     if not episode_image_url:
         episode_image_url = feed.image_url
 
-    # Try multiple description fields in order of preference
-    description = entry.get("description", "")
-    if not description:
-        description = entry.get("summary", "")
-    if not description and hasattr(entry, "content") and entry.content:
-        description = entry.content[0].get("value", "")
-    if not description:
-        description = entry.get("subtitle", "")
+    return episode_image_url
 
+
+def _extract_post_description(entry: feedparser.FeedParserDict) -> str:
+    """Prefer rich HTML payloads when a source feed exposes them."""
+    content_items = getattr(entry, "content", None) or []
+    for content in content_items:
+        value = str(content.get("value", "") or "").strip()
+        content_type = str(content.get("type", "") or "").strip().lower()
+        if value and content_type in {"text/html", "application/xhtml+xml"}:
+            return value
+
+    for field in ("description", "summary"):
+        value = str(entry.get(field, "") or "").strip()
+        if value:
+            return value
+
+    for content in content_items:
+        value = str(content.get("value", "") or "").strip()
+        if value:
+            return value
+
+    return str(entry.get("subtitle", "") or "").strip()
+
+
+def make_post(feed: Feed, entry: feedparser.FeedParserDict) -> Post:
     return Post(
         feed_id=feed.id,
         guid=get_guid(entry),
         download_url=find_audio_link(entry),
         title=entry.title,
-        description=description,
+        description=_extract_post_description(entry),
         release_date=_parse_release_date(entry),
         duration=get_duration(entry),
-        image_url=episode_image_url,
+        image_url=_extract_episode_image_url(entry, feed),
     )
 
 

@@ -1,6 +1,11 @@
+from typing import cast
+
+from flask import Response
+
 from app.extensions import db
 from app.feeds import get_user_aggregate_posts
 from app.models import Feed, Post, UserFeed
+from app.routes.feed_routes import _get_or_create_default_aggregate_user
 
 
 def test_get_user_aggregate_posts_auth_disabled(app):
@@ -84,3 +89,22 @@ def test_get_user_aggregate_posts_auth_enabled(app):
         assert len(posts) == 1
         assert post1 in posts
         assert post2 not in posts
+
+
+def test_get_or_create_default_aggregate_user_returns_error_tuple_on_create_failure(
+    app, monkeypatch
+):
+    with app.app_context():
+        monkeypatch.setattr(
+            "app.routes.feed_routes.writer_client.action", lambda *_, **__: None
+        )
+
+        user, error = _get_or_create_default_aggregate_user()
+
+        assert user is None
+        assert error is not None
+        response, status_code = cast(tuple[Response, int], error)
+        assert status_code == 500
+        assert response.get_json() == {
+            "error": "No user found and failed to create one."
+        }

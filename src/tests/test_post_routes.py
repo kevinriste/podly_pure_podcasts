@@ -508,65 +508,72 @@ def test_feed_posts_include_podly_description_html(app):
 def test_reprocess_keep_transcript_accepts_local_whisper_model_call(app):
     app.testing = True
     app.register_blueprint(post_bp)
+    original_whisper = runtime_config.whisper
+    runtime_config.whisper = LocalWhisperConfig(model="base.en")
 
-    with app.app_context():
-        feed = Feed(title="Local Whisper Feed", rss_url="https://example.com/feed.xml")
-        db.session.add(feed)
-        db.session.commit()
-
-        post = Post(
-            feed_id=feed.id,
-            guid="local-whisper-guid",
-            download_url="https://example.com/audio.mp3",
-            title="Local Whisper Episode",
-            whitelisted=True,
-        )
-        db.session.add(post)
-        db.session.commit()
-
-        db.session.add(
-            TranscriptSegment(
-                post_id=post.id,
-                sequence_num=0,
-                start_time=0.0,
-                end_time=5.0,
-                text="hello",
+    try:
+        with app.app_context():
+            feed = Feed(
+                title="Local Whisper Feed", rss_url="https://example.com/feed.xml"
             )
-        )
-        db.session.add(
-            ModelCall(
-                post_id=post.id,
-                first_segment_sequence_num=0,
-                last_segment_sequence_num=0,
-                model_name="local_base.en",
-                prompt="Whisper transcription job",
-                status="success",
+            db.session.add(feed)
+            db.session.commit()
+
+            post = Post(
+                feed_id=feed.id,
+                guid="local-whisper-guid",
+                download_url="https://example.com/audio.mp3",
+                title="Local Whisper Episode",
+                whitelisted=True,
             )
-        )
-        db.session.commit()
-        guid = post.guid
+            db.session.add(post)
+            db.session.commit()
 
-    client = app.test_client()
+            db.session.add(
+                TranscriptSegment(
+                    post_id=post.id,
+                    sequence_num=0,
+                    start_time=0.0,
+                    end_time=5.0,
+                    text="hello",
+                )
+            )
+            db.session.add(
+                ModelCall(
+                    post_id=post.id,
+                    first_segment_sequence_num=0,
+                    last_segment_sequence_num=0,
+                    model_name="local_base.en",
+                    prompt="Whisper transcription job",
+                    status="success",
+                )
+            )
+            db.session.commit()
+            guid = post.guid
 
-    with (
-        mock.patch("app.routes.post_routes.get_jobs_manager") as mock_mgr,
-        mock.patch(
-            "app.routes.post_routes.clear_post_processing_data_keep_transcript"
-        ) as clear_mock,
-    ):
-        mock_mgr.return_value.start_post_processing.return_value = {
-            "status": "started",
-            "job_id": "job-123",
-            "message": "ok",
-        }
+        client = app.test_client()
 
-        response = client.post(f"/api/posts/{guid}/reprocess/keep-transcript")
+        with (
+            mock.patch("app.routes.post_routes.get_jobs_manager") as mock_mgr,
+            mock.patch(
+                "app.routes.post_routes.clear_post_processing_data_keep_transcript"
+            ) as clear_mock,
+        ):
+            mock_mgr.return_value.start_post_processing.return_value = {
+                "status": "started",
+                "job_id": "job-123",
+                "message": "ok",
+            }
 
-    assert response.status_code == 200
-    payload = response.get_json()
-    assert payload is not None
-    assert payload["status"] == "started"
-    clear_mock.assert_called_once()
+            response = client.post(f"/api/posts/{guid}/reprocess/keep-transcript")
+
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert payload is not None
+        assert payload["status"] == "started"
+        clear_mock.assert_called_once()
+    finally:
+        runtime_config.whisper = original_whisper
 
 
 def test_reprocess_keep_transcript_rejects_transcript_for_old_whisper_model(app):

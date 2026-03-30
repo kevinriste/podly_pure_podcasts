@@ -205,3 +205,23 @@ def test_share_link_returns_same_token_for_user_and_feed(auth_app: Flask) -> Non
     assert first["url"] == second["url"]
     assert first["feed_token"] == second["feed_token"]
     assert first["feed_secret"] == second["feed_secret"]
+
+
+def test_share_link_prefers_https_from_forwarded_header(auth_app: Flask) -> None:
+    client = auth_app.test_client()
+    with auth_app.app_context():
+        feed = Feed(title="Secure", rss_url="https://example.com/secure.xml")
+        db.session.add(feed)
+        db.session.commit()
+        feed_id = feed.id
+
+    client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    share = client.post(
+        f"/api/feeds/{feed_id}/share-link",
+        headers={"Forwarded": "for=203.0.113.10;proto=https"},
+    )
+
+    assert share.status_code == 201
+    payload = share.get_json()
+    assert payload is not None
+    assert payload["url"].startswith("https://")
