@@ -134,6 +134,7 @@ class TranscriptSegment(db.Model):  # type: ignore[name-defined, misc]
     start_time = db.Column(db.Float, nullable=False)
     end_time = db.Column(db.Float, nullable=False)
     text = db.Column(db.Text, nullable=False)
+    speaker = db.Column(db.String(50), nullable=True)
 
     identifications = db.relationship(
         "Identification", backref="transcript_segment", lazy="dynamic"
@@ -150,6 +151,25 @@ class TranscriptSegment(db.Model):  # type: ignore[name-defined, misc]
 
     def __repr__(self) -> str:
         return f"<TranscriptSegment {self.id} P:{self.post_id} S:{self.sequence_num} T:{self.start_time:.1f}-{self.end_time:.1f}>"
+
+
+class AudioSegment(db.Model):  # type: ignore[name-defined, misc]
+    __tablename__ = "audio_segment"
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    post_id = db.Column(db.Integer, db.ForeignKey("post.id"), nullable=False)
+    start_time = db.Column(db.Float, nullable=False)
+    end_time = db.Column(db.Float, nullable=False)
+    label = db.Column(db.String(20), nullable=False)  # music, speech, noEnergy, noise
+    model_call_id = db.Column(db.Integer, db.ForeignKey("model_call.id"), nullable=True)
+
+    post = db.relationship("Post", backref=db.backref("audio_segments", lazy="dynamic"))
+
+    __table_args__ = (
+        db.Index("ix_audio_segment_post_id", "post_id"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<AudioSegment {self.id} P:{self.post_id} L:{self.label} T:{self.start_time:.1f}-{self.end_time:.1f}>"
 
 
 class User(db.Model):  # type: ignore[name-defined, misc]
