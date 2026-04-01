@@ -40,7 +40,7 @@ class OutputConfig(BaseModel):
         self.min_ad_segement_separation_seconds = value
 
 
-WhisperConfigTypes = Literal["remote", "local", "test", "groq"]
+WhisperConfigTypes = Literal["remote", "local", "test", "groq", "whisperx"]
 
 
 class TestWhisperConfig(BaseModel):
@@ -68,6 +68,16 @@ class GroqWhisperConfig(BaseModel):
 class LocalWhisperConfig(BaseModel):
     whisper_type: Literal["local"] = "local"
     model: str = DEFAULTS.WHISPER_LOCAL_MODEL
+
+
+class WhisperXConfig(BaseModel):
+    whisper_type: Literal["whisperx"] = "whisperx"
+    base_url: str = DEFAULTS.WHISPERX_BASE_URL
+    api_key: str = "not-needed"
+    language: str = DEFAULTS.WHISPERX_LANGUAGE
+    model: str = DEFAULTS.WHISPERX_MODEL
+    timeout_sec: int = DEFAULTS.WHISPERX_TIMEOUT_SEC
+    chunksize_mb: int = DEFAULTS.WHISPERX_CHUNKSIZE_MB
 
 
 class Config(BaseModel):
@@ -140,6 +150,7 @@ class Config(BaseModel):
         | RemoteWhisperConfig
         | TestWhisperConfig
         | GroqWhisperConfig
+        | WhisperXConfig
         | None
     ) = Field(
         default=None,
@@ -166,6 +177,8 @@ class Config(BaseModel):
     user_limit_total: int | None = DEFAULTS.APP_USER_LIMIT_TOTAL
     autoprocess_on_download: bool = DEFAULTS.APP_AUTOPROCESS_ON_DOWNLOAD
     cost_rate_per_hour: float = DEFAULTS.APP_COST_RATE_PER_HOUR
+    ina_base_url: str | None = Field(default=None, description="INA speech segmenter API URL")
+    ina_enabled: bool = Field(default=False, description="Enable INA audio analysis")
 
     def redacted(self) -> Config:
         return self.model_copy(

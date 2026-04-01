@@ -3,6 +3,7 @@ import logging
 import shutil
 import time
 from abc import ABC, abstractmethod
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -11,14 +12,17 @@ from openai import OpenAI
 from openai.types.audio.transcription_segment import TranscriptionSegment
 from pydantic import BaseModel
 
+import requests
+
 from podcast_processor.audio import split_audio
-from shared.config import GroqWhisperConfig, RemoteWhisperConfig
+from shared.config import GroqWhisperConfig, RemoteWhisperConfig, WhisperXConfig
 
 
 class Segment(BaseModel):
     start: float
     end: float
     text: str
+    speaker: str | None = None
 
 
 class Transcriber(ABC):
@@ -416,3 +420,94 @@ class GroqWhisperTranscriber(Transcriber):
 
         # unreachable, but satisfies type checker
         return [], ""
+
+
+class WhisperXTranscriber(Transcriber):
+    """Transcriber using the WhisperX API with diarization and alignment."""
+
+    def __init__(self, logger: logging.Logger, config: WhisperXConfig):
+        self.logger = logger
+        self.config = config
+
+    @property
+    def model_name(self) -> str:
+        return f"whisperx_{self.config.model}"
+
+    @staticmethod
+    def _dominant_speaker(words: list[dict[str, Any]]) -> str | None:
+        """Extract the most common speaker label from word-level data."""
+        speakers = [w["speaker"] for w in words if w.get("speaker")]
+        if not speakers:
+            return None
+        counter = Counter(speakers)
+        return counter.most_common(1)[0][0]
+
+    def transcribe(self, audio_file_path: str) -> list[Segment]:
+        self.logger.info(
+            "[WHISPERX] Starting WhisperX transcription for: %s",
+            audio_file_path,
+        )
+
+        url = f"{self.config.base_url}/audio/transcriptions"
+
+        with open(audio_file_path, "rb") as f:
+            self.logger.info(
+                "[WHISPERX_API_CALL] Sending file to API: %s (timeout=%ds)",
+                audio_file_path,
+                self.config.timeout_sec,
+            )
+            response = requests.post(
+                url,
+                files={"file": f},
+                data={
+                    "model": self.config.model,
+                    "language": self.config.language,
+                    "response_format": "verbose_json",
+                    "diarize": "true",
+                    "align": "true",
+                    "timestamp_granularities[]": ["word", "segment"],
+                },
+                timeout=self.config.timeout_sec,
+            )
+
+        response.raise_for_status()
+        data = response.json()
+        self.last_raw_response_body = _serialize_raw_response_body(data)
+
+        # WhisperX nests segments under response['segments']['segments']
+        segments_container = data.get("segments", {})
+        if isinstance(segments_container, dict):
+            raw_segments = segments_container.get("segments", [])
+        elif isinstance(segments_container, list):
+            # Some versions may return a flat list
+            raw_segments = segments_container
+        else:
+            raw_segments = []
+
+        self.logger.info(
+            "[WHISPERX] Received %d segments from API",
+            len(raw_segments),
+        )
+
+        segments: list[Segment] = []
+        for raw_seg in raw_segments:
+            start = float(raw_seg.get("start", 0.0))
+            end = float(raw_seg.get("end", 0.0))
+            text = str(raw_seg.get("text", ""))
+
+            # Extract dominant speaker from word-level data
+            words = raw_seg.get("words", [])
+            speaker = self._dominant_speaker(words) if words else None
+
+            segments.append(Segment(
+                start=start,
+                end=end,
+                text=text,
+                speaker=speaker,
+            ))
+
+        self.logger.info(
+            "[WHISPERX] Transcription complete: %d total segments",
+            len(segments),
+        )
+        return segments
