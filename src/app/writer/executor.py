@@ -154,6 +154,9 @@ class CommandExecutor:
             "replace_identifications", writer_actions.replace_identifications_action
         )
         self.register_action(
+            "replace_audio_segments", writer_actions.replace_audio_segments_action
+        )
+        self.register_action(
             "update_user_last_active", writer_actions.update_user_last_active_action
         )
 

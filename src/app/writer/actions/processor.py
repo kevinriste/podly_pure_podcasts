@@ -8,7 +8,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
-from app.models import Identification, ModelCall, TranscriptSegment
+from app.models import AudioSegment, Identification, ModelCall, TranscriptSegment
 
 
 def upsert_model_call_action(params: dict[str, Any]) -> dict[str, Any]:
@@ -186,15 +186,16 @@ def replace_transcription_action(params: dict[str, Any]) -> dict[str, Any]:
     for i, seg in enumerate(segments):
         if not isinstance(seg, dict):
             continue
-        payload.append(
-            {
-                "post_id": post_id_i,
-                "sequence_num": int(seg.get("sequence_num", i)),
-                "start_time": float(seg["start_time"]),
-                "end_time": float(seg["end_time"]),
-                "text": str(seg["text"]),
-            }
-        )
+        row: dict[str, Any] = {
+            "post_id": post_id_i,
+            "sequence_num": int(seg.get("sequence_num", i)),
+            "start_time": float(seg["start_time"]),
+            "end_time": float(seg["end_time"]),
+            "text": str(seg["text"]),
+        }
+        if seg.get("speaker") is not None:
+            row["speaker"] = str(seg["speaker"])
+        payload.append(row)
 
     if payload:
         db.session.execute(sqlite_insert(TranscriptSegment).values(payload))
@@ -278,3 +279,42 @@ def replace_identifications_action(params: dict[str, Any]) -> dict[str, Any]:
 
     db.session.flush()
     return {"deleted": len(delete_ids), "inserted": int(inserted)}
+
+
+def replace_audio_segments_action(params: dict[str, Any]) -> dict[str, Any]:
+    """Delete existing audio_segments for a post and insert new ones."""
+    post_id = params.get("post_id")
+    segments = params.get("segments")
+    model_call_id = params.get("model_call_id")
+
+    if post_id is None:
+        raise ValueError("post_id is required")
+    if not isinstance(segments, list):
+        raise ValueError("segments must be a list")
+
+    post_id_i = int(post_id)
+
+    # Delete existing audio segments for this post
+    db.session.query(AudioSegment).filter(
+        AudioSegment.post_id == post_id_i
+    ).delete(synchronize_session=False)
+
+    payload = []
+    for seg in segments:
+        if not isinstance(seg, dict):
+            continue
+        row: dict[str, Any] = {
+            "post_id": post_id_i,
+            "start_time": float(seg["start_time"]),
+            "end_time": float(seg["end_time"]),
+            "label": str(seg["label"]),
+        }
+        if model_call_id is not None:
+            row["model_call_id"] = int(model_call_id)
+        payload.append(row)
+
+    if payload:
+        db.session.execute(sqlite_insert(AudioSegment).values(payload))
+
+    db.session.flush()
+    return {"post_id": post_id_i, "segment_count": len(payload)}
