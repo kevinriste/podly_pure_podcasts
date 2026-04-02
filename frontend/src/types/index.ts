@@ -298,3 +298,11 @@ export interface CallLog {
   per_page: number;
   pages: number;
 }
+
+export interface AudioSegment {
+  id: number;
+  start_time: number;
+  end_time: number;
+  label: string;
+  model_call_id?: number | null;
+}

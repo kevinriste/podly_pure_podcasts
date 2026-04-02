@@ -16,6 +16,7 @@ from app.feeds import build_post_feed_description_html
 from app.jobs_manager import get_jobs_manager
 from app.model_call_utils import whisper_model_call_filter
 from app.models import (
+    AudioSegment,
     Feed,
     Identification,
     ModelCall,
@@ -427,6 +428,12 @@ def api_post_stats(p_guid: str) -> flask.Response:
         .all()
     )
 
+    audio_segments = (
+        AudioSegment.query.filter_by(post_id=post.id)
+        .order_by(AudioSegment.start_time)
+        .all()
+    )
+
     model_call_statuses: dict[str, int] = {}
     model_types: dict[str, int] = {}
 
@@ -494,6 +501,7 @@ def api_post_stats(p_guid: str) -> flask.Response:
                 "start_time": round(segment.start_time, 1),
                 "end_time": round(segment.end_time, 1),
                 "text": segment.text,
+                "speaker": getattr(segment, "speaker", None),
                 "primary_label": primary_label,
                 "mixed": mixed,
                 "identifications": [
@@ -530,9 +538,21 @@ def api_post_stats(p_guid: str) -> flask.Response:
                 "segment_start_time": round(segment.start_time, 1),
                 "segment_end_time": round(segment.end_time, 1),
                 "segment_text": segment.text,
+                "segment_speaker": getattr(segment, "speaker", None),
                 "mixed": bool(segment_mixed_by_id.get(int(segment.id), False)),
             }
         )
+
+    audio_segments_data = [
+        {
+            "id": aseg.id,
+            "start_time": round(aseg.start_time, 1),
+            "end_time": round(aseg.end_time, 1),
+            "label": aseg.label,
+            "model_call_id": aseg.model_call_id,
+        }
+        for aseg in audio_segments
+    ]
 
     # Build chapter data for chapter-based processing
     chapters_data = None
@@ -590,6 +610,7 @@ def api_post_stats(p_guid: str) -> flask.Response:
         "model_calls": model_call_details,
         "transcript_segments": transcript_segments_data,
         "identifications": identifications_data,
+        "audio_segments": audio_segments_data,
         "chapters": chapters_data,
     }
 

@@ -324,6 +324,7 @@ export const feedsApi = {
       start_time: number;
       end_time: number;
       text: string;
+      speaker?: string | null;
       primary_label: 'ad' | 'content';
       mixed: boolean;
       identifications: Array<{
@@ -343,7 +344,15 @@ export const feedsApi = {
       segment_start_time: number;
       segment_end_time: number;
       segment_text: string;
+      segment_speaker?: string | null;
       mixed: boolean;
+    }>;
+    audio_segments?: Array<{
+      id: number;
+      start_time: number;
+      end_time: number;
+      label: string;
+      model_call_id?: number | null;
     }>;
     debug_info?: {
       post_id: number;

@@ -9,7 +9,7 @@ interface LLMProcessingStatsProps {
   className?: string;
 }
 
-type TabId = 'overview' | 'model-calls' | 'transcript' | 'identifications';
+type TabId = 'overview' | 'model-calls' | 'transcript' | 'identifications' | 'audio';
 
 export default function LLMProcessingStats({
   episodeGuid,
@@ -89,6 +89,28 @@ export default function LLMProcessingStats({
     return Math.max(...allConfidences);
   };
 
+  const getSpeakerColor = (speaker: string | null | undefined): string => {
+    if (!speaker) return '';
+    let hash = 0;
+    for (let i = 0; i < speaker.length; i++) {
+      hash = speaker.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const hue = ((hash % 360) + 360) % 360;
+    return `hsl(${hue}, 55%, 92%)`;
+  };
+
+  const getAudioLabelStyle = (label: string): { bg: string; text: string } => {
+    switch (label) {
+      case 'music': return { bg: 'bg-red-100', text: 'text-red-800' };
+      case 'speech': return { bg: 'bg-blue-100', text: 'text-blue-800' };
+      case 'noEnergy': return { bg: 'bg-gray-100', text: 'text-gray-800' };
+      case 'noise': return { bg: 'bg-yellow-100', text: 'text-yellow-800' };
+      default: return { bg: 'bg-gray-100', text: 'text-gray-600' };
+    }
+  };
+
+  const hasAudioSegments = (stats?.audio_segments?.length ?? 0) > 0;
+
   if (!isStatsReady) {
     return null;
   }
@@ -123,7 +145,8 @@ export default function LLMProcessingStats({
                   { id: 'overview', label: 'Overview' },
                   { id: 'model-calls', label: 'Model Calls' },
                   { id: 'transcript', label: 'Transcript Segments' },
-                  { id: 'identifications', label: 'Identifications' }
+                  { id: 'identifications', label: 'Identifications' },
+                  ...(hasAudioSegments ? [{ id: 'audio', label: 'Audio Segments' }] : []),
                 ].map((tab) => (
                   <button
                     key={tab.id}
@@ -138,6 +161,7 @@ export default function LLMProcessingStats({
                     {stats && tab.id === 'model-calls' && stats.model_calls && ` (${stats.model_calls.length})`}
                     {stats && tab.id === 'transcript' && stats.transcript_segments && ` (${stats.transcript_segments.length})`}
                     {stats && tab.id === 'identifications' && stats.identifications && ` (${stats.identifications.length})`}
+                    {stats && tab.id === 'audio' && stats.audio_segments && ` (${stats.audio_segments.length})`}
                   </button>
                 ))}
               </nav>
@@ -528,6 +552,7 @@ export default function LLMProcessingStats({
                               <tr>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Seq #</th>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time Range</th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Speaker</th>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Label</th>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Confidence</th>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Text</th>
@@ -541,6 +566,16 @@ export default function LLMProcessingStats({
                                   <td className="px-4 py-3 text-sm text-gray-900">{segment.sequence_num}</td>
                                   <td className="px-4 py-3 text-sm text-gray-600">
                                     {segment.start_time}s - {segment.end_time}s
+                                  </td>
+                                  <td className="px-4 py-3 text-sm">
+                                    {segment.speaker ? (
+                                      <span
+                                        className="inline-flex px-2 py-0.5 rounded text-xs font-medium"
+                                        style={{ backgroundColor: getSpeakerColor(segment.speaker) }}
+                                      >
+                                        {segment.speaker}
+                                      </span>
+                                    ) : null}
                                   </td>
                                   <td className="px-4 py-3">
                                     <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
@@ -581,6 +616,7 @@ export default function LLMProcessingStats({
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Segment ID</th>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time Range</th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Speaker</th>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Label</th>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Confidence</th>
                                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Model Call</th>
@@ -596,6 +632,16 @@ export default function LLMProcessingStats({
                                   <td className="px-4 py-3 text-sm text-gray-600">{identification.transcript_segment_id}</td>
                                   <td className="px-4 py-3 text-sm text-gray-600">
                                     {identification.segment_start_time}s - {identification.segment_end_time}s
+                                  </td>
+                                  <td className="px-4 py-3 text-sm">
+                                    {identification.segment_speaker ? (
+                                      <span
+                                        className="inline-flex px-2 py-0.5 rounded text-xs font-medium"
+                                        style={{ backgroundColor: getSpeakerColor(identification.segment_speaker) }}
+                                      >
+                                        {identification.segment_speaker}
+                                      </span>
+                                    ) : null}
                                   </td>
                                   <td className="px-4 py-3">
                                     <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
@@ -619,6 +665,45 @@ export default function LLMProcessingStats({
                                   </td>
                                 </tr>
                               ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTab === 'audio' && hasAudioSegments && (
+                    <div>
+                      <h3 className="font-semibold text-gray-900 mb-4 text-left">Audio Segments ({stats.audio_segments?.length || 0})</h3>
+                      <div className="bg-white border rounded-lg overflow-hidden">
+                        <div className="overflow-x-auto">
+                          <table className="min-w-full divide-y divide-gray-200">
+                            <thead className="bg-gray-50">
+                              <tr>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Duration</th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Label</th>
+                              </tr>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-gray-200">
+                              {(stats.audio_segments || []).map((aseg) => {
+                                const style = getAudioLabelStyle(aseg.label);
+                                return (
+                                  <tr key={aseg.id} className="hover:bg-gray-50">
+                                    <td className="px-4 py-3 text-sm text-gray-600">
+                                      {aseg.start_time}s - {aseg.end_time}s
+                                    </td>
+                                    <td className="px-4 py-3 text-sm text-gray-600">
+                                      {formatDuration(aseg.end_time - aseg.start_time)}
+                                    </td>
+                                    <td className="px-4 py-3">
+                                      <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${style.bg} ${style.text}`}>
+                                        {aseg.label}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>
