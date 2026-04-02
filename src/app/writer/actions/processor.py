@@ -192,9 +192,8 @@ def replace_transcription_action(params: dict[str, Any]) -> dict[str, Any]:
             "start_time": float(seg["start_time"]),
             "end_time": float(seg["end_time"]),
             "text": str(seg["text"]),
+            "speaker": str(seg["speaker"]) if seg.get("speaker") is not None else None,
         }
-        if seg.get("speaker") is not None:
-            row["speaker"] = str(seg["speaker"])
         payload.append(row)
 
     if payload:
