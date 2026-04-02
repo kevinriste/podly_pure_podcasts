@@ -14,7 +14,7 @@ from jinja2 import Template
 from sqlalchemy.orm import object_session
 
 from app.extensions import db
-from app.models import ModelCall, Post, ProcessingJob, TranscriptSegment
+from app.models import AudioSegment, ModelCall, Post, ProcessingJob, TranscriptSegment
 from app.writer.client import writer_client
 from podcast_processor.ad_classifier import AdClassifier
 from podcast_processor.audio import clip_segments_exact
@@ -33,6 +33,7 @@ from podcast_processor.chapter_fallback import (
 from podcast_processor.chapter_filter import parse_filter_strings
 from podcast_processor.ina_client import AudioSegmentResult, analyze_audio
 from podcast_processor.oneshot_classifier import OneShotAdClassifier
+from podcast_processor.stream_builder import build_merged_stream
 from podcast_processor.chapter_writer import (
     recalculate_chapter_times,
     write_adjusted_chapters,
@@ -54,6 +55,9 @@ from shared.processing_paths import (
 )
 
 logger = logging.getLogger("global_logger")
+
+ENRICHED_SYSTEM_PROMPT_PATH = "src/enriched_oneshot_system_prompt.txt"
+ENRICHED_USER_PROMPT_TEMPLATE_PATH = "src/enriched_oneshot_user_prompt.jinja"
 
 
 def get_post_processed_audio_path(post: Post) -> ProcessingPaths | None:
@@ -602,9 +606,11 @@ class PodcastProcessor:
         self._raise_if_cancelled(job, 2, cancel_callback)
 
         # Collect INA results
+        ina_succeeded = False
         if ina_future:
             try:
                 ina_future.result(timeout=3600)
+                ina_succeeded = True
             except Exception as e:
                 self.logger.warning("INA analysis failed: %s", e)
 
@@ -628,10 +634,36 @@ class PodcastProcessor:
             effective_model = oneshot_model_override or get_effective_oneshot_model(self.config)
         except ValueError as model_error:
             raise ProcessorException(str(model_error)) from model_error
+
+        # Build enriched prompts when both speaker labels and INA data are available
+        enriched_system_prompt = None
+        enriched_user_prompt = None
+        if ina_succeeded and self._has_speaker_labels(transcript_segments):
+            try:
+                enriched_system_prompt, enriched_user_prompt = (
+                    self._build_enriched_oneshot_prompts(
+                        post=post,
+                        transcript_segments=transcript_segments,
+                    )
+                )
+                self.logger.info(
+                    "Using enriched merged stream for oneshot classification "
+                    "(post %s)",
+                    post.id,
+                )
+            except _EnrichedStreamUnavailable:
+                self.logger.info(
+                    "Enriched stream unavailable for post %s; "
+                    "falling back to CSV-based oneshot",
+                    post.id,
+                )
+
         ad_segments = oneshot_classifier.classify(
             transcript_segments=transcript_segments,
             post=post,
             model_override=effective_model,
+            system_prompt_override=enriched_system_prompt,
+            user_prompt_override=enriched_user_prompt,
         )
         self._raise_if_cancelled(job, 3, cancel_callback)
 
@@ -1113,6 +1145,69 @@ class PodcastProcessor:
             post=post,
         )
 
+    @staticmethod
+    def _has_speaker_labels(transcript_segments: list[TranscriptSegment]) -> bool:
+        """Check whether transcript segments include speaker diarization labels."""
+        for seg in transcript_segments[:20]:  # sample first 20 to avoid scanning all
+            if getattr(seg, "speaker", None):
+                return True
+        return False
+
+    def _build_enriched_oneshot_prompts(
+        self,
+        post: Post,
+        transcript_segments: list[TranscriptSegment],
+    ) -> tuple[str, str]:
+        """Build enriched system + user prompts using merged transcript/audio stream.
+
+        Reads audio segments from the DB (persisted by INA analysis), merges them
+        with transcript segments, and renders the enriched Jinja template.
+
+        Returns:
+            (system_prompt, user_prompt) tuple
+        """
+        # Query audio segments from DB for this post
+        audio_segments: list[AudioSegment] = (
+            AudioSegment.query.filter_by(post_id=post.id)
+            .order_by(AudioSegment.start_time)
+            .all()
+        )
+
+        if not audio_segments:
+            self.logger.info(
+                "No audio segments found in DB for post %s; "
+                "cannot build enriched stream",
+                post.id,
+            )
+            raise _EnrichedStreamUnavailable
+
+        merged_stream = build_merged_stream(transcript_segments, audio_segments)
+        self.logger.info(
+            "Built enriched merged stream for post %s: %d chars, "
+            "%d transcript segments + %d audio segments",
+            post.id,
+            len(merged_stream),
+            len(transcript_segments),
+            len(audio_segments),
+        )
+
+        # Load enriched prompt templates
+        system_prompt = self.get_system_prompt(ENRICHED_SYSTEM_PROMPT_PATH)
+        user_template = self.get_user_prompt_template(ENRICHED_USER_PROMPT_TEMPLATE_PATH)
+
+        total_duration = (
+            transcript_segments[-1].end_time if transcript_segments else 0.0
+        )
+        user_prompt = user_template.render(
+            podcast_title=post.title or "Unknown",
+            podcast_description=post.description or "No description available",
+            duration=f"{total_duration:.0f}",
+            position_note="",
+            transcript=merged_stream,
+        )
+
+        return system_prompt, user_prompt
+
     def _run_ina_analysis(
         self, post_id: int, audio_path: str
     ) -> list[AudioSegmentResult]:
@@ -1479,3 +1574,7 @@ class PodcastProcessor:
 
 class ProcessorException(Exception):
     """Exception raised for podcast processing errors."""
+
+
+class _EnrichedStreamUnavailable(Exception):
+    """Internal signal: enriched stream data is not available, fall back to CSV."""

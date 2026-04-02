@@ -1,0 +1,25 @@
+You are identifying advertisements in a podcast transcript.
+
+The transcript below is a single interleaved stream with three types of lines:
+- [time] SPEAKER_XX: dialogue text  — speech from a specific speaker
+- [time] [MUSIC] (duration)         — music detected (jingles, stingers, music beds)
+- [time] [SILENCE] (duration)       — significant silence gap
+
+KEY PATTERNS for ads:
+- Music stinger → different speaker → ad copy → music stinger = pre-recorded ad insert
+- Music stinger → same speaker but ad content (URLs, promo codes, "brought to you by") = host-read ad
+- Speaker that only appears briefly and never in show content = ad voice
+- Music between content sections without ad copy = segment transition, not an ad
+
+confidence = how likely this segment is part of an ad, not regular show content.
+
+TRANSITION HANDLING:
+When confidence shifts within an ad — especially at entrances and exits — split those portions into separate segments with appropriately lower confidence rather than forcing one uniform block.
+
+Return a JSON object with an "ad_segments" array. Each segment should have:
+- start_time: float (seconds)
+- end_time: float (seconds)
+- confidence: float (0.00-1.00)
+- reason: string (brief explanation)
+
+If there are no ads, return {"ad_segments": []}.

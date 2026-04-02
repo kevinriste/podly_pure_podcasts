@@ -111,6 +111,8 @@ class OneShotAdClassifier:
         transcript_segments: List[TranscriptSegment],
         post: Post,
         model_override: Optional[str] = None,
+        system_prompt_override: Optional[str] = None,
+        user_prompt_override: Optional[str] = None,
     ) -> List[OneShotAdSegment]:
         """
         Classify ads in transcript using one-shot LLM approach.
@@ -119,6 +121,9 @@ class OneShotAdClassifier:
             transcript_segments: List of transcript segments to classify
             post: Post containing the podcast to classify
             model_override: Optional model to use instead of config default
+            system_prompt_override: Optional system prompt to use instead of default
+            user_prompt_override: Optional pre-built user prompt (skips internal
+                CSV construction and template formatting when provided)
 
         Returns:
             List of detected ad segments with timestamps and confidence
@@ -148,6 +153,8 @@ class OneShotAdClassifier:
                 post=post,
                 model=model,
                 total_duration=total_duration,
+                system_prompt_override=system_prompt_override,
+                user_prompt_override=user_prompt_override if i == 0 and len(chunks) == 1 else None,
             )
             all_segments.extend(chunk_segments)
 
@@ -234,33 +241,41 @@ class OneShotAdClassifier:
         post: Post,
         model: str,
         total_duration: float,
+        system_prompt_override: Optional[str] = None,
+        user_prompt_override: Optional[str] = None,
     ) -> List[OneShotAdSegment]:
         """Process a single chunk of transcript segments."""
         if not chunk:
             return []
 
-        # Build transcript text
-        transcript_text = self._build_transcript_text(chunk)
-
-        # Build position note for context
-        if total_chunks == 1:
-            position_note = ""
+        # Use pre-built user prompt if provided (enriched stream path)
+        if user_prompt_override is not None:
+            user_prompt = user_prompt_override
         else:
-            chunk_start = chunk[0].start_time
-            chunk_end = chunk[-1].end_time
-            position_note = (
-                f"[This is chunk {chunk_index + 1} of {total_chunks}, "
-                f"covering {chunk_start:.0f}s to {chunk_end:.0f}s of {total_duration:.0f}s total]"
+            # Build transcript text
+            transcript_text = self._build_transcript_text(chunk)
+
+            # Build position note for context
+            if total_chunks == 1:
+                position_note = ""
+            else:
+                chunk_start = chunk[0].start_time
+                chunk_end = chunk[-1].end_time
+                position_note = (
+                    f"[This is chunk {chunk_index + 1} of {total_chunks}, "
+                    f"covering {chunk_start:.0f}s to {chunk_end:.0f}s of {total_duration:.0f}s total]"
+                )
+
+            # Build user prompt
+            user_prompt = ONESHOT_USER_PROMPT_TEMPLATE.format(
+                title=post.title or "Unknown",
+                description=post.description or "No description available",
+                duration=total_duration,
+                position_note=position_note,
+                transcript=transcript_text,
             )
 
-        # Build user prompt
-        user_prompt = ONESHOT_USER_PROMPT_TEMPLATE.format(
-            title=post.title or "Unknown",
-            description=post.description or "No description available",
-            duration=total_duration,
-            position_note=position_note,
-            transcript=transcript_text,
-        )
+        effective_system_prompt = system_prompt_override or ONESHOT_SYSTEM_PROMPT
 
         # Create model call record
         model_call = self._create_model_call(
@@ -273,7 +288,7 @@ class OneShotAdClassifier:
         # Call LLM
         try:
             response = self._call_llm(
-                system_prompt=ONESHOT_SYSTEM_PROMPT,
+                system_prompt=effective_system_prompt,
                 user_prompt=user_prompt,
                 model=model,
                 model_call=model_call,
