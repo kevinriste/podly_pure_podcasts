@@ -706,6 +706,14 @@ def _apply_top_level_env_overrides(cfg: PydanticConfig) -> None:
     if env_oneshot_model:
         cfg.oneshot_model = env_oneshot_model
 
+    env_ina_enabled = os.environ.get("INA_ENABLED")
+    if env_ina_enabled is not None:
+        cfg.ina_enabled = env_ina_enabled.strip().lower() in ("true", "1", "yes")
+
+    env_ina_base_url = os.environ.get("INA_BASE_URL")
+    if env_ina_base_url:
+        cfg.ina_base_url = env_ina_base_url
+
 
 def _apply_remote_whisper_runtime_overrides(whisper: RemoteWhisperConfig) -> None:
     """Apply env var overrides to remote whisper runtime config.
@@ -889,6 +897,45 @@ def _configure_groq_whisper(cfg: PydanticConfig) -> None:
     )
 
 
+def _configure_whisperx(cfg: PydanticConfig) -> None:
+    """Configure WhisperX whisper type."""
+    from shared.config import WhisperXConfig
+
+    base_url = os.environ.get("WHISPERX_BASE_URL") or getattr(
+        cfg.whisper, "base_url", DEFAULTS.WHISPERX_BASE_URL
+    )
+    api_key = os.environ.get("WHISPERX_API_KEY") or getattr(
+        cfg.whisper, "api_key", "not-needed"
+    )
+    language = os.environ.get("WHISPERX_LANGUAGE") or getattr(
+        cfg.whisper, "language", DEFAULTS.WHISPERX_LANGUAGE
+    )
+    model = os.environ.get("WHISPERX_MODEL") or getattr(
+        cfg.whisper, "model", DEFAULTS.WHISPERX_MODEL
+    )
+    parsed_timeout = _parse_int(
+        os.environ.get("WHISPERX_TIMEOUT_SEC"), env_name="WHISPERX_TIMEOUT_SEC"
+    )
+    timeout_sec = parsed_timeout if parsed_timeout is not None else int(
+        getattr(cfg.whisper, "timeout_sec", DEFAULTS.WHISPERX_TIMEOUT_SEC)
+    )
+    parsed_chunksize = _parse_int(
+        os.environ.get("WHISPERX_CHUNKSIZE_MB"), env_name="WHISPERX_CHUNKSIZE_MB"
+    )
+    chunksize_mb = parsed_chunksize if parsed_chunksize is not None else int(
+        getattr(cfg.whisper, "chunksize_mb", DEFAULTS.WHISPERX_CHUNKSIZE_MB)
+    )
+
+    cfg.whisper = WhisperXConfig(
+        base_url=base_url,
+        api_key=api_key,
+        language=language,
+        model=model,
+        timeout_sec=timeout_sec,
+        chunksize_mb=chunksize_mb,
+    )
+
+
 def _apply_whisper_type_override(cfg: PydanticConfig) -> None:
     env_whisper_type = os.environ.get("WHISPER_TYPE")
 
@@ -917,6 +964,8 @@ def _apply_whisper_type_override(cfg: PydanticConfig) -> None:
         _configure_remote_whisper(cfg)
     elif wtype == "groq":
         _configure_groq_whisper(cfg)
+    elif wtype == "whisperx":
+        _configure_whisperx(cfg)
     elif wtype == "test":
         cfg.whisper = TestWhisperConfig()
 
