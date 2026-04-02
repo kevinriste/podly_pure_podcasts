@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { feedsApi } from '../services/api';
 import { useTimestampFormatter } from '../hooks/useTimestampFormatter';
@@ -9,7 +9,23 @@ interface LLMProcessingStatsProps {
   className?: string;
 }
 
-type TabId = 'overview' | 'model-calls' | 'transcript' | 'identifications' | 'audio';
+type TabId = 'overview' | 'model-calls' | 'transcript' | 'identifications' | 'audio' | 'speakers';
+
+type TranscriptRow =
+  | { type: 'transcript'; data: { id: number; sequence_num: number; start_time: number; end_time: number; text: string; speaker?: string | null; primary_label: 'ad' | 'content'; mixed: boolean; identifications: Array<{ id: number; label: string; confidence: number | null; model_call_id: number }> } }
+  | { type: 'audio_marker'; data: { id: number; start_time: number; end_time: number; label: string } };
+
+type IdentificationRow =
+  | { type: 'identification'; data: { id: number; transcript_segment_id: number; label: string; confidence: number | null; model_call_id: number; segment_sequence_num: number; segment_start_time: number; segment_end_time: number; segment_text: string; segment_speaker?: string | null; mixed: boolean } }
+  | { type: 'audio_marker'; data: { id: number; start_time: number; end_time: number; label: string } };
+
+interface SpeakerStat {
+  speaker: string;
+  segmentCount: number;
+  totalTime: number;
+  wordCount: number;
+  percentOfTotal: number;
+}
 
 export default function LLMProcessingStats({
   episodeGuid,
@@ -111,6 +127,109 @@ export default function LLMProcessingStats({
 
   const hasAudioSegments = (stats?.audio_segments?.length ?? 0) > 0;
 
+  const nonSpeechAudioSegments = useMemo(() => {
+    if (!stats?.audio_segments) return [];
+    return stats.audio_segments.filter(s => s.label !== 'speech');
+  }, [stats?.audio_segments]);
+
+  const mergedTranscriptRows: TranscriptRow[] = useMemo(() => {
+    if (!stats) return [];
+    const rows: TranscriptRow[] = (stats.transcript_segments || []).map(seg => ({
+      type: 'transcript' as const,
+      data: seg,
+    }));
+    for (const aseg of nonSpeechAudioSegments) {
+      rows.push({ type: 'audio_marker' as const, data: aseg });
+    }
+    rows.sort((a, b) => {
+      const aTime = a.type === 'transcript' ? a.data.start_time : a.data.start_time;
+      const bTime = b.type === 'transcript' ? b.data.start_time : b.data.start_time;
+      if (aTime !== bTime) return aTime - bTime;
+      // Audio markers sort before transcript rows at the same time
+      if (a.type === 'audio_marker' && b.type === 'transcript') return -1;
+      if (a.type === 'transcript' && b.type === 'audio_marker') return 1;
+      return 0;
+    });
+    return rows;
+  }, [stats, nonSpeechAudioSegments]);
+
+  const mergedIdentificationRows: IdentificationRow[] = useMemo(() => {
+    if (!stats) return [];
+    const rows: IdentificationRow[] = (stats.identifications || []).map(ident => ({
+      type: 'identification' as const,
+      data: ident,
+    }));
+    for (const aseg of nonSpeechAudioSegments) {
+      rows.push({ type: 'audio_marker' as const, data: aseg });
+    }
+    rows.sort((a, b) => {
+      const aTime = a.type === 'identification' ? a.data.segment_start_time : a.data.start_time;
+      const bTime = b.type === 'identification' ? b.data.segment_start_time : b.data.start_time;
+      if (aTime !== bTime) return aTime - bTime;
+      if (a.type === 'audio_marker' && b.type === 'identification') return -1;
+      if (a.type === 'identification' && b.type === 'audio_marker') return 1;
+      return 0;
+    });
+    return rows;
+  }, [stats, nonSpeechAudioSegments]);
+
+  const speakerStats: SpeakerStat[] = useMemo(() => {
+    if (!stats?.transcript_segments) return [];
+    const map = new Map<string, { segmentCount: number; totalTime: number; wordCount: number }>();
+    for (const seg of stats.transcript_segments) {
+      const speaker = seg.speaker || null;
+      if (!speaker) continue;
+      const existing = map.get(speaker) || { segmentCount: 0, totalTime: 0, wordCount: 0 };
+      existing.segmentCount += 1;
+      existing.totalTime += Math.max(0, seg.end_time - seg.start_time);
+      existing.wordCount += seg.text.trim().split(/\s+/).filter(w => w.length > 0).length;
+      map.set(speaker, existing);
+    }
+    if (map.size === 0) return [];
+    const totalTime = Array.from(map.values()).reduce((sum, s) => sum + s.totalTime, 0);
+    const result: SpeakerStat[] = [];
+    for (const [speaker, data] of map.entries()) {
+      result.push({
+        speaker,
+        segmentCount: data.segmentCount,
+        totalTime: data.totalTime,
+        wordCount: data.wordCount,
+        percentOfTotal: totalTime > 0 ? (data.totalTime / totalTime) * 100 : 0,
+      });
+    }
+    result.sort((a, b) => b.totalTime - a.totalTime);
+    return result;
+  }, [stats?.transcript_segments]);
+
+  const hasSpeakers = speakerStats.length > 0;
+
+  const getAudioMarkerBg = (label: string): string => {
+    switch (label) {
+      case 'music': return 'bg-red-50';
+      case 'noEnergy': return 'bg-gray-100';
+      case 'noise': return 'bg-yellow-50';
+      default: return 'bg-gray-50';
+    }
+  };
+
+  const getAudioMarkerLabel = (label: string): string => {
+    switch (label) {
+      case 'music': return 'MUSIC';
+      case 'noEnergy': return 'SILENCE';
+      case 'noise': return 'NOISE';
+      default: return label.toUpperCase();
+    }
+  };
+
+  const getAudioMarkerTextColor = (label: string): string => {
+    switch (label) {
+      case 'music': return 'text-red-600';
+      case 'noEnergy': return 'text-gray-500';
+      case 'noise': return 'text-yellow-700';
+      default: return 'text-gray-500';
+    }
+  };
+
   if (!isStatsReady) {
     return null;
   }
@@ -147,6 +266,7 @@ export default function LLMProcessingStats({
                   { id: 'transcript', label: 'Transcript Segments' },
                   { id: 'identifications', label: 'Identifications' },
                   ...(hasAudioSegments ? [{ id: 'audio', label: 'Audio Segments' }] : []),
+                  ...(hasSpeakers ? [{ id: 'speakers', label: 'Speakers' }] : []),
                 ].map((tab) => (
                   <button
                     key={tab.id}
@@ -162,6 +282,7 @@ export default function LLMProcessingStats({
                     {stats && tab.id === 'transcript' && stats.transcript_segments && ` (${stats.transcript_segments.length})`}
                     {stats && tab.id === 'identifications' && stats.identifications && ` (${stats.identifications.length})`}
                     {stats && tab.id === 'audio' && stats.audio_segments && ` (${stats.audio_segments.length})`}
+                    {stats && tab.id === 'speakers' && ` (${speakerStats.length})`}
                   </button>
                 ))}
               </nav>
@@ -559,45 +680,61 @@ export default function LLMProcessingStats({
                               </tr>
                             </thead>
                             <tbody className="bg-white divide-y divide-gray-200">
-                              {(stats.transcript_segments || []).map((segment) => (
-                                <tr key={segment.id} className={`hover:bg-gray-50 ${
-                                  segment.primary_label === 'ad' ? 'bg-red-50' : ''
-                                }`}>
-                                  <td className="px-4 py-3 text-sm text-gray-900">{segment.sequence_num}</td>
-                                  <td className="px-4 py-3 text-sm text-gray-600">
-                                    {segment.start_time}s - {segment.end_time}s
-                                  </td>
-                                  <td className="px-4 py-3 text-sm">
-                                    {segment.speaker ? (
-                                      <span
-                                        className="inline-flex px-2 py-0.5 rounded text-xs font-medium"
-                                        style={{ backgroundColor: getSpeakerColor(segment.speaker) }}
-                                      >
-                                        {segment.speaker}
+                              {mergedTranscriptRows.map((row, idx) => {
+                                if (row.type === 'audio_marker') {
+                                  const aseg = row.data;
+                                  const duration = (aseg.end_time - aseg.start_time).toFixed(1);
+                                  return (
+                                    <tr key={`audio-${aseg.id}-${idx}`} className={getAudioMarkerBg(aseg.label)}>
+                                      <td colSpan={6} className="px-4 py-1.5 text-center">
+                                        <span className={`text-xs font-medium ${getAudioMarkerTextColor(aseg.label)}`}>
+                                          [{getAudioMarkerLabel(aseg.label)}] ({duration}s)
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  );
+                                }
+                                const segment = row.data;
+                                return (
+                                  <tr key={segment.id} className={`hover:bg-gray-50 ${
+                                    segment.primary_label === 'ad' ? 'bg-red-50' : ''
+                                  }`}>
+                                    <td className="px-4 py-3 text-sm text-gray-900">{segment.sequence_num}</td>
+                                    <td className="px-4 py-3 text-sm text-gray-600">
+                                      {segment.start_time}s - {segment.end_time}s
+                                    </td>
+                                    <td className="px-4 py-3 text-sm">
+                                      {segment.speaker ? (
+                                        <span
+                                          className="inline-flex px-2 py-0.5 rounded text-xs font-medium"
+                                          style={{ backgroundColor: getSpeakerColor(segment.speaker) }}
+                                        >
+                                          {segment.speaker}
+                                        </span>
+                                      ) : null}
+                                    </td>
+                                    <td className="px-4 py-3">
+                                      <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
+                                        segment.primary_label === 'ad'
+                                          ? 'bg-red-100 text-red-800'
+                                          : 'bg-green-100 text-green-800'
+                                      }`}>
+                                        {segment.primary_label === 'ad'
+                                          ? (segment.mixed ? 'Ad (mixed)' : 'Ad')
+                                          : 'Content'}
                                       </span>
-                                    ) : null}
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
-                                      segment.primary_label === 'ad'
-                                        ? 'bg-red-100 text-red-800'
-                                        : 'bg-green-100 text-green-800'
-                                    }`}>
-                                      {segment.primary_label === 'ad'
-                                        ? (segment.mixed ? 'Ad (mixed)' : 'Ad')
-                                        : 'Content'}
-                                    </span>
-                                  </td>
-                                  <td className="px-4 py-3 text-sm text-gray-600">
-                                    {formatConfidence(getTranscriptSegmentConfidence(segment))}
-                                  </td>
-                                  <td className="px-4 py-3 text-sm text-gray-900 max-w-md">
-                                    <div className="truncate text-left" title={segment.text}>
-                                      {segment.text}
-                                    </div>
-                                  </td>
-                                </tr>
-                              ))}
+                                    </td>
+                                    <td className="px-4 py-3 text-sm text-gray-600">
+                                      {formatConfidence(getTranscriptSegmentConfidence(segment))}
+                                    </td>
+                                    <td className="px-4 py-3 text-sm text-gray-900 max-w-md">
+                                      <div className="truncate text-left" title={segment.text}>
+                                        {segment.text}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>
@@ -624,47 +761,63 @@ export default function LLMProcessingStats({
                               </tr>
                             </thead>
                             <tbody className="bg-white divide-y divide-gray-200">
-                              {(stats.identifications || []).map((identification) => (
-                                <tr key={identification.id} className={`hover:bg-gray-50 ${
-                                  identification.label === 'ad' ? 'bg-red-50' : ''
-                                }`}>
-                                  <td className="px-4 py-3 text-sm text-gray-900">{identification.id}</td>
-                                  <td className="px-4 py-3 text-sm text-gray-600">{identification.transcript_segment_id}</td>
-                                  <td className="px-4 py-3 text-sm text-gray-600">
-                                    {identification.segment_start_time}s - {identification.segment_end_time}s
-                                  </td>
-                                  <td className="px-4 py-3 text-sm">
-                                    {identification.segment_speaker ? (
-                                      <span
-                                        className="inline-flex px-2 py-0.5 rounded text-xs font-medium"
-                                        style={{ backgroundColor: getSpeakerColor(identification.segment_speaker) }}
-                                      >
-                                        {identification.segment_speaker}
+                              {mergedIdentificationRows.map((row, idx) => {
+                                if (row.type === 'audio_marker') {
+                                  const aseg = row.data;
+                                  const duration = (aseg.end_time - aseg.start_time).toFixed(1);
+                                  return (
+                                    <tr key={`audio-${aseg.id}-${idx}`} className={getAudioMarkerBg(aseg.label)}>
+                                      <td colSpan={8} className="px-4 py-1.5 text-center">
+                                        <span className={`text-xs font-medium ${getAudioMarkerTextColor(aseg.label)}`}>
+                                          [{getAudioMarkerLabel(aseg.label)}] ({duration}s)
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  );
+                                }
+                                const identification = row.data;
+                                return (
+                                  <tr key={identification.id} className={`hover:bg-gray-50 ${
+                                    identification.label === 'ad' ? 'bg-red-50' : ''
+                                  }`}>
+                                    <td className="px-4 py-3 text-sm text-gray-900">{identification.id}</td>
+                                    <td className="px-4 py-3 text-sm text-gray-600">{identification.transcript_segment_id}</td>
+                                    <td className="px-4 py-3 text-sm text-gray-600">
+                                      {identification.segment_start_time}s - {identification.segment_end_time}s
+                                    </td>
+                                    <td className="px-4 py-3 text-sm">
+                                      {identification.segment_speaker ? (
+                                        <span
+                                          className="inline-flex px-2 py-0.5 rounded text-xs font-medium"
+                                          style={{ backgroundColor: getSpeakerColor(identification.segment_speaker) }}
+                                        >
+                                          {identification.segment_speaker}
+                                        </span>
+                                      ) : null}
+                                    </td>
+                                    <td className="px-4 py-3">
+                                      <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
+                                        identification.label === 'ad'
+                                          ? 'bg-red-100 text-red-800'
+                                          : 'bg-green-100 text-green-800'
+                                      }`}>
+                                        {identification.label === 'ad'
+                                          ? (identification.mixed ? 'ad (mixed)' : 'ad')
+                                          : identification.label}
                                       </span>
-                                    ) : null}
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    <span className={`inline-flex px-2 py-1 text-xs font-medium rounded-full ${
-                                      identification.label === 'ad'
-                                        ? 'bg-red-100 text-red-800'
-                                        : 'bg-green-100 text-green-800'
-                                    }`}>
-                                      {identification.label === 'ad'
-                                        ? (identification.mixed ? 'ad (mixed)' : 'ad')
-                                        : identification.label}
-                                    </span>
-                                  </td>
-                                  <td className="px-4 py-3 text-sm text-gray-600">
-                                    {formatConfidence(identification.confidence)}
-                                  </td>
-                                  <td className="px-4 py-3 text-sm text-gray-600">{identification.model_call_id}</td>
-                                  <td className="px-4 py-3 text-sm text-gray-900 max-w-md">
-                                    <div className="truncate text-left" title={identification.segment_text}>
-                                      {identification.segment_text}
-                                    </div>
-                                  </td>
-                                </tr>
-                              ))}
+                                    </td>
+                                    <td className="px-4 py-3 text-sm text-gray-600">
+                                      {formatConfidence(identification.confidence)}
+                                    </td>
+                                    <td className="px-4 py-3 text-sm text-gray-600">{identification.model_call_id}</td>
+                                    <td className="px-4 py-3 text-sm text-gray-900 max-w-md">
+                                      <div className="truncate text-left" title={identification.segment_text}>
+                                        {identification.segment_text}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>
@@ -704,6 +857,55 @@ export default function LLMProcessingStats({
                                   </tr>
                                 );
                               })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTab === 'speakers' && hasSpeakers && (
+                    <div>
+                      <h3 className="font-semibold text-gray-900 mb-4 text-left">Speaker Statistics ({speakerStats.length})</h3>
+                      <div className="bg-white border rounded-lg overflow-hidden">
+                        <div className="overflow-x-auto">
+                          <table className="min-w-full divide-y divide-gray-200">
+                            <thead className="bg-gray-50">
+                              <tr>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Speaker</th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Segments</th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Words</th>
+                                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">% of Total</th>
+                              </tr>
+                            </thead>
+                            <tbody className="bg-white divide-y divide-gray-200">
+                              {speakerStats.map((spk) => (
+                                <tr key={spk.speaker} className="hover:bg-gray-50">
+                                  <td className="px-4 py-3 text-sm">
+                                    <span
+                                      className="inline-flex px-2 py-0.5 rounded text-xs font-medium"
+                                      style={{ backgroundColor: getSpeakerColor(spk.speaker) }}
+                                    >
+                                      {spk.speaker}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-3 text-sm text-gray-900">{spk.segmentCount}</td>
+                                  <td className="px-4 py-3 text-sm text-gray-900">{formatDuration(spk.totalTime)}</td>
+                                  <td className="px-4 py-3 text-sm text-gray-900">{spk.wordCount.toLocaleString()}</td>
+                                  <td className="px-4 py-3 text-sm">
+                                    <div className="flex items-center gap-2">
+                                      <div className="flex-1 bg-gray-200 rounded-full h-2 max-w-[120px]">
+                                        <div
+                                          className="bg-blue-500 h-2 rounded-full"
+                                          style={{ width: `${Math.min(100, spk.percentOfTotal)}%` }}
+                                        />
+                                      </div>
+                                      <span className="text-gray-600">{spk.percentOfTotal.toFixed(1)}%</span>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
                             </tbody>
                           </table>
                         </div>
