@@ -1,9 +1,11 @@
+import concurrent.futures
 import json
 import logging
 import os
 import shutil
 import threading
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +14,7 @@ from jinja2 import Template
 from sqlalchemy.orm import object_session
 
 from app.extensions import db
-from app.models import Post, ProcessingJob, TranscriptSegment
+from app.models import ModelCall, Post, ProcessingJob, TranscriptSegment
 from app.writer.client import writer_client
 from podcast_processor.ad_classifier import AdClassifier
 from podcast_processor.audio import clip_segments_exact
@@ -29,6 +31,7 @@ from podcast_processor.chapter_fallback import (
     resolve_llm_path_chapters,
 )
 from podcast_processor.chapter_filter import parse_filter_strings
+from podcast_processor.ina_client import AudioSegmentResult, analyze_audio
 from podcast_processor.oneshot_classifier import OneShotAdClassifier
 from podcast_processor.chapter_writer import (
     recalculate_chapter_times,
@@ -442,11 +445,32 @@ class PodcastProcessor:
         self.status_manager.update_job_status(
             job, "running", 2, "Transcribing audio", 50.0
         )
-        transcript_segments = self.transcription_manager.transcribe(post)
-        self._raise_if_cancelled(job, 2, cancel_callback)
+
+        # Start INA analysis in parallel with transcription
+        ina_future = None
         unprocessed_audio_path = (
             str(post.unprocessed_audio_path) if post.unprocessed_audio_path else None
         )
+        if (
+            getattr(self.config, "ina_enabled", False)
+            and self.config.ina_base_url
+            and unprocessed_audio_path
+        ):
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            ina_future = executor.submit(
+                self._run_ina_analysis, post.id, unprocessed_audio_path
+            )
+
+        transcript_segments = self.transcription_manager.transcribe(post)
+        self._raise_if_cancelled(job, 2, cancel_callback)
+
+        # Collect INA results
+        if ina_future:
+            try:
+                ina_future.result(timeout=3600)
+            except Exception as e:
+                self.logger.warning("INA analysis failed: %s", e)
+
         post_description = post.description
 
         # Step 3: Classify ad segments
@@ -558,8 +582,31 @@ class PodcastProcessor:
         self.status_manager.update_job_status(
             job, "running", 2, "Transcribing audio", 50.0
         )
+
+        # Start INA analysis in parallel with transcription
+        ina_future = None
+        unprocessed_audio_path_for_ina = (
+            str(post.unprocessed_audio_path) if post.unprocessed_audio_path else None
+        )
+        if (
+            getattr(self.config, "ina_enabled", False)
+            and self.config.ina_base_url
+            and unprocessed_audio_path_for_ina
+        ):
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            ina_future = executor.submit(
+                self._run_ina_analysis, post.id, unprocessed_audio_path_for_ina
+            )
+
         transcript_segments = self.transcription_manager.transcribe(post)
         self._raise_if_cancelled(job, 2, cancel_callback)
+
+        # Collect INA results
+        if ina_future:
+            try:
+                ina_future.result(timeout=3600)
+            except Exception as e:
+                self.logger.warning("INA analysis failed: %s", e)
 
         if not transcript_segments:
             raise ProcessorException(
@@ -1065,6 +1112,79 @@ class PodcastProcessor:
             user_prompt_template=user_prompt_template,
             post=post,
         )
+
+    def _run_ina_analysis(
+        self, post_id: int, audio_path: str
+    ) -> list[AudioSegmentResult]:
+        """Run INA speech segmenter analysis and persist results via writer.
+
+        This method is designed to run in a background thread alongside
+        transcription. It creates its own ModelCall and stores AudioSegment
+        rows through the writer.
+        """
+        self.logger.info("[INA] Starting INA analysis for post %d", post_id)
+        ina_base_url = self.config.ina_base_url
+        assert ina_base_url is not None
+
+        results, raw_response = analyze_audio(
+            audio_path=audio_path,
+            base_url=ina_base_url,
+        )
+        self.logger.info(
+            "[INA] INA analysis complete for post %d: %d segments",
+            post_id,
+            len(results),
+        )
+
+        # Create a ModelCall for the INA run via writer
+        mc_result = writer_client.action(
+            "upsert_whisper_model_call",
+            {
+                "post_id": post_id,
+                "model_name": "ina:speech_music_noise",
+                "first_segment_sequence_num": 0,
+                "last_segment_sequence_num": max(len(results) - 1, 0),
+                "prompt": "INA speech segmenter analysis",
+                "reset_fields": {
+                    "status": "success",
+                    "prompt": "INA speech segmenter analysis",
+                    "retry_attempts": 0,
+                    "error_message": None,
+                    "response": raw_response,
+                },
+            },
+            wait=True,
+        )
+        model_call_id = None
+        if mc_result and mc_result.success:
+            model_call_id = (mc_result.data or {}).get("model_call_id")
+
+        # Persist audio segments via writer
+        segments_payload = [
+            {
+                "start_time": r.start_time,
+                "end_time": r.end_time,
+                "label": r.label,
+            }
+            for r in results
+        ]
+        write_res = writer_client.action(
+            "replace_audio_segments",
+            {
+                "post_id": post_id,
+                "segments": segments_payload,
+                "model_call_id": model_call_id,
+            },
+            wait=True,
+        )
+        if not write_res or not write_res.success:
+            self.logger.warning(
+                "[INA] Failed to persist audio segments for post %d: %s",
+                post_id,
+                getattr(write_res, "error", None),
+            )
+
+        return results
 
     def _simulate_developer_processing(
         self,
