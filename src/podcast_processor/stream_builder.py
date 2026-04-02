@@ -1,19 +1,14 @@
 """Build merged transcript + audio stream for enriched ad detection."""
 
-from __future__ import annotations
-
 import logging
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from app.models import AudioSegment, TranscriptSegment
+from typing import Any
 
 logger = logging.getLogger("global_logger")
 
 
 def build_merged_stream(
-    transcript_segments: list[TranscriptSegment],
-    audio_segments: list[AudioSegment],
+    transcript_segments: list[Any],
+    audio_segments: list[Any],
     min_music_duration: float = 0.5,
     min_silence_duration: float = 2.0,
 ) -> str:
