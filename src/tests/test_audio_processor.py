@@ -180,8 +180,8 @@ def test_fill_ina_speech_gaps_bridges_gap(app: Flask) -> None:
         assert result == [(0.0, 40.0)]
 
 
-def test_fill_ina_speech_gaps_skips_content_gap(app: Flask) -> None:
-    """Gap with INA speech < 50% is left as-is (content between ads)."""
+def test_fill_ina_speech_gaps_skips_low_speech_gap(app: Flask) -> None:
+    """Gap with INA speech < 50% is left as-is."""
     with app.app_context():
         feed = Feed(title="Test Feed", rss_url="http://example.com/rss2.xml")
         db.session.add(feed)
@@ -196,7 +196,7 @@ def test_fill_ina_speech_gaps_skips_content_gap(app: Flask) -> None:
         db.session.add(post)
         db.session.commit()
 
-        # INA says only 4s of speech in a 20s gap (20% — content, not ad)
+        # INA says only 4s of speech in a 20s gap (20%)
         db.session.add(AudioSegment(post_id=post.id, start_time=24.0, end_time=28.0, label="speech"))
         db.session.add(AudioSegment(post_id=post.id, start_time=10.0, end_time=24.0, label="noise"))
         db.session.commit()
@@ -213,6 +213,41 @@ def test_fill_ina_speech_gaps_skips_content_gap(app: Flask) -> None:
         )
 
         assert result == [(0.0, 10.0), (30.0, 40.0)]
+
+
+def test_fill_ina_speech_gaps_skips_large_content_gap(app: Flask) -> None:
+    """Gap wider than max_gap is never bridged even when INA sees speech (it's content)."""
+    with app.app_context():
+        feed = Feed(title="Test Feed", rss_url="http://example.com/rss4.xml")
+        db.session.add(feed)
+        db.session.commit()
+
+        post = Post(
+            feed_id=feed.id,
+            title="Test Post 4",
+            guid="ina-gap-guid-4",
+            download_url="http://example.com/audio4.mp3",
+        )
+        db.session.add(post)
+        db.session.commit()
+
+        # INA sees 100% speech in a 200s gap — this is content, not a Whisper drop
+        db.session.add(AudioSegment(post_id=post.id, start_time=10.0, end_time=210.0, label="speech"))
+        db.session.commit()
+
+        processor = AudioProcessor(
+            config=create_standard_test_config(),
+            db_session=db.session,
+        )
+
+        result = processor._fill_ina_speech_gaps(
+            post,
+            [(0.0, 10.0), (210.0, 220.0)],
+            min_gap=15.0,
+            max_gap=60.0,
+        )
+
+        assert result == [(0.0, 10.0), (210.0, 220.0)]
 
 
 def test_fill_ina_speech_gaps_no_ina_data(app: Flask) -> None:
