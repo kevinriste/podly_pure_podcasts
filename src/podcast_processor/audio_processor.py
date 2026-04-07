@@ -2,7 +2,7 @@ import logging
 from typing import Any
 
 from app.extensions import db
-from app.models import Identification, ModelCall, Post, TranscriptSegment
+from app.models import AudioSegment, Identification, ModelCall, Post, TranscriptSegment
 from app.writer.client import writer_client
 from podcast_processor.ad_merger import AdMerger
 from podcast_processor.audio import clip_segments_with_fade, get_audio_duration_ms
@@ -117,7 +117,85 @@ class AudioProcessor:
         # Convert to time tuples for merge_ad_segments()
         ad_segments_times = [(g.start_time, g.end_time) for g in ad_groups]
         ad_segments_times.sort(key=lambda x: x[0])
+
+        # Fill gaps where Whisper missed audio but INA detected speech.
+        # When Whisper drops a chunk mid-ad-block the merger can't bridge it
+        # (no segments to join). If INA labels ≥50% of the gap as speech we
+        # extend the cut to cover it.
+        ad_segments_times = self._fill_ina_speech_gaps(
+            post,
+            ad_segments_times,
+            min_gap=float(self.config.output.min_ad_segement_separation_seconds),
+        )
+
         return ad_segments_times
+
+    def _fill_ina_speech_gaps(
+        self,
+        post: Post,
+        ad_segments: list[tuple[float, float]],
+        min_gap: float,
+        min_speech_fraction: float = 0.5,
+    ) -> list[tuple[float, float]]:
+        """Bridge gaps between ad segments where INA detects speech.
+
+        When Whisper fails to transcribe a chunk inside an ad block the
+        AdMerger has no segments to join across the silence, leaving a hole
+        in the cut.  This method closes those holes: for each gap wider than
+        *min_gap* between two consecutive ad windows it queries the
+        audio_segment table (populated by inaSpeechSegmenter) and merges the
+        two windows when INA labels at least *min_speech_fraction* of the gap
+        as speech.
+
+        Falls back gracefully if INA data is absent for the post.
+        """
+        if len(ad_segments) < 2:
+            return ad_segments
+
+        result = list(ad_segments)
+        i = 0
+        while i < len(result) - 1:
+            gap_start = result[i][1]
+            gap_end = result[i + 1][0]
+            gap = gap_end - gap_start
+
+            if gap < min_gap:
+                i += 1
+                continue
+
+            try:
+                ina_segs = (
+                    self.db_session.query(AudioSegment)
+                    .filter(
+                        AudioSegment.post_id == post.id,
+                        AudioSegment.label == "speech",
+                        AudioSegment.end_time > gap_start,
+                        AudioSegment.start_time < gap_end,
+                    )
+                    .all()
+                )
+            except Exception:  # noqa: BLE001
+                i += 1
+                continue
+
+            speech_dur = sum(
+                min(seg.end_time, gap_end) - max(seg.start_time, gap_start)
+                for seg in ina_segs
+                if min(seg.end_time, gap_end) > max(seg.start_time, gap_start)
+            )
+
+            if speech_dur >= gap * min_speech_fraction:
+                self.logger.info(
+                    f"Filling {gap:.1f}s gap [{gap_start:.1f}-{gap_end:.1f}s] "
+                    f"for post {post.id}: INA speech {speech_dur:.1f}s "
+                    f"({speech_dur / gap:.0%} of gap)"
+                )
+                result[i] = (result[i][0], result[i + 1][1])
+                result.pop(i + 1)
+            else:
+                i += 1
+
+        return result
 
     def _apply_refined_boundaries(self, post: Post, ad_groups: Any) -> None:
         post_row = self._safe_get_post_row(post)
