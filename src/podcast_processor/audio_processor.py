@@ -170,26 +170,19 @@ class AudioProcessor:
                 continue
 
             try:
-                # Only bridge if the LLM did not classify any segment in the
-                # gap as non-ad. Segments may exist in the gap but be
-                # unidentified (LLM chunk boundary miss) — those are treated
-                # the same as Whisper drops. We only back off if the LLM
-                # explicitly saw content here and said it was not an ad.
-                content_in_gap = (
-                    self.db_session.query(Identification)
-                    .join(
-                        TranscriptSegment,
-                        Identification.transcript_segment_id == TranscriptSegment.id,
-                    )
+                # Only bridge if Whisper produced no transcript in the gap.
+                # If there are transcript segments here the LLM had a chance to
+                # classify them; bridging would cut content the LLM said was fine.
+                transcript_in_gap = (
+                    self.db_session.query(TranscriptSegment)
                     .filter(
                         TranscriptSegment.post_id == post.id,
                         TranscriptSegment.end_time > gap_start,
                         TranscriptSegment.start_time < gap_end,
-                        Identification.label != "ad",
                     )
                     .first()
                 )
-                if content_in_gap is not None:
+                if transcript_in_gap is not None:
                     i += 1
                     continue
 
