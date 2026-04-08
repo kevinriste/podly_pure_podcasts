@@ -135,23 +135,17 @@ class AudioProcessor:
         post: Post,
         ad_segments: list[tuple[float, float]],
         min_gap: float,
-        max_gap: float = 60.0,
         min_speech_fraction: float = 0.5,
     ) -> list[tuple[float, float]]:
         """Bridge gaps between ad segments where INA detects speech.
 
         When Whisper fails to transcribe a chunk inside an ad block the
         AdMerger has no segments to join across the silence, leaving a hole
-        in the cut.  This method closes those holes: for each gap between
-        *min_gap* and *max_gap* between two consecutive ad windows it queries
-        the audio_segment table (populated by inaSpeechSegmenter) and merges
-        the two windows when INA labels at least *min_speech_fraction* of the
-        gap as speech.
-
-        The max_gap bound is critical — content sections between ad blocks are
-        also speech-heavy, so without it every content gap would be bridged.
-        Whisper drop gaps in practice are <60s; content gaps are typically
-        >100s.
+        in the cut.  This method closes those holes: for each gap wider than
+        *min_gap* between two consecutive ad windows it queries the
+        audio_segment table (populated by inaSpeechSegmenter) and merges the
+        two windows when INA labels at least *min_speech_fraction* of the gap
+        as speech.
 
         Falls back gracefully if INA data is absent for the post.
         """
@@ -165,7 +159,7 @@ class AudioProcessor:
             gap_end = result[i + 1][0]
             gap = gap_end - gap_start
 
-            if gap < min_gap or gap > max_gap:
+            if gap < min_gap:
                 i += 1
                 continue
 
