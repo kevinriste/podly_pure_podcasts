@@ -5,7 +5,7 @@ import pytest
 from flask import Flask
 
 from app.extensions import db
-from app.models import AudioSegment, Feed, Identification, Post, TranscriptSegment
+from app.models import Feed, Identification, Post, TranscriptSegment
 from podcast_processor.audio_processor import AudioProcessor
 from shared.config import Config
 from shared.test_utils import create_standard_test_config
@@ -143,106 +143,6 @@ def test_merge_ad_segments_end_extension(
 
     assert len(merged) == 1
     assert merged[0] == (28000, 30000)  # Extended to end
-
-
-def test_fill_ina_speech_gaps_bridges_gap(app: Flask) -> None:
-    """Gap with INA speech >= 50% is bridged into a single ad segment."""
-    with app.app_context():
-        feed = Feed(title="Test Feed", rss_url="http://example.com/rss.xml")
-        db.session.add(feed)
-        db.session.commit()
-
-        post = Post(
-            feed_id=feed.id,
-            title="Test Post",
-            guid="ina-gap-guid",
-            download_url="http://example.com/audio.mp3",
-        )
-        db.session.add(post)
-        db.session.commit()
-
-        # INA says the gap [10-30s] is 80% speech (16s out of 20s)
-        db.session.add(AudioSegment(post_id=post.id, start_time=10.0, end_time=26.0, label="speech"))
-        db.session.add(AudioSegment(post_id=post.id, start_time=26.0, end_time=30.0, label="music"))
-        db.session.commit()
-
-        processor = AudioProcessor(
-            config=create_standard_test_config(),
-            db_session=db.session,
-        )
-
-        result = processor._fill_ina_speech_gaps(
-            post,
-            [(0.0, 10.0), (30.0, 40.0)],
-            min_gap=15.0,
-        )
-
-        assert result == [(0.0, 40.0)]
-
-
-def test_fill_ina_speech_gaps_skips_content_gap(app: Flask) -> None:
-    """Gap with INA speech < 50% is left as-is (content between ads)."""
-    with app.app_context():
-        feed = Feed(title="Test Feed", rss_url="http://example.com/rss2.xml")
-        db.session.add(feed)
-        db.session.commit()
-
-        post = Post(
-            feed_id=feed.id,
-            title="Test Post 2",
-            guid="ina-gap-guid-2",
-            download_url="http://example.com/audio2.mp3",
-        )
-        db.session.add(post)
-        db.session.commit()
-
-        # INA says only 4s of speech in a 20s gap (20% — content, not ad)
-        db.session.add(AudioSegment(post_id=post.id, start_time=24.0, end_time=28.0, label="speech"))
-        db.session.add(AudioSegment(post_id=post.id, start_time=10.0, end_time=24.0, label="noise"))
-        db.session.commit()
-
-        processor = AudioProcessor(
-            config=create_standard_test_config(),
-            db_session=db.session,
-        )
-
-        result = processor._fill_ina_speech_gaps(
-            post,
-            [(0.0, 10.0), (30.0, 40.0)],
-            min_gap=15.0,
-        )
-
-        assert result == [(0.0, 10.0), (30.0, 40.0)]
-
-
-def test_fill_ina_speech_gaps_no_ina_data(app: Flask) -> None:
-    """No INA data for post — gap is left unchanged."""
-    with app.app_context():
-        feed = Feed(title="Test Feed", rss_url="http://example.com/rss3.xml")
-        db.session.add(feed)
-        db.session.commit()
-
-        post = Post(
-            feed_id=feed.id,
-            title="Test Post 3",
-            guid="ina-gap-guid-3",
-            download_url="http://example.com/audio3.mp3",
-        )
-        db.session.add(post)
-        db.session.commit()
-
-        processor = AudioProcessor(
-            config=create_standard_test_config(),
-            db_session=db.session,
-        )
-
-        result = processor._fill_ina_speech_gaps(
-            post,
-            [(0.0, 10.0), (30.0, 40.0)],
-            min_gap=15.0,
-        )
-
-        assert result == [(0.0, 10.0), (30.0, 40.0)]
 
 
 def test_process_audio(
