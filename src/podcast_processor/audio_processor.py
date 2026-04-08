@@ -170,6 +170,22 @@ class AudioProcessor:
                 continue
 
             try:
+                # Only bridge if Whisper produced no transcript in the gap.
+                # If there are transcript segments here the LLM had a chance to
+                # classify them; bridging would cut content the LLM said was fine.
+                transcript_in_gap = (
+                    self.db_session.query(TranscriptSegment)
+                    .filter(
+                        TranscriptSegment.post_id == post.id,
+                        TranscriptSegment.end_time > gap_start,
+                        TranscriptSegment.start_time < gap_end,
+                    )
+                    .first()
+                )
+                if transcript_in_gap is not None:
+                    i += 1
+                    continue
+
                 ina_segs = (
                     self.db_session.query(AudioSegment)
                     .filter(

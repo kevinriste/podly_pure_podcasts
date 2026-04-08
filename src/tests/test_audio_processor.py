@@ -250,6 +250,45 @@ def test_fill_ina_speech_gaps_skips_large_content_gap(app: Flask) -> None:
         assert result == [(0.0, 10.0), (210.0, 220.0)]
 
 
+def test_fill_ina_speech_gaps_skips_gap_with_transcript(app: Flask) -> None:
+    """Gap with transcript segments present is never bridged — LLM already saw it."""
+    with app.app_context():
+        feed = Feed(title="Test Feed", rss_url="http://example.com/rss5.xml")
+        db.session.add(feed)
+        db.session.commit()
+
+        post = Post(
+            feed_id=feed.id,
+            title="Test Post 5",
+            guid="ina-gap-guid-5",
+            download_url="http://example.com/audio5.mp3",
+        )
+        db.session.add(post)
+        db.session.commit()
+
+        # Whisper DID transcribe content in the gap — LLM classified it as not-ad
+        db.session.add(TranscriptSegment(
+            post_id=post.id, sequence_num=5,
+            start_time=12.0, end_time=25.0, text="This is real content.",
+        ))
+        # INA also sees speech (of course — Whisper transcribed it)
+        db.session.add(AudioSegment(post_id=post.id, start_time=10.0, end_time=30.0, label="speech"))
+        db.session.commit()
+
+        processor = AudioProcessor(
+            config=create_standard_test_config(),
+            db_session=db.session,
+        )
+
+        result = processor._fill_ina_speech_gaps(
+            post,
+            [(0.0, 10.0), (30.0, 40.0)],
+            min_gap=15.0,
+        )
+
+        assert result == [(0.0, 10.0), (30.0, 40.0)]
+
+
 def test_fill_ina_speech_gaps_no_ina_data(app: Flask) -> None:
     """No INA data for post — gap is left unchanged."""
     with app.app_context():
