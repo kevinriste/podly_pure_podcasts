@@ -568,12 +568,18 @@ def api_post_stats(p_guid: str) -> flask.Response:
     ad_blocks = merge_time_windows(ad_windows_source, gap_seconds=1.0)
     ad_time_seconds = sum(end - start for start, end in ad_blocks if end > start)
 
-    duration_seconds = float(post.duration or 0)
-    if duration_seconds <= 0 and transcript_segments:
-        duration_seconds = max(float(seg.end_time) for seg in transcript_segments)
+    cut_duration_seconds = float(post.duration or 0)
+    if cut_duration_seconds <= 0 and transcript_segments:
+        cut_duration_seconds = max(float(seg.end_time) for seg in transcript_segments)
+
+    # post.duration is the cut (ad-removed) audio length; reconstruct original by adding
+    # back the removed ad time so the percentage uses the correct denominator.
+    original_duration_seconds = cut_duration_seconds + ad_time_seconds
 
     ad_percentage = (
-        (ad_time_seconds / duration_seconds) * 100 if duration_seconds > 0 else 0.0
+        (ad_time_seconds / original_duration_seconds) * 100
+        if original_duration_seconds > 0
+        else 0.0
     )
 
     stats_data = {
@@ -597,6 +603,7 @@ def api_post_stats(p_guid: str) -> flask.Response:
             "ad_segments_count": ad_segments,
             "ad_percentage": round(ad_percentage, 1),
             "estimated_ad_time_seconds": round(ad_time_seconds, 1),
+            "original_duration_seconds": round(original_duration_seconds, 1),
             "ad_blocks": [
                 {
                     "start_time": round(start, 1),
