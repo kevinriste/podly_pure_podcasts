@@ -263,10 +263,12 @@ export default function LLMProcessingStats({
                       )}
 
                       {(() => {
-                        const durationSeconds = stats.post?.duration
-                          ?? (stats.transcript_segments?.length
-                            ? Math.max(...stats.transcript_segments.map((segment) => segment.end_time))
-                            : 0);
+                        const durationSeconds = (
+                          stats.processing_stats?.original_duration_seconds
+                          ?? ((stats.post?.duration ?? 0) + (stats.processing_stats?.estimated_ad_time_seconds ?? 0))
+                        ) || (stats.transcript_segments?.length
+                          ? Math.max(...stats.transcript_segments.map((segment) => segment.end_time))
+                          : 0);
                         const fallbackAdBlocks = (() => {
                           const adSegments = (stats.transcript_segments || [])
                             .filter((segment) => segment.primary_label === 'ad')
