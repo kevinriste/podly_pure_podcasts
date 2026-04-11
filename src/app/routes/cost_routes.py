@@ -14,7 +14,16 @@ from flask import Blueprint, jsonify, request
 from app.auth.guards import require_admin
 from app.config_store import read_combined
 from app.extensions import db
-from app.models import Feed, Identification, ModelCall, Post, ProcessingJob, TranscriptSegment, User, UserFeed
+from app.models import (
+    Feed,
+    Identification,
+    ModelCall,
+    Post,
+    ProcessingJob,
+    TranscriptSegment,
+    User,
+    UserFeed,
+)
 from app.writer.client import writer_client
 
 logger = logging.getLogger("global_logger")
@@ -118,7 +127,9 @@ def api_admin_costs() -> flask.Response:
         .group_by(TranscriptSegment.post_id)
         .all()
     )
-    ad_time_by_post_id: dict[int, float] = {row[0]: float(row[1]) for row in ad_time_rows}
+    ad_time_by_post_id: dict[int, float] = {
+        row[0]: float(row[1]) for row in ad_time_rows
+    }
 
     # --- Per-user monthly cost breakdown ---
     user_feed_map: dict[int, list[int]] = {}  # user_id -> [feed_id, ...]
