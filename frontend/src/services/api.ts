@@ -298,6 +298,7 @@ export const feedsApi = {
       ad_segments_count: number;
       ad_percentage: number;
       estimated_ad_time_seconds: number;
+      original_duration_seconds: number;
       ad_blocks?: Array<{
         start_time: number;
         end_time: number;
@@ -466,6 +467,7 @@ export const feedsApi = {
       ad_segments_count: number;
       ad_percentage: number;
       estimated_ad_time_seconds: number;
+      original_duration_seconds: number;
       ad_blocks?: Array<{
         start_time: number;
         end_time: number;
