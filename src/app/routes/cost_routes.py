@@ -14,7 +14,16 @@ from flask import Blueprint, jsonify, request
 from app.auth.guards import require_admin
 from app.config_store import read_combined
 from app.extensions import db
-from app.models import Feed, ModelCall, Post, ProcessingJob, User, UserFeed
+from app.models import (
+    Feed,
+    Identification,
+    ModelCall,
+    Post,
+    ProcessingJob,
+    TranscriptSegment,
+    User,
+    UserFeed,
+)
 from app.writer.client import writer_client
 
 logger = logging.getLogger("global_logger")
@@ -23,7 +32,7 @@ costs_bp = Blueprint("costs", __name__)
 
 
 def _compute_cost_per_subscriber(
-    duration_seconds: int, subscriber_count: int, cost_rate: float
+    duration_seconds: float, subscriber_count: int, cost_rate: float
 ) -> float:
     """Cost attributed per subscriber for one episode."""
     if subscriber_count <= 0 or duration_seconds <= 0:
@@ -98,6 +107,30 @@ def api_admin_costs() -> flask.Response:
     )
     post_map: dict[str, Post] = {p.guid: p for p in posts_in_month}
 
+    # Batch-query ad time per post so we can reconstruct original duration.
+    # post.duration is the cut (ad-removed) length; original = cut + ad_time.
+    post_ids = [p.id for p in posts_in_month]
+    ad_segment_subq = (
+        db.session.query(Identification.transcript_segment_id)
+        .filter(Identification.label == "ad")
+        .subquery()
+    )
+    ad_time_rows = (
+        db.session.query(
+            TranscriptSegment.post_id,
+            db.func.sum(TranscriptSegment.end_time - TranscriptSegment.start_time),
+        )
+        .filter(
+            TranscriptSegment.post_id.in_(post_ids),
+            TranscriptSegment.id.in_(ad_segment_subq),
+        )
+        .group_by(TranscriptSegment.post_id)
+        .all()
+    )
+    ad_time_by_post_id: dict[int, float] = {
+        row[0]: float(row[1]) for row in ad_time_rows
+    }
+
     # --- Per-user monthly cost breakdown ---
     user_feed_map: dict[int, list[int]] = {}  # user_id -> [feed_id, ...]
     feed_user_map: dict[int, list[int]] = {}  # feed_id -> [user_id, ...]
@@ -114,7 +147,9 @@ def api_admin_costs() -> flask.Response:
         post = post_map.get(guid)
         if not post:
             continue
-        duration = post.duration or 0
+        cut_duration = float(post.duration or 0)
+        ad_time = ad_time_by_post_id.get(post.id, 0.0)
+        duration = cut_duration + ad_time  # original duration = cut + removed ad time
         feed_id = post.feed_id
         subscriber_count = feed_subscriber_count.get(feed_id, 0)
         cost_per_sub = _compute_cost_per_subscriber(
