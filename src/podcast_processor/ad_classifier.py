@@ -1519,9 +1519,10 @@ class AdClassifier:
         for seg in transcript_segments:
             seg_start = float(seg.start_time or 0.0)
             seg_end = float(seg.end_time or seg_start)
-            # Keep segments that overlap the refined window. This preserves the
-            # containing segment when refined boundaries fall mid-segment.
-            if seg_start <= float(refinement.refined_end) and seg_end >= float(
+            # Keep segments that overlap the refined window. Use strict inequalities
+            # so a segment that merely touches the boundary (start == refined_end or
+            # end == refined_start) is not included.
+            if seg_start < float(refinement.refined_end) and seg_end > float(
                 refinement.refined_start
             ):
                 new_identifications.append(

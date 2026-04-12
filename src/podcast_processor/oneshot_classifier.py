@@ -659,11 +659,19 @@ class OneShotAdClassifier:
         # Persist one identification per transcript segment using the strongest
         # overlapping one-shot confidence. Keep below-threshold evidence as
         # non-cutting candidates for UI/debug visibility.
+        #
+        # Use the segment midpoint to test membership instead of raw interval
+        # overlap. The LLM rounds its timestamps to ~0.1s, which can produce
+        # tiny false overlaps (e.g. ad ends at 38.6, segment starts at 38.566)
+        # that pull in the next content segment. The midpoint check requires
+        # >50% of the segment to fall within the ad window, making it immune
+        # to this rounding noise.
         for ts in transcript_segments:
             best_confidence: Optional[float] = None
+            ts_mid = (ts.start_time + ts.end_time) / 2
 
             for ad_seg in ad_segments:
-                if ts.start_time < ad_seg.end_time and ts.end_time > ad_seg.start_time:
+                if ad_seg.start_time <= ts_mid < ad_seg.end_time:
                     if (
                         best_confidence is None
                         or ad_seg.confidence > best_confidence
