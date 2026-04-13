@@ -40,11 +40,11 @@ def upgrade():
         ref_table = fk["referred_table"]
         ref_cols = ", ".join(fk["referred_columns"])
         local_cols = ", ".join(fk["constrained_columns"])
-        col_defs.append(f"FOREIGN KEY({local_cols}) REFERENCES {ref_table} ({ref_cols})")
+        col_defs.append(
+            f"FOREIGN KEY({local_cols}) REFERENCES {ref_table} ({ref_cols})"
+        )
 
-    col_defs.append(
-        'CONSTRAINT "uq_post_feed_id_guid" UNIQUE (feed_id, guid)'
-    )
+    col_defs.append('CONSTRAINT "uq_post_feed_id_guid" UNIQUE (feed_id, guid)')
     col_defs.append(
         'CONSTRAINT "uq_post_feed_id_download_url" UNIQUE (feed_id, download_url)'
     )
@@ -53,7 +53,9 @@ def upgrade():
     col_names = ", ".join(f'"{c["name"]}"' for c in columns)
 
     conn.execute(sa.text(create_sql))
-    conn.execute(sa.text(f'INSERT INTO "_post_new" ({col_names}) SELECT {col_names} FROM "post"'))
+    conn.execute(
+        sa.text(f'INSERT INTO "_post_new" ({col_names}) SELECT {col_names} FROM "post"')
+    )
     conn.execute(sa.text('DROP TABLE "post"'))
     conn.execute(sa.text('ALTER TABLE "_post_new" RENAME TO "post"'))
 
@@ -85,12 +87,16 @@ def downgrade():
         ref_table = fk["referred_table"]
         ref_cols = ", ".join(fk["referred_columns"])
         local_cols = ", ".join(fk["constrained_columns"])
-        col_defs.append(f"FOREIGN KEY({local_cols}) REFERENCES {ref_table} ({ref_cols})")
+        col_defs.append(
+            f"FOREIGN KEY({local_cols}) REFERENCES {ref_table} ({ref_cols})"
+        )
 
     create_sql = f'CREATE TABLE "_post_new" ({", ".join(col_defs)})'
     col_names = ", ".join(f'"{c["name"]}"' for c in columns)
 
     conn.execute(sa.text(create_sql))
-    conn.execute(sa.text(f'INSERT INTO "_post_new" ({col_names}) SELECT {col_names} FROM "post"'))
+    conn.execute(
+        sa.text(f'INSERT INTO "_post_new" ({col_names}) SELECT {col_names} FROM "post"')
+    )
     conn.execute(sa.text('DROP TABLE "post"'))
     conn.execute(sa.text('ALTER TABLE "_post_new" RENAME TO "post"'))
