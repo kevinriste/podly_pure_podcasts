@@ -85,7 +85,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
+    <div className="min-h-dvh bg-gray-50 flex items-center justify-center px-4">
       <div className="fixed right-4 top-4">
         <ThemeToggle />
       </div>
