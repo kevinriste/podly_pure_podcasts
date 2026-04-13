@@ -56,7 +56,7 @@ def cleanup_missing_audio_paths_action(params: dict[str, Any]) -> int:
                 .order_by(ProcessingJob.created_at.desc())
                 .first()
             )
-            if latest_job and latest_job.status not in {"pending", "running"}:
+            if latest_job and latest_job.status == "failed":
                 latest_job.status = "pending"
                 latest_job.current_step = 0
                 latest_job.progress_percentage = 0.0

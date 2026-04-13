@@ -268,6 +268,7 @@ class JobsManager:
                 response["error"] = job.error_message
             if job.status == "cancelled" and job.error_message:
                 response["message"] = job.error_message
+                response["step_name"] = job.error_message
             return response
 
     def get_job_status(self, job_id: str) -> dict[str, Any]:

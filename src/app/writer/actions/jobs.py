@@ -167,13 +167,14 @@ def update_job_status_action(params: dict[str, Any]) -> dict[str, Any]:
 
 def mark_cancelled_action(params: dict[str, Any]) -> dict[str, Any]:
     job_id = params.get("job_id")
-    reason = params.get("reason")
+    reason = params.get("reason") or "Cancelled by user request"
 
     job = db.session.get(ProcessingJob, job_id)
     if not job:
         raise ValueError(f"Job {job_id} not found")
 
     job.status = "cancelled"
+    job.step_name = reason
     job.error_message = reason
     job.completed_at = datetime.now(UTC).replace(tzinfo=None)
 
