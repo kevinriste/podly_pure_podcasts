@@ -29,8 +29,11 @@ def _create_feed_and_post(app, *, guid="test-guid", audio_path="/tmp/nonexistent
     return feed, post
 
 
-class TestCleanupOnlyRequeuesFailed:
-    def test_completed_job_not_requeued(self, app):
+class TestCleanupRequeuesWhenAudioMissing:
+    """Whitelisted posts with missing audio should be re-queued for reprocessing
+    regardless of previous job status (except pending/running which are already active)."""
+
+    def test_completed_job_requeued(self, app):
         with app.app_context():
             _, post = _create_feed_and_post(app)
             job = ProcessingJob(
@@ -45,26 +48,10 @@ class TestCleanupOnlyRequeuesFailed:
             db.session.commit()
             db.session.refresh(job)
 
-            assert job.status == "completed"
+            assert job.status == "pending"
+            assert job.step_name == "Not started"
 
-    def test_skipped_job_not_requeued(self, app):
-        with app.app_context():
-            _, post = _create_feed_and_post(app, guid="skipped-guid")
-            job = ProcessingJob(
-                post_guid=post.guid,
-                status="skipped",
-                completed_at=datetime.now(UTC).replace(tzinfo=None),
-            )
-            db.session.add(job)
-            db.session.commit()
-
-            cleanup_missing_audio_paths_action({})
-            db.session.commit()
-            db.session.refresh(job)
-
-            assert job.status == "skipped"
-
-    def test_failed_job_is_requeued(self, app):
+    def test_failed_job_requeued(self, app):
         with app.app_context():
             _, post = _create_feed_and_post(app, guid="failed-guid")
             job = ProcessingJob(
@@ -84,14 +71,13 @@ class TestCleanupOnlyRequeuesFailed:
             assert job.error_message is None
             assert job.step_name == "Not started"
 
-    def test_cancelled_job_not_requeued(self, app):
+    def test_pending_job_not_reset(self, app):
         with app.app_context():
-            _, post = _create_feed_and_post(app, guid="cancelled-guid")
+            _, post = _create_feed_and_post(app, guid="pending-guid")
             job = ProcessingJob(
                 post_guid=post.guid,
-                status="cancelled",
-                error_message="User cancelled",
-                completed_at=datetime.now(UTC).replace(tzinfo=None),
+                status="pending",
+                step_name="Queued",
             )
             db.session.add(job)
             db.session.commit()
@@ -100,7 +86,8 @@ class TestCleanupOnlyRequeuesFailed:
             db.session.commit()
             db.session.refresh(job)
 
-            assert job.status == "cancelled"
+            assert job.status == "pending"
+            assert job.step_name == "Queued"
 
 
 class TestMarkCancelledAction:
