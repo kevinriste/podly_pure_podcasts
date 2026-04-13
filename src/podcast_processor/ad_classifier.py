@@ -656,6 +656,8 @@ class AdClassifier:
             # For older models and non-OpenAI models, use max_tokens
             completion_args["max_tokens"] = self.config.openai_max_tokens
 
+        completion_args["response_format"] = {"type": "json_object"}
+
         return completion_args
 
     def _generate_user_prompt(
