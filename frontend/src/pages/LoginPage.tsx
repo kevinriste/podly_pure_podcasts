@@ -84,7 +84,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
+    <div className="min-h-dvh bg-gray-50 flex items-center justify-center px-4">
       <div className="w-full max-w-md bg-white shadow-lg rounded-xl border border-gray-200 p-6">
         <div className="flex flex-col items-center gap-2 mb-6">
           <Link to="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
