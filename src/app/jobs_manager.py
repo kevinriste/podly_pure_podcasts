@@ -1,8 +1,7 @@
 import logging
-import os
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from threading import Event, Lock, Thread
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, cast
 
 from sqlalchemy import case
 
@@ -16,8 +15,16 @@ from app.processor import get_processor
 from app.writer.client import writer_client
 from podcast_processor.podcast_processor import ProcessorException
 from podcast_processor.processing_status_manager import ProcessingStatusManager
+from shared.processing_paths import find_existing_processed_audio_path
 
 logger = logging.getLogger("global_logger")
+
+
+def _scheduler_app_context() -> Any:
+    scheduler_app = scheduler.app
+    if scheduler_app is None:
+        raise RuntimeError("Scheduler app is not initialized")
+    return scheduler_app.app_context()
 
 
 class JobsManager:
@@ -39,7 +46,7 @@ class JobsManager:
 
         # Track the singleton run id with thread-safe access
         self._run_lock = Lock()
-        self._run_id: Optional[str] = None
+        self._run_id: str | None = None
 
         # Persistent worker thread coordination
         self._stop_event = Event()
@@ -50,7 +57,7 @@ class JobsManager:
         self._worker_thread.start()
 
         # Initialize run via writer
-        with scheduler.app.app_context():
+        with _scheduler_app_context():
             try:
                 result = writer_client.action(
                     "ensure_active_run",
@@ -59,14 +66,14 @@ class JobsManager:
                 )
                 if result and result.success and result.data:
                     self._set_run_id(result.data["run_id"])
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"Failed to initialize run: {e}")
 
-    def _set_run_id(self, run_id: Optional[str]) -> None:
+    def _set_run_id(self, run_id: str | None) -> None:
         with self._run_lock:
             self._run_id = run_id
 
-    def _get_run_id(self) -> Optional[str]:
+    def _get_run_id(self) -> str | None:
         with self._run_lock:
             return self._run_id
 
@@ -84,13 +91,13 @@ class JobsManager:
         post_guid: str,
         priority: str = "interactive",
         *,
-        requested_by_user_id: Optional[int] = None,
-        billing_user_id: Optional[int] = None,
-    ) -> Dict[str, Any]:
+        requested_by_user_id: int | None = None,
+        billing_user_id: int | None = None,
+    ) -> dict[str, Any]:
         """
         Idempotently start processing for a post. If an active job exists, return it.
         """
-        with scheduler.app.app_context():
+        with _scheduler_app_context():
             ensure_result = writer_client.action(
                 "ensure_active_run",
                 {
@@ -118,14 +125,14 @@ class JobsManager:
     def enqueue_pending_jobs(
         self,
         trigger: str = "system",
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Ensure all posts have job records and enqueue pending work.
 
         Returns basic stats for logging/monitoring.
         """
-        with scheduler.app.app_context():
+        with _scheduler_app_context():
             result = writer_client.action(
                 "ensure_active_run", {"trigger": trigger, "context": context}, wait=True
             )
@@ -152,28 +159,50 @@ class JobsManager:
             self._wake_worker()
         return response
 
-    def _ensure_jobs_for_all_posts(self, run_id: Optional[str]) -> int:
+    def _ensure_jobs_for_all_posts(self, run_id: str | None) -> int:
         """Ensure every post has an associated ProcessingJob record."""
         posts_without_jobs = (
             Post.query.outerjoin(ProcessingJob, ProcessingJob.post_guid == Post.guid)
-            .filter(ProcessingJob.id.is_(None))
+            .filter(ProcessingJob.id.is_(None), Post.whitelisted.is_(True))
             .all()
         )
 
         created = 0
         for post in posts_without_jobs:
-            if post.whitelisted:
-                SingleJobManager(
-                    post.guid,
-                    self._status_manager,
-                    logger,
-                    run_id,
-                ).ensure_job()
-                created += 1
+            # Avoid recreating jobs for posts that already have processed audio.
+            existing_processed_path = find_existing_processed_audio_path(
+                processed_audio_path=post.processed_audio_path,
+                unprocessed_audio_path=post.unprocessed_audio_path,
+                feed_title=getattr(post.feed, "title", None),
+                post_title=post.title,
+            )
+            if existing_processed_path:
+                processed_path_str = str(existing_processed_path)
+                if post.processed_audio_path != processed_path_str:
+                    result = writer_client.update(
+                        "Post",
+                        post.id,
+                        {"processed_audio_path": processed_path_str},
+                        wait=True,
+                    )
+                    if not result or not result.success:
+                        logger.warning(
+                            "Failed to update recovered processed path for post %s",
+                            post.guid,
+                        )
+                continue
+
+            SingleJobManager(
+                post.guid,
+                self._status_manager,
+                logger,
+                run_id,
+            ).ensure_job()
+            created += 1
         return created
 
-    def get_post_status(self, post_guid: str) -> Dict[str, Any]:
-        with scheduler.app.app_context():
+    def get_post_status(self, post_guid: str) -> dict[str, Any]:
+        with _scheduler_app_context():
             post = Post.query.filter_by(guid=post_guid).first()
             if not post:
                 return {
@@ -189,9 +218,13 @@ class JobsManager:
             )
 
             if not job:
-                if post.processed_audio_path and os.path.exists(
-                    post.processed_audio_path
-                ):
+                existing_processed_path = find_existing_processed_audio_path(
+                    processed_audio_path=post.processed_audio_path,
+                    unprocessed_audio_path=post.unprocessed_audio_path,
+                    feed_title=getattr(post.feed, "title", None),
+                    post_title=post.title,
+                )
+                if existing_processed_path:
                     return {
                         "status": "skipped",
                         "step": 4,
@@ -221,10 +254,14 @@ class JobsManager:
             }
             if job.started_at:
                 response["started_at"] = job.started_at.isoformat()
-            if (
-                job.status in {"completed", "skipped"}
-                and post.processed_audio_path
-                and os.path.exists(post.processed_audio_path)
+            if job.status in {
+                "completed",
+                "skipped",
+            } and find_existing_processed_audio_path(
+                processed_audio_path=post.processed_audio_path,
+                unprocessed_audio_path=post.unprocessed_audio_path,
+                feed_title=getattr(post.feed, "title", None),
+                post_title=post.title,
             ):
                 response["download_url"] = f"/api/posts/{post_guid}/download"
             if job.status == "failed" and job.error_message:
@@ -233,8 +270,8 @@ class JobsManager:
                 response["message"] = job.error_message
             return response
 
-    def get_job_status(self, job_id: str) -> Dict[str, Any]:
-        with scheduler.app.app_context():
+    def get_job_status(self, job_id: str) -> dict[str, Any]:
+        with _scheduler_app_context():
             job = _db.session.get(ProcessingJob, job_id)
             if not job:
                 return {
@@ -257,8 +294,8 @@ class JobsManager:
                 "error": job.error_message,
             }
 
-    def list_active_jobs(self, limit: int = 100) -> List[Dict[str, Any]]:
-        with scheduler.app.app_context():
+    def list_active_jobs(self, limit: int = 100) -> list[dict[str, Any]]:
+        with _scheduler_app_context():
             # Derive a simple priority from status: running > pending
             priority_order = case(
                 (ProcessingJob.status == "running", 2),
@@ -275,7 +312,7 @@ class JobsManager:
                 .all()
             )
 
-            results: List[Dict[str, Any]] = []
+            results: list[dict[str, Any]] = []
             for job, post, prio in rows:
                 results.append(
                     {
@@ -304,8 +341,8 @@ class JobsManager:
 
             return results
 
-    def list_all_jobs_detailed(self, limit: int = 200) -> List[Dict[str, Any]]:
-        with scheduler.app.app_context():
+    def list_all_jobs_detailed(self, limit: int = 200) -> list[dict[str, Any]]:
+        with _scheduler_app_context():
             # Priority by status, others ranked lowest
             priority_order = case(
                 (ProcessingJob.status == "running", 2),
@@ -321,7 +358,7 @@ class JobsManager:
                 .all()
             )
 
-            results: List[Dict[str, Any]] = []
+            results: list[dict[str, Any]] = []
             for job, post, prio in rows:
                 results.append(
                     {
@@ -350,8 +387,8 @@ class JobsManager:
 
             return results
 
-    def cancel_job(self, job_id: str) -> Dict[str, Any]:
-        with scheduler.app.app_context():
+    def cancel_job(self, job_id: str) -> dict[str, Any]:
+        with _scheduler_app_context():
             job = _db.session.get(ProcessingJob, job_id)
             if not job:
                 return {
@@ -376,8 +413,8 @@ class JobsManager:
                 "message": "Job cancelled",
             }
 
-    def cancel_post_jobs(self, post_guid: str) -> Dict[str, Any]:
-        with scheduler.app.app_context():
+    def cancel_post_jobs(self, post_guid: str) -> dict[str, Any]:
+        with _scheduler_app_context():
             # Find active jobs for this post in database
             active_jobs = (
                 ProcessingJob.query.filter_by(post_guid=post_guid)
@@ -396,6 +433,26 @@ class JobsManager:
                 "message": f"Cancelled {len(job_ids)} jobs",
             }
 
+    def cancel_queued_jobs(self) -> dict[str, Any]:
+        """Cancel all queued (pending) jobs."""
+        with _scheduler_app_context():
+            queued_jobs = (
+                ProcessingJob.query.filter(ProcessingJob.status == "pending")
+                .order_by(ProcessingJob.created_at.asc())
+                .all()
+            )
+
+            cancelled_job_ids: list[str] = []
+            for job in queued_jobs:
+                self._status_manager.mark_cancelled(job.id, "Cancelled by user request")
+                cancelled_job_ids.append(job.id)
+
+            return {
+                "status": "cancelled",
+                "cancelled_count": len(cancelled_job_ids),
+                "message": f"Cancelled {len(cancelled_job_ids)} queued jobs",
+            }
+
     def cleanup_stale_jobs(self, older_than: timedelta) -> int:
         try:
             result = writer_client.action(
@@ -406,7 +463,7 @@ class JobsManager:
             if result and result.success and result.data:
                 return cast(int, result.data.get("count", 0))
             return 0
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to cleanup stale jobs: {e}")
             return 0
 
@@ -415,8 +472,10 @@ class JobsManager:
         Clean up jobs that have been stuck in 'pending' status for too long.
         This indicates they were never picked up by the thread pool.
         """
-        cutoff = datetime.utcnow() - timedelta(minutes=stuck_threshold_minutes)
-        with scheduler.app.app_context():
+        cutoff = datetime.now(UTC).replace(tzinfo=None) - timedelta(
+            minutes=stuck_threshold_minutes
+        )
+        with _scheduler_app_context():
             stuck_jobs = ProcessingJob.query.filter(
                 ProcessingJob.status == "pending", ProcessingJob.created_at < cutoff
             ).all()
@@ -433,12 +492,12 @@ class JobsManager:
                         job.current_step,
                         f"Job was stuck in pending status for over {stuck_threshold_minutes} minutes",
                     )
-                except Exception as e:  # pylint: disable=broad-except
+                except Exception as e:  # noqa: BLE001
                     logger.error(f"Failed to update stuck job {job.id}: {e}")
 
             return count
 
-    def clear_all_jobs(self) -> Dict[str, Any]:
+    def clear_all_jobs(self) -> dict[str, Any]:
         """
         Clear all processing jobs from the database.
         This is typically called during application startup to ensure a clean state.
@@ -452,19 +511,37 @@ class JobsManager:
                 "cleared_jobs": count,
                 "message": f"Cleared {count} jobs from database",
             }
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error clearing all jobs: {e}")
-            return {"status": "error", "message": f"Failed to clear jobs: {str(e)}"}
+            return {"status": "error", "message": f"Failed to clear jobs: {e!s}"}
+
+    def clear_active_jobs(self) -> dict[str, Any]:
+        """
+        Clear only pending and running jobs on startup.
+        Completed, failed, skipped, and cancelled jobs are preserved for history.
+        """
+        try:
+            result = writer_client.action("clear_active_jobs", {}, wait=True)
+            count = result.data if result and result.success else 0
+            logger.info(f"Cleared {count} active (pending/running) jobs on startup")
+            return {
+                "status": "success",
+                "cleared_jobs": count,
+                "message": f"Cleared {count} active jobs from database",
+            }
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Error clearing active jobs: {e}")
+            return {"status": "error", "message": f"Failed to clear active jobs: {e!s}"}
 
     def start_refresh_all_feeds(
         self,
         trigger: str = "scheduled",
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Refresh feeds and enqueue per-post processing into internal worker pool.
         """
-        with scheduler.app.app_context():
+        with _scheduler_app_context():
             feeds = Feed.query.all()
             for feed in feeds:
                 refresh_feed(feed)
@@ -487,8 +564,8 @@ class JobsManager:
             )
 
     def _cleanup_and_process_new_posts(
-        self, active_run: Optional[JobsManagerRun]
-    ) -> Tuple[int, int]:
+        self, active_run: JobsManagerRun | None
+    ) -> tuple[int, int]:
         """Ensure all posts have jobs and return counts for monitoring."""
         run_id = active_run.id if active_run else None
         created_jobs = self._ensure_jobs_for_all_posts(run_id)
@@ -504,7 +581,7 @@ class JobsManager:
                 writer_client.action(
                     "reassign_pending_jobs", {"run_id": run_id}, wait=True
                 )
-            except Exception as e:  # pylint: disable=broad-except
+            except Exception as e:  # noqa: BLE001
                 logger.error("Failed to reassign pending jobs: %s", e)
 
         if created_jobs:
@@ -522,7 +599,7 @@ class JobsManager:
 
     # ------------------------ Internal helpers ------------------------
 
-    def _dequeue_next_job(self) -> Optional[Tuple[str, str]]:
+    def _dequeue_next_job(self) -> tuple[str, str] | None:
         """Return the next pending job id and post guid, or None if idle.
 
         CRITICAL: This method atomically marks the job as "running" when dequeuing
@@ -545,7 +622,7 @@ class JobsManager:
                 return job_id, post_guid
 
             return None
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error dequeuing job: {e}")
             return None
 
@@ -571,7 +648,7 @@ class JobsManager:
                     continue
                 job_id, post_guid = job_details
                 self._process_job(job_id, post_guid)
-            except Exception as exc:  # pylint: disable=broad-except
+            except Exception as exc:
                 logger.error("Worker loop error: %s", exc, exc_info=True)
                 reset_session(_db.session, logger, "worker_loop_exception", exc)
 
@@ -592,13 +669,13 @@ class JobsManager:
                 job_id,
                 post_guid,
             )
-            with scheduler.app.app_context():
+            with _scheduler_app_context():
                 with db_guard("process_job", _db.session, logger):
                     try:
                         # Clear any failed transaction state from prior work on this session.
                         try:
                             _db.session.rollback()
-                        except Exception:  # pylint: disable=broad-except
+                        except Exception:  # noqa: BLE001
                             pass
 
                         # Expire all cached objects to ensure fresh reads
@@ -640,7 +717,7 @@ class JobsManager:
                         logger.info(
                             "Job %s finished with processor exception: %s", job_id, exc
                         )
-                    except Exception as exc:  # pylint: disable=broad-except
+                    except Exception as exc:
                         logger.error(
                             "Unexpected error in job %s: %s", job_id, exc, exc_info=True
                         )
@@ -659,9 +736,7 @@ class JobsManager:
                                     f"Job execution failed: {exc}",
                                     failed_job.progress_percentage or 0.0,
                                 )
-                        except (
-                            Exception
-                        ) as cleanup_error:  # pylint: disable=broad-except
+                        except Exception as cleanup_error:
                             logger.error(
                                 "Failed to update job status after error: %s",
                                 cleanup_error,
@@ -671,11 +746,11 @@ class JobsManager:
                         # Always clean up session state after job processing to release any locks
                         try:
                             _db.session.rollback()
-                        except Exception:  # pylint: disable=broad-except
+                        except Exception:  # noqa: BLE001
                             pass
                         try:
                             _db.session.remove()
-                        except Exception as exc:  # pylint: disable=broad-except
+                        except Exception as exc:  # noqa: BLE001
                             logger.warning(
                                 "Failed to remove session after job: %s", exc
                             )
@@ -697,5 +772,5 @@ def scheduled_refresh_all_feeds() -> None:
     """Top-level function for APScheduler to invoke periodically."""
     try:
         get_jobs_manager().start_refresh_all_feeds(trigger="scheduled")
-    except Exception as e:  # pylint: disable=broad-except
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Scheduled refresh failed: {e}")

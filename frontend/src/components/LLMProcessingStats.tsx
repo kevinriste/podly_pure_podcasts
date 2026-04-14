@@ -53,6 +53,13 @@ export default function LLMProcessingStats({
     return new Date(timestamp).toLocaleString();
   };
 
+  const formatBytes = (bytes: number | null) => {
+    if (bytes === null || Number.isNaN(bytes)) return 'unknown';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
   const toggleModelCallDetails = (callId: number) => {
     const newExpanded = new Set(expandedModelCalls);
     if (newExpanded.has(callId)) {
@@ -156,34 +163,112 @@ export default function LLMProcessingStats({
                       <div>
                         <h3 className="font-semibold text-gray-900 mb-4 text-left">Key Metrics</h3>
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                          <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 text-center">
-                            <div className="text-2xl font-bold text-blue-600">
+                          <div className="rounded-lg border border-transparent bg-gradient-to-br from-blue-50 to-blue-100 p-4 text-center dark:border-blue-800/70 dark:from-blue-950 dark:to-slate-900">
+                            <div className="text-2xl font-bold text-blue-600 dark:text-blue-200">
                               {stats.processing_stats?.total_segments || 0}
                             </div>
-                            <div className="text-sm text-blue-800">Transcript Segments</div>
+                            <div className="text-sm text-blue-800 dark:text-blue-100">Transcript Segments</div>
                           </div>
 
-                          <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-4 text-center">
-                            <div className="text-2xl font-bold text-green-600">
+                          <div className="rounded-lg border border-transparent bg-gradient-to-br from-green-50 to-green-100 p-4 text-center dark:border-green-800/70 dark:from-green-950 dark:to-slate-900">
+                            <div className="text-2xl font-bold text-green-600 dark:text-green-200">
                               {stats.processing_stats?.content_segments || 0}
                             </div>
-                            <div className="text-sm text-green-800">Content Segments</div>
+                            <div className="text-sm text-green-800 dark:text-green-100">Content Segments</div>
                           </div>
 
-                          <div className="bg-gradient-to-br from-red-50 to-red-100 rounded-lg p-4 text-center">
-                            <div className="text-2xl font-bold text-red-600">
+                          <div className="rounded-lg border border-transparent bg-gradient-to-br from-red-50 to-red-100 p-4 text-center dark:border-red-800/70 dark:from-red-950 dark:to-slate-900">
+                            <div className="text-2xl font-bold text-red-600 dark:text-red-200">
                               {stats.processing_stats?.ad_segments_count || 0}
                             </div>
-                            <div className="text-sm text-red-800">Ad Segments Removed</div>
+                            <div className="text-sm text-red-800 dark:text-red-100">Ad Segments Removed</div>
                           </div>
                         </div>
                       </div>
 
+                      {stats.debug_info && (
+                        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                          <h3 className="font-semibold text-gray-900 mb-2 text-left">Debug Details</h3>
+                          <p className="text-xs text-amber-700 mb-4 text-left">
+                            Visible because <code>PODLY_STATS_DEBUG</code> is enabled.
+                          </p>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                            <div className="text-left">
+                              <span className="font-medium text-gray-700">GUID:</span>
+                              <span className="ml-2 text-gray-600 font-mono break-all">{stats.debug_info.guid}</span>
+                            </div>
+                            <div className="text-left">
+                              <span className="font-medium text-gray-700">Post ID / Feed ID:</span>
+                              <span className="ml-2 text-gray-600">{stats.debug_info.post_id} / {stats.debug_info.feed_id}</span>
+                            </div>
+                            <div className="text-left md:col-span-2">
+                              <span className="font-medium text-gray-700">Download URL:</span>
+                              <span className="ml-2 text-gray-600 font-mono break-all">{stats.debug_info.download_url}</span>
+                            </div>
+                            <div className="text-left md:col-span-2">
+                              <span className="font-medium text-gray-700">Processed Audio Path:</span>
+                              <span className="ml-2 text-gray-600 font-mono break-all">
+                                {stats.debug_info.processed_audio.path || 'missing'}
+                              </span>
+                              <div className="text-xs text-gray-500 mt-1">
+                                {stats.debug_info.processed_audio.exists
+                                  ? `exists (${formatBytes(stats.debug_info.processed_audio.size_bytes)})`
+                                  : 'missing'}
+                              </div>
+                            </div>
+                            <div className="text-left md:col-span-2">
+                              <span className="font-medium text-gray-700">Unprocessed Audio Path:</span>
+                              <span className="ml-2 text-gray-600 font-mono break-all">
+                                {stats.debug_info.unprocessed_audio.path || 'missing'}
+                              </span>
+                              <div className="text-xs text-gray-500 mt-1">
+                                {stats.debug_info.unprocessed_audio.exists
+                                  ? `exists (${formatBytes(stats.debug_info.unprocessed_audio.size_bytes)})`
+                                  : 'missing'}
+                              </div>
+                            </div>
+                            <div className="text-left md:col-span-2">
+                              <span className="font-medium text-gray-700">Data Roots:</span>
+                              <span className="ml-2 text-gray-600 font-mono break-all">
+                                in: {stats.debug_info.processing_roots.in_root} | srv: {stats.debug_info.processing_roots.srv_root}
+                              </span>
+                            </div>
+                            <div className="text-left">
+                              <span className="font-medium text-gray-700">Record Counts:</span>
+                              <span className="ml-2 text-gray-600">
+                                segments {stats.debug_info.record_counts.transcript_segments}, calls {stats.debug_info.record_counts.model_calls}, ids {stats.debug_info.record_counts.identifications}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="mt-4">
+                            <h4 className="font-medium text-gray-900 mb-2 text-left">Processed Audio Path Candidates</h4>
+                            {(stats.debug_info.processed_audio_path_candidates || []).length === 0 ? (
+                              <p className="text-xs text-gray-500 text-left">No candidates derived.</p>
+                            ) : (
+                              <div className="space-y-2">
+                                {(stats.debug_info.processed_audio_path_candidates || []).map((candidate, idx) => (
+                                  <div key={`${candidate.path}-${idx}`} className="bg-white border border-amber-100 rounded p-2">
+                                    <div className="font-mono text-xs text-gray-700 break-all text-left">{candidate.path}</div>
+                                    <div className="text-xs text-gray-500 mt-1 text-left">
+                                      {candidate.exists ? `exists (${formatBytes(candidate.size_bytes)})` : 'missing'}
+                                      {candidate.error ? ` - ${candidate.error}` : ''}
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
                       {(() => {
-                        const durationSeconds = stats.post?.duration
-                          ?? (stats.transcript_segments?.length
-                            ? Math.max(...stats.transcript_segments.map((segment) => segment.end_time))
-                            : 0);
+                        const durationSeconds = (
+                          stats.processing_stats?.original_duration_seconds
+                          ?? ((stats.post?.duration ?? 0) + (stats.processing_stats?.estimated_ad_time_seconds ?? 0))
+                        ) || (stats.transcript_segments?.length
+                          ? Math.max(...stats.transcript_segments.map((segment) => segment.end_time))
+                          : 0);
                         const fallbackAdBlocks = (() => {
                           const adSegments = (stats.transcript_segments || [])
                             .filter((segment) => segment.primary_label === 'ad')
@@ -219,6 +304,10 @@ export default function LLMProcessingStats({
                           : 0;
                         const cleanSeconds = Math.max(0, durationSeconds - adTimeSeconds);
                         const timelineTicks = [0, 0.25, 0.5, 0.75, 1];
+                        const timelineTrackClass = 'relative h-3 w-full rounded-full bg-gray-200 overflow-hidden';
+                        const timelineContentOverlayClass = 'absolute inset-0 bg-gradient-to-r from-blue-500/20 via-blue-400/15 to-blue-500/20';
+                        const timelineLegendSwatchClass = 'relative h-2.5 w-5 shrink-0 overflow-hidden rounded-full';
+                        const timelineAdSegmentClass = 'bg-rose-500/70';
 
                         return (
                           <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
@@ -256,15 +345,15 @@ export default function LLMProcessingStats({
                                 </div>
                               </div>
 
-                              <div className="relative h-3 w-full rounded-full bg-gray-200 overflow-hidden">
-                                <div className="absolute inset-0 bg-gradient-to-r from-blue-500/20 via-blue-400/15 to-blue-500/20" />
+                              <div className={timelineTrackClass}>
+                                <div className={timelineContentOverlayClass} />
                                 {durationSeconds > 0 && adBlocks.map((block, index) => {
                                   const left = Math.max(0, (block.start / durationSeconds) * 100);
                                   const width = Math.max(0.5, ((block.end - block.start) / durationSeconds) * 100);
                                   return (
                                     <div
                                       key={`${block.start}-${block.end}-${index}`}
-                                      className="absolute top-0 h-full rounded-full bg-rose-500/70"
+                                      className={`absolute top-0 h-full rounded-full ${timelineAdSegmentClass}`}
                                       style={{ left: `${left}%`, width: `${width}%` }}
                                     />
                                   );
@@ -279,11 +368,13 @@ export default function LLMProcessingStats({
 
                               <div className="flex items-center gap-4 text-xs text-gray-500">
                                 <span className="flex items-center gap-2">
-                                  <span className="h-2 w-2 rounded-full bg-blue-500" />
+                                  <span className={`${timelineLegendSwatchClass} bg-gray-200`}>
+                                    <span className={timelineContentOverlayClass} />
+                                  </span>
                                   Content
                                 </span>
                                 <span className="flex items-center gap-2">
-                                  <span className="h-2 w-2 rounded-full bg-rose-500" />
+                                  <span className={`${timelineLegendSwatchClass} ${timelineAdSegmentClass}`} />
                                   Ads removed
                                 </span>
                               </div>

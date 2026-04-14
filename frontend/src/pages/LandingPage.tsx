@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { landingApi } from '../services/api';
+import ThemeToggle from '../components/ThemeToggle';
 
 export default function LandingPage() {
   const { data: status } = useQuery({
@@ -14,7 +15,7 @@ export default function LandingPage() {
   const slotsRemaining = status?.slots_remaining;
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white overflow-y-auto overflow-x-hidden fixed inset-0">
+    <div className="min-h-dvh bg-gradient-to-b from-gray-50 to-white overflow-y-auto overflow-x-hidden fixed inset-0">
       {/* Header */}
       <header className="fixed top-0 left-0 right-0 bg-white/80 backdrop-blur-md border-b border-gray-100 z-50">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -36,9 +37,12 @@ export default function LandingPage() {
                 GitHub
               </a>
             </nav>
-            <Link to="/login" className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-lg font-medium transition-colors shadow-sm">
-              Sign In
-            </Link>
+            <div className="flex items-center gap-3">
+              <ThemeToggle />
+              <Link to="/login" className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-lg font-medium transition-colors shadow-sm">
+                Sign In
+              </Link>
+            </div>
           </div>
         </div>
       </header>

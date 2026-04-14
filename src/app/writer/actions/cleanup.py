@@ -1,10 +1,11 @@
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from app.extensions import db
 from app.jobs_manager_run_service import recalculate_run_counts
+from app.model_call_utils import whisper_model_call_filter
 from app.models import (
     Identification,
     ModelCall,
@@ -12,11 +13,12 @@ from app.models import (
     ProcessingJob,
     TranscriptSegment,
 )
+from shared.processing_paths import find_existing_processed_audio_path
 
 logger = logging.getLogger("writer")
 
 
-def cleanup_missing_audio_paths_action(params: Dict[str, Any]) -> int:
+def cleanup_missing_audio_paths_action(params: dict[str, Any]) -> int:
     inconsistent_posts = Post.query.filter(
         Post.whitelisted,
         (
@@ -28,7 +30,18 @@ def cleanup_missing_audio_paths_action(params: Dict[str, Any]) -> int:
     count = 0
     for post in inconsistent_posts:
         changed = False
-        if post.processed_audio_path and not os.path.exists(post.processed_audio_path):
+        existing_processed_path = find_existing_processed_audio_path(
+            processed_audio_path=post.processed_audio_path,
+            unprocessed_audio_path=post.unprocessed_audio_path,
+            feed_title=getattr(post.feed, "title", None),
+            post_title=post.title,
+        )
+        if existing_processed_path:
+            resolved_processed_path = str(existing_processed_path)
+            if post.processed_audio_path != resolved_processed_path:
+                post.processed_audio_path = resolved_processed_path
+                changed = True
+        elif post.processed_audio_path:
             post.processed_audio_path = None
             changed = True
         if post.unprocessed_audio_path and not os.path.exists(
@@ -57,7 +70,7 @@ def cleanup_missing_audio_paths_action(params: Dict[str, Any]) -> int:
     return count
 
 
-def clear_post_processing_data_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def clear_post_processing_data_action(params: dict[str, Any]) -> dict[str, Any]:
     post_id = params.get("post_id")
     post = db.session.get(Post, post_id)
     if not post:
@@ -99,6 +112,9 @@ def clear_post_processing_data_action(params: Dict[str, Any]) -> Dict[str, Any]:
     post.unprocessed_audio_path = None
     post.processed_audio_path = None
     post.duration = None
+    post.chapter_data = None
+    post.refined_ad_boundaries = None
+    post.refined_ad_boundaries_updated_at = None
 
     logger.info(
         "[WRITER] clear_post_processing_data_action: completed post_id=%s", post_id
@@ -107,7 +123,85 @@ def clear_post_processing_data_action(params: Dict[str, Any]) -> Dict[str, Any]:
     return {"post_id": post.id}
 
 
-def cleanup_processed_post_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def clear_post_processing_data_keep_transcript_action(
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    """Clear processing outputs/classification state but preserve transcript rows."""
+    post_id = params.get("post_id")
+    post = db.session.get(Post, post_id)
+    if not post:
+        raise ValueError(f"Post {post_id} not found")
+
+    logger.info(
+        "[WRITER] clear_post_processing_data_keep_transcript_action: post_id=%s",
+        post_id,
+    )
+
+    # Remove identifications tied to this post's transcript segments, but keep the
+    # transcript segments themselves so the next run can reuse Whisper output.
+    total_identifications_deleted = 0
+    last_transcript_segment_id = 0
+    while True:
+        ids_batch = [
+            row[0]
+            for row in db.session.query(TranscriptSegment.id)
+            .filter(
+                TranscriptSegment.post_id == post.id,
+                TranscriptSegment.id > last_transcript_segment_id,
+            )
+            .order_by(TranscriptSegment.id.asc())
+            .limit(500)
+            .all()
+        ]
+        if not ids_batch:
+            logger.debug(
+                "[WRITER] clear_post_processing_data_keep_transcript_action: "
+                "no transcript segments for post_id=%s",
+                post_id,
+            )
+            break
+
+        deleted = (
+            db.session.query(Identification)
+            .filter(Identification.transcript_segment_id.in_(ids_batch))
+            .delete(synchronize_session=False)
+        )
+        total_identifications_deleted += int(deleted or 0)
+        last_transcript_segment_id = int(ids_batch[-1])
+
+    # Keep Whisper model calls so transcription can be reused; drop all others.
+    non_whisper_model_calls_deleted = (
+        db.session.query(ModelCall)
+        .filter(ModelCall.post_id == post.id)
+        .filter(~whisper_model_call_filter())
+        .delete(synchronize_session=False)
+    )
+
+    # Processing jobs should be regenerated for the new run.
+    db.session.query(ProcessingJob).filter_by(post_guid=post.guid).delete(
+        synchronize_session=False
+    )
+
+    # Reset output and derived processing fields, but preserve transcript/model calls.
+    post.unprocessed_audio_path = None
+    post.processed_audio_path = None
+    post.duration = None
+    post.chapter_data = None
+    post.refined_ad_boundaries = None
+    post.refined_ad_boundaries_updated_at = None
+
+    logger.info(
+        "[WRITER] clear_post_processing_data_keep_transcript_action: completed "
+        "post_id=%s identifications_deleted=%s non_whisper_model_calls_deleted=%s",
+        post_id,
+        total_identifications_deleted,
+        int(non_whisper_model_calls_deleted or 0),
+    )
+
+    return {"post_id": post.id}
+
+
+def cleanup_processed_post_action(params: dict[str, Any]) -> dict[str, Any]:
     post_id = params.get("post_id")
     if not post_id:
         raise ValueError("post_id is required")
@@ -129,7 +223,7 @@ def cleanup_processed_post_action(params: Dict[str, Any]) -> Dict[str, Any]:
     return {"post_id": post.id}
 
 
-def cleanup_processed_post_files_only_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def cleanup_processed_post_files_only_action(params: dict[str, Any]) -> dict[str, Any]:
     """Remove audio files but preserve processing metadata."""
     post_id = params.get("post_id")
     if not post_id:
@@ -148,7 +242,7 @@ def cleanup_processed_post_files_only_action(params: Dict[str, Any]) -> Dict[str
             continue
         try:
             file_path = Path(path_str)
-        except Exception:  # pylint: disable=broad-except
+        except Exception:  # noqa: BLE001
             logger.warning("[WRITER] Invalid path for post %s: %s", post.guid, path_str)
             continue
         if not file_path.exists():

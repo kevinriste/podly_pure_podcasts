@@ -3,18 +3,23 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
-.mypy_cache/
+.venv/
 
 # Git
 .git/
 .github/
 .gitignore
 
-# Editor files
+# Editor / IDE / AI files
 .vscode/
 .idea/
+.cursor/
+.claude/
 *.swp
 *.swo
+
+# Worktrees
+.worktrees/
 
 # Virtual environments
 venv/

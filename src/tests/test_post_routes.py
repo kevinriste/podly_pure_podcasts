@@ -1,13 +1,15 @@
 import datetime
+import json
 from types import SimpleNamespace
 from unittest import mock
 
 from flask import g
 
 from app.extensions import db
-from app.models import Feed, Post, User
+from app.models import Feed, ModelCall, Post, TranscriptSegment, User
 from app.routes.post_routes import post_bp
 from app.runtime_config import config as runtime_config
+from shared.config import LocalWhisperConfig
 
 
 def test_download_endpoints_increment_counter(app, tmp_path):
@@ -62,6 +64,130 @@ def test_download_endpoints_increment_counter(app, tmp_path):
             assert response.status_code == 200
             db.session.refresh(post)
             assert post.download_count == 2
+
+
+def test_audio_endpoint_supports_range_requests(app, tmp_path):
+    app.testing = True
+    app.register_blueprint(post_bp)
+
+    with app.app_context():
+        feed = Feed(title="Test Feed", rss_url="https://example.com/feed.xml")
+        db.session.add(feed)
+        db.session.commit()
+
+        processed_audio = tmp_path / "processed.mp3"
+        processed_audio.write_bytes(b"processed audio")
+
+        post = Post(
+            feed_id=feed.id,
+            guid="stream-guid",
+            download_url="https://example.com/audio.mp3",
+            title="Stream Episode",
+            processed_audio_path=str(processed_audio),
+            whitelisted=True,
+        )
+        db.session.add(post)
+        db.session.commit()
+        post_guid = post.guid
+
+    client = app.test_client()
+    response = client.get(
+        f"/api/posts/{post_guid}/audio",
+        headers={"Range": "bytes=0-8"},
+    )
+
+    assert response.status_code == 206
+    assert response.data == b"processed"
+    assert response.headers["Accept-Ranges"] == "bytes"
+    assert "attachment" not in response.headers.get("Content-Disposition", "").lower()
+
+
+def test_audio_triggers_processing_when_enabled(app):
+    """Start processing when streamed audio is missing and toggle is enabled."""
+    app.testing = True
+    app.register_blueprint(post_bp)
+
+    with app.app_context():
+        feed = Feed(title="Test Feed", rss_url="https://example.com/feed.xml")
+        db.session.add(feed)
+        db.session.commit()
+
+        post = Post(
+            feed_id=feed.id,
+            guid="missing-stream-guid",
+            download_url="https://example.com/audio.mp3",
+            title="Missing Stream Audio",
+            whitelisted=True,
+        )
+        db.session.add(post)
+        db.session.commit()
+        post_guid = post.guid
+
+    client = app.test_client()
+    original_flag = runtime_config.autoprocess_on_download
+    runtime_config.autoprocess_on_download = True
+    try:
+        with mock.patch("app.routes.post_utils.get_jobs_manager") as mock_mgr:
+            mock_mgr.return_value.start_post_processing.return_value = {
+                "status": "started",
+                "job_id": "job-stream-123",
+            }
+            response = client.get(f"/post/{post_guid}.mp3")
+            assert response.status_code == 202
+            payload = response.get_json()
+            assert payload["status"] == "started"
+            mock_mgr.return_value.start_post_processing.assert_called_once_with(
+                post_guid,
+                priority="download",
+                requested_by_user_id=None,
+                billing_user_id=None,
+            )
+    finally:
+        runtime_config.autoprocess_on_download = original_flag
+
+
+def test_audio_auto_whitelists_post(app, tmp_path):
+    """Inline audio request should whitelist the post automatically."""
+    app.testing = True
+    app.register_blueprint(post_bp)
+
+    with app.app_context():
+        feed = Feed(title="Test Feed", rss_url="https://example.com/feed.xml")
+        db.session.add(feed)
+        db.session.commit()
+
+        processed_audio = tmp_path / "processed.mp3"
+        processed_audio.write_bytes(b"processed audio")
+
+        post = Post(
+            feed_id=feed.id,
+            guid="stream-auto-whitelist-guid",
+            download_url="https://example.com/audio.mp3",
+            title="Auto Whitelist Stream Episode",
+            processed_audio_path=str(processed_audio),
+            whitelisted=False,
+        )
+        db.session.add(post)
+        db.session.commit()
+        post_guid = post.guid
+        post_id = post.id
+
+    client = app.test_client()
+
+    original_flag = runtime_config.autoprocess_on_download
+    runtime_config.autoprocess_on_download = True
+    try:
+        with mock.patch("app.routes.post_utils.writer_client") as mock_writer:
+            mock_writer.action.return_value = SimpleNamespace(success=True, data=None)
+            response = client.get(f"/post/{post_guid}.mp3")
+            assert response.status_code == 200
+            mock_writer.action.assert_called_once_with(
+                "whitelist_post",
+                {"post_id": post_id},
+                wait=True,
+            )
+    finally:
+        runtime_config.autoprocess_on_download = original_flag
 
 
 def test_download_triggers_processing_when_enabled(app):
@@ -335,3 +461,337 @@ def test_feed_posts_pagination_and_filtering(app):
         assert filtered["total"] == 15
         assert filtered["whitelisted_total"] == 15
         assert all(item["whitelisted"] for item in filtered["items"])
+
+
+def test_feed_posts_include_podly_description_html(app):
+    app.testing = True
+    app.register_blueprint(post_bp)
+
+    with app.app_context():
+        feed = Feed(title="Chapter Feed", rss_url="https://example.com/feed.xml")
+        db.session.add(feed)
+        db.session.commit()
+
+        post = Post(
+            feed_id=feed.id,
+            guid="chapter-guid",
+            download_url="https://example.com/chapter.mp3",
+            title="Episode With Chapters",
+            description="<p>Original episode description</p>",
+            chapter_data=json.dumps(
+                {
+                    "chapters_for_output": [
+                        {"start_time": 0.0, "title": "Intro"},
+                        {"start_time": 485.0, "title": "Gold mission"},
+                    ]
+                }
+            ),
+        )
+        db.session.add(post)
+        db.session.commit()
+
+        client = app.test_client()
+        response = client.get(f"/api/feeds/{feed.id}/posts")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data is not None
+    item = data["items"][0]
+    assert item["description"] == "<p>Original episode description</p>"
+    assert "Original episode description" in item["podly_description_html"]
+    assert "Podly Chapters" in item["podly_description_html"]
+    assert "<li>00:00 Intro</li>" in item["podly_description_html"]
+    assert "<li>08:05 Gold mission</li>" in item["podly_description_html"]
+    assert "Podly Post JSON" not in item["podly_description_html"]
+
+
+def test_reprocess_keep_transcript_accepts_local_whisper_model_call(app):
+    app.testing = True
+    app.register_blueprint(post_bp)
+    original_whisper = runtime_config.whisper
+    runtime_config.whisper = LocalWhisperConfig(model="base.en")
+
+    try:
+        with app.app_context():
+            feed = Feed(
+                title="Local Whisper Feed", rss_url="https://example.com/feed.xml"
+            )
+            db.session.add(feed)
+            db.session.commit()
+
+            post = Post(
+                feed_id=feed.id,
+                guid="local-whisper-guid",
+                download_url="https://example.com/audio.mp3",
+                title="Local Whisper Episode",
+                whitelisted=True,
+            )
+            db.session.add(post)
+            db.session.commit()
+
+            db.session.add(
+                TranscriptSegment(
+                    post_id=post.id,
+                    sequence_num=0,
+                    start_time=0.0,
+                    end_time=5.0,
+                    text="hello",
+                )
+            )
+            db.session.add(
+                ModelCall(
+                    post_id=post.id,
+                    first_segment_sequence_num=0,
+                    last_segment_sequence_num=0,
+                    model_name="local_base.en",
+                    prompt="Whisper transcription job",
+                    status="success",
+                )
+            )
+            db.session.commit()
+            guid = post.guid
+
+        client = app.test_client()
+
+        with (
+            mock.patch("app.routes.post_routes.get_jobs_manager") as mock_mgr,
+            mock.patch(
+                "app.routes.post_routes.clear_post_processing_data_keep_transcript"
+            ) as clear_mock,
+        ):
+            mock_mgr.return_value.start_post_processing.return_value = {
+                "status": "started",
+                "job_id": "job-123",
+                "message": "ok",
+            }
+
+            response = client.post(f"/api/posts/{guid}/reprocess/keep-transcript")
+
+        assert response.status_code == 200
+        payload = response.get_json()
+        assert payload is not None
+        assert payload["status"] == "started"
+        clear_mock.assert_called_once()
+    finally:
+        runtime_config.whisper = original_whisper
+
+
+def test_reprocess_keep_transcript_rejects_transcript_for_old_whisper_model(app):
+    app.testing = True
+    app.register_blueprint(post_bp)
+
+    with app.app_context():
+        feed = Feed(title="Local Whisper Feed", rss_url="https://example.com/feed.xml")
+        db.session.add(feed)
+        db.session.commit()
+
+        post = Post(
+            feed_id=feed.id,
+            guid="mismatched-whisper-guid",
+            download_url="https://example.com/audio.mp3",
+            title="Mismatched Whisper Episode",
+            whitelisted=True,
+        )
+        db.session.add(post)
+        db.session.commit()
+
+        db.session.add(
+            TranscriptSegment(
+                post_id=post.id,
+                sequence_num=0,
+                start_time=0.0,
+                end_time=5.0,
+                text="hello",
+            )
+        )
+        db.session.add(
+            ModelCall(
+                post_id=post.id,
+                first_segment_sequence_num=0,
+                last_segment_sequence_num=0,
+                model_name="local_base.en",
+                prompt="Whisper transcription job",
+                status="success",
+            )
+        )
+        db.session.commit()
+        guid = post.guid
+
+    client = app.test_client()
+    original_whisper = runtime_config.whisper
+    runtime_config.whisper = LocalWhisperConfig(model="small.en")
+
+    try:
+        with mock.patch(
+            "app.routes.post_routes.clear_post_processing_data_keep_transcript"
+        ) as clear_mock:
+            response = client.post(f"/api/posts/{guid}/reprocess/keep-transcript")
+    finally:
+        runtime_config.whisper = original_whisper
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    assert payload is not None
+    assert payload["error_code"] == "NO_REUSABLE_TRANSCRIPT"
+    clear_mock.assert_not_called()
+
+
+def test_post_stats_omits_debug_info_when_disabled(app):
+    app.testing = True
+    app.register_blueprint(post_bp)
+
+    with app.app_context():
+        feed = Feed(title="Stats Feed", rss_url="https://example.com/feed.xml")
+        db.session.add(feed)
+        db.session.commit()
+
+        post = Post(
+            feed_id=feed.id,
+            guid="stats-no-debug-guid",
+            download_url="https://example.com/audio.mp3",
+            title="Stats Episode",
+            whitelisted=True,
+        )
+        db.session.add(post)
+        db.session.commit()
+        guid = post.guid
+
+    client = app.test_client()
+
+    with mock.patch.dict("os.environ", {"PODLY_STATS_DEBUG": "false"}, clear=False):
+        response = client.get(f"/api/posts/{guid}/stats")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload is not None
+    assert "debug_info" not in payload
+
+
+def test_post_stats_include_chapters_for_chapter_insert_strategy(app):
+    app.testing = True
+    app.register_blueprint(post_bp)
+
+    with app.app_context():
+        feed = Feed(
+            title="Chapter Insert Feed",
+            rss_url="https://example.com/feed.xml",
+            ad_detection_strategy="chapter_insert",
+        )
+        db.session.add(feed)
+        db.session.commit()
+
+        post = Post(
+            feed_id=feed.id,
+            guid="chapter-insert-stats-guid",
+            download_url="https://example.com/audio.mp3",
+            title="Chapter Insert Episode",
+            processed_audio_path="/tmp/chapter-insert-output.mp3",
+            chapter_data=json.dumps(
+                {
+                    "chapter_source": "description",
+                    "chapters_for_output": [
+                        {
+                            "title": "Intro",
+                            "start_time": 0.0,
+                            "end_time": 12.5,
+                        },
+                        {
+                            "title": "Main Topic",
+                            "start_time": 12.5,
+                            "end_time": 30.0,
+                        },
+                    ],
+                }
+            ),
+            whitelisted=True,
+        )
+        db.session.add(post)
+        db.session.commit()
+        guid = post.guid
+
+    client = app.test_client()
+    response = client.get(f"/api/posts/{guid}/stats")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload is not None
+    assert payload["ad_detection_strategy"] == "chapter_insert"
+    assert payload["chapters"]["total_chapters"] == 2
+    assert payload["chapters"]["chapters_kept"] == 2
+    assert payload["chapters"]["chapters_removed"] == 0
+    assert payload["chapters"]["chapters"] == [
+        {
+            "title": "Intro",
+            "start_time": 0.0,
+            "end_time": 12.5,
+            "label": "content",
+        },
+        {
+            "title": "Main Topic",
+            "start_time": 12.5,
+            "end_time": 30.0,
+            "label": "content",
+        },
+    ]
+
+
+def test_post_stats_includes_debug_info_when_enabled(app, tmp_path):
+    app.testing = True
+    app.register_blueprint(post_bp)
+
+    processed_audio = tmp_path / "processed.mp3"
+    processed_audio_bytes = b"processed-audio-bytes"
+    processed_audio.write_bytes(processed_audio_bytes)
+
+    unprocessed_audio = tmp_path / "unprocessed.mp3"
+    unprocessed_audio_bytes = b"unprocessed-audio-bytes"
+    unprocessed_audio.write_bytes(unprocessed_audio_bytes)
+
+    with app.app_context():
+        feed = Feed(title="Stats Feed", rss_url="https://example.com/feed.xml")
+        db.session.add(feed)
+        db.session.commit()
+
+        post = Post(
+            feed_id=feed.id,
+            guid="stats-debug-guid",
+            download_url="https://example.com/audio.mp3",
+            title="Stats Episode",
+            processed_audio_path=str(processed_audio),
+            unprocessed_audio_path=str(unprocessed_audio),
+            whitelisted=True,
+        )
+        db.session.add(post)
+        db.session.commit()
+        guid = post.guid
+
+    client = app.test_client()
+
+    with mock.patch.dict("os.environ", {"PODLY_STATS_DEBUG": "true"}, clear=False):
+        response = client.get(f"/api/posts/{guid}/stats")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload is not None
+
+    debug_info = payload["debug_info"]
+    assert debug_info["guid"] == "stats-debug-guid"
+    assert debug_info["download_url"] == "https://example.com/audio.mp3"
+
+    processed_info = debug_info["processed_audio"]
+    assert processed_info["path"] == str(processed_audio)
+    assert processed_info["exists"] is True
+    assert processed_info["is_file"] is True
+    assert processed_info["size_bytes"] == len(processed_audio_bytes)
+
+    unprocessed_info = debug_info["unprocessed_audio"]
+    assert unprocessed_info["path"] == str(unprocessed_audio)
+    assert unprocessed_info["exists"] is True
+    assert unprocessed_info["is_file"] is True
+    assert unprocessed_info["size_bytes"] == len(unprocessed_audio_bytes)
+
+    candidates = debug_info["processed_audio_path_candidates"]
+    assert any(
+        c["path"] == str(processed_audio.resolve()) and c["exists"] is True
+        for c in candidates
+    )

@@ -1,8 +1,8 @@
 import hashlib
 import secrets
 import uuid
-from datetime import datetime
-from typing import Any, Dict
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import func
 
@@ -20,10 +20,11 @@ from app.models import (
 )
 
 
-def refresh_feed_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def refresh_feed_action(params: dict[str, Any]) -> dict[str, Any]:
     feed_id = params.get("feed_id")
     updates = params.get("updates", {})
     new_posts_data = params.get("new_posts", [])
+    existing_post_updates = params.get("existing_post_updates", [])
 
     feed = db.session.get(Feed, feed_id)
     if not feed:
@@ -55,16 +56,39 @@ def refresh_feed_action(params: Dict[str, Any]) -> Dict[str, Any]:
                 current_step=0,
                 total_steps=4,
                 progress_percentage=0.0,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(UTC).replace(tzinfo=None),
             )
             db.session.add(job)
 
+    updated_posts_count = 0
+    for post_update in existing_post_updates:
+        post_id = post_update.get("post_id")
+        if not post_id:
+            continue
+        post = db.session.get(Post, int(post_id))
+        if not post or post.feed_id != feed.id:
+            continue
+
+        updated = False
+        for field_name in ("title", "description", "image_url", "duration"):
+            if field_name not in post_update:
+                continue
+            setattr(post, field_name, post_update[field_name])
+            updated = True
+
+        if updated:
+            updated_posts_count += 1
+
     recalculate_run_counts(db.session)
 
-    return {"feed_id": feed.id, "new_posts_count": len(created_posts)}
+    return {
+        "feed_id": feed.id,
+        "new_posts_count": len(created_posts),
+        "updated_posts_count": updated_posts_count,
+    }
 
 
-def add_feed_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def add_feed_action(params: dict[str, Any]) -> dict[str, Any]:
     feed_data = params.get("feed")
     if not isinstance(feed_data, dict):
         raise ValueError("feed data must be a dictionary")
@@ -97,7 +121,7 @@ def add_feed_action(params: Dict[str, Any]) -> Dict[str, Any]:
                 current_step=0,
                 total_steps=4,
                 progress_percentage=0.0,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(UTC).replace(tzinfo=None),
             )
             db.session.add(job)
 
@@ -106,7 +130,7 @@ def add_feed_action(params: Dict[str, Any]) -> Dict[str, Any]:
     return {"feed_id": feed.id}
 
 
-def update_feed_settings_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def update_feed_settings_action(params: dict[str, Any]) -> dict[str, Any]:
     feed_id = params.get("feed_id")
     if not feed_id:
         raise ValueError("feed_id is required")
@@ -124,7 +148,7 @@ def update_feed_settings_action(params: Dict[str, Any]) -> Dict[str, Any]:
     return {"feed_id": feed.id}
 
 
-def increment_download_count_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def increment_download_count_action(params: dict[str, Any]) -> dict[str, Any]:
     post_id = params.get("post_id")
     if not post_id:
         raise ValueError("post_id is required")
@@ -137,7 +161,7 @@ def increment_download_count_action(params: Dict[str, Any]) -> Dict[str, Any]:
     return {"post_id": post_id, "updated": updated}
 
 
-def whitelist_post_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def whitelist_post_action(params: dict[str, Any]) -> dict[str, Any]:
     post_id = params.get("post_id")
     if not post_id:
         raise ValueError("post_id is required")
@@ -148,7 +172,7 @@ def whitelist_post_action(params: Dict[str, Any]) -> Dict[str, Any]:
     return {"post_id": int(post_id), "updated": int(updated)}
 
 
-def ensure_user_feed_membership_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def ensure_user_feed_membership_action(params: dict[str, Any]) -> dict[str, Any]:
     feed_id = params.get("feed_id")
     user_id = params.get("user_id")
     if not feed_id or not user_id:
@@ -167,7 +191,7 @@ def ensure_user_feed_membership_action(params: Dict[str, Any]) -> Dict[str, Any]
     return {"created": True, "previous_count": previous_count}
 
 
-def remove_user_feed_membership_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def remove_user_feed_membership_action(params: dict[str, Any]) -> dict[str, Any]:
     feed_id = params.get("feed_id")
     user_id = params.get("user_id")
     if not feed_id or not user_id:
@@ -179,7 +203,7 @@ def remove_user_feed_membership_action(params: Dict[str, Any]) -> Dict[str, Any]
     return {"removed": int(removed)}
 
 
-def whitelist_latest_post_for_feed_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def whitelist_latest_post_for_feed_action(params: dict[str, Any]) -> dict[str, Any]:
     feed_id = params.get("feed_id")
     if not feed_id:
         raise ValueError("feed_id is required")
@@ -199,7 +223,7 @@ def whitelist_latest_post_for_feed_action(params: Dict[str, Any]) -> Dict[str, A
     return {"updated": True, "post_guid": latest.guid}
 
 
-def toggle_whitelist_all_for_feed_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def toggle_whitelist_all_for_feed_action(params: dict[str, Any]) -> dict[str, Any]:
     feed_id = params.get("feed_id")
     new_status = params.get("new_status")
     if feed_id is None or new_status is None:
@@ -212,7 +236,7 @@ def toggle_whitelist_all_for_feed_action(params: Dict[str, Any]) -> Dict[str, An
     return {"feed_id": int(feed_id), "updated_count": int(updated)}
 
 
-def create_dev_test_feed_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def create_dev_test_feed_action(params: dict[str, Any]) -> dict[str, Any]:
     rss_url = params.get("rss_url")
     title = params.get("title")
     if not rss_url or not title:
@@ -232,7 +256,7 @@ def create_dev_test_feed_action(params: Dict[str, Any]) -> Dict[str, Any]:
     db.session.add(feed)
     db.session.flush()
 
-    now = datetime.utcnow()
+    now = datetime.now(UTC).replace(tzinfo=None)
     # Use a larger default so dev/test feeds exercise paging in the UI
     post_count = int(params.get("post_count") or 30)
     for i in range(1, post_count + 1):
@@ -265,7 +289,7 @@ def create_dev_test_feed_action(params: Dict[str, Any]) -> Dict[str, Any]:
     return {"feed_id": feed.id, "created": True}
 
 
-def delete_feed_cascade_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def delete_feed_cascade_action(params: dict[str, Any]) -> dict[str, Any]:
     feed_id = params.get("feed_id")
     if not feed_id:
         raise ValueError("feed_id is required")
@@ -344,7 +368,7 @@ def _hash_token(secret_value: str) -> str:
     return hashlib.sha256(secret_value.encode("utf-8")).hexdigest()
 
 
-def create_feed_access_token_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def create_feed_access_token_action(params: dict[str, Any]) -> dict[str, Any]:
     user_id = params.get("user_id")
     feed_id = params.get("feed_id")
 
@@ -386,7 +410,7 @@ def create_feed_access_token_action(params: Dict[str, Any]) -> Dict[str, Any]:
     return {"token_id": token_id, "secret": secret_value}
 
 
-def touch_feed_access_token_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def touch_feed_access_token_action(params: dict[str, Any]) -> dict[str, Any]:
     token_id = params.get("token_id")
     secret_value = params.get("secret")
     if not token_id:
@@ -396,7 +420,7 @@ def touch_feed_access_token_action(params: Dict[str, Any]) -> Dict[str, Any]:
     if token is None:
         return {"updated": False}
 
-    token.last_used_at = datetime.utcnow()
+    token.last_used_at = datetime.now(UTC).replace(tzinfo=None)
     if token.token_secret is None and secret_value:
         token.token_secret = str(secret_value)
     db.session.flush()

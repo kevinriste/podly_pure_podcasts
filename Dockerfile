@@ -19,10 +19,13 @@ RUN set -e && \
 
 # Backend stage
 FROM ${BASE_IMAGE} AS backend
+COPY --from=ghcr.io/astral-sh/uv:0.10.2 /uv /uvx /bin/
 
 # Environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV UV_COMPILE_BYTECODE=1
+ENV UV_LINK_MODE=copy
 ARG CUDA_VERSION=12.4.1
 ARG ROCM_VERSION=6.4
 ARG USE_GPU=false
@@ -79,72 +82,39 @@ RUN if [ -f /etc/debian_version ]; then \
     fi ; \
     fi
 
-# Copy all Pipfiles/lock files
-COPY Pipfile Pipfile.lock Pipfile.lite Pipfile.lite.lock ./
+# Copy dependency manifests and lock files
+COPY pyproject.toml pyproject.lite.toml uv.lock uv.lite.lock ./
 
 # Remove problematic distutils-installed packages that may conflict
 RUN if [ -f /etc/debian_version ]; then \
     apt-get remove -y python3-blinker 2>/dev/null || true; \
     fi
 
-# Install pipenv and dependencies
-RUN if command -v pip >/dev/null 2>&1; then \
-    pip install --no-cache-dir pipenv; \
-    elif command -v pip3 >/dev/null 2>&1; then \
-    pip3 install --no-cache-dir pipenv; \
-    else \
-    python3 -m pip install --no-cache-dir pipenv; \
-    fi
-
-# Set pip timeout and retries for better reliability
-ENV PIP_DEFAULT_TIMEOUT=1000
-ENV PIP_RETRIES=3
-ENV PIP_DISABLE_PIP_VERSION_CHECK=1
-ENV PIP_NO_CACHE_DIR=1
-
-# Set pipenv configuration for better CI reliability
-ENV PIPENV_VENV_IN_PROJECT=1
-ENV PIPENV_TIMEOUT=1200
-
 # Install dependencies conditionally based on LITE_BUILD
-RUN set -e && \
+RUN --mount=type=cache,target=/root/.cache/uv \
+    set -e && \
     if [ "${LITE_BUILD}" = "true" ]; then \
     echo "Installing lite dependencies (without Whisper)"; \
-    echo "Using lite Pipfile:" && \
-    PIPENV_PIPFILE=Pipfile.lite pipenv install --deploy --system; \
+    echo "Using lite pyproject:" && \
+    cp pyproject.lite.toml pyproject.toml && \
+    cp uv.lite.lock uv.lock && \
+    uv sync --frozen --no-dev --no-install-project; \
     else \
     echo "Installing full dependencies (including Whisper)"; \
-    echo "Using full Pipfile:" && \
-    PIPENV_PIPFILE=Pipfile pipenv install --deploy --system; \
+    echo "Using full pyproject:" && \
+    uv sync --frozen --no-dev --no-install-project; \
     fi
 
 # Install PyTorch with CUDA support if using NVIDIA image (skip if LITE_BUILD)
-RUN if [ "${LITE_BUILD}" = "true" ]; then \
+RUN --mount=type=cache,target=/root/.cache/uv \
+    if [ "${LITE_BUILD}" = "true" ]; then \
     echo "Skipping PyTorch installation in lite mode"; \
     elif [ "${USE_GPU}" = "true" ] || [ "${USE_GPU_NVIDIA}" = "true" ]; then \
-    if command -v pip >/dev/null 2>&1; then \
-    pip install --no-cache-dir nvidia-cudnn-cu12 torch; \
-    elif command -v pip3 >/dev/null 2>&1; then \
-    pip3 install --no-cache-dir nvidia-cudnn-cu12 torch; \
-    else \
-    python3 -m pip install --no-cache-dir nvidia-cudnn-cu12 torch; \
-    fi; \
+    uv pip install nvidia-cudnn-cu12 torch; \
     elif [ "${USE_GPU_AMD}" = "true" ]; then \
-    if command -v pip >/dev/null 2>&1; then \
-    pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/rocm${ROCM_VERSION}; \
-    elif command -v pip3 >/dev/null 2>&1; then \
-    pip3 install --no-cache-dir torch --index-url https://download.pytorch.org/whl/rocm${ROCM_VERSION}; \
+    uv pip install torch --index-url https://download.pytorch.org/whl/rocm${ROCM_VERSION}; \
     else \
-    python3 -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/rocm${ROCM_VERSION}; \
-    fi; \
-    else \
-    if command -v pip >/dev/null 2>&1; then \
-    pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu; \
-    elif command -v pip3 >/dev/null 2>&1; then \
-    pip3 install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu; \
-    else \
-    python3 -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu; \
-    fi; \
+    uv pip install torch --index-url https://download.pytorch.org/whl/cpu; \
     fi
 
 # Copy application code
@@ -162,13 +132,16 @@ RUN groupadd -r appuser && \
     mkdir -p /home/appuser && \
     chown -R appuser:appuser /home/appuser
 
-# Create necessary directories and set permissions
+# Create necessary directories and set permissions (only dirs needing runtime writes)
 RUN mkdir -p /app/processing /app/src/instance /app/src/instance/data /app/src/instance/data/in /app/src/instance/data/srv /app/src/instance/config /app/src/instance/db && \
-    chown -R appuser:appuser /app
+    chown -R appuser:appuser /app/processing /app/src/instance
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod 755 /docker-entrypoint.sh
+
+# Add venv to PATH so we don't need uv run at runtime
+ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 5001
 

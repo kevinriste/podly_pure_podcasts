@@ -6,17 +6,20 @@ export interface Feed {
   author?: string;
   image_url?: string;
   posts_count: number;
+  latest_episode_release_date?: string | null;
   member_count?: number;
   is_member?: boolean;
   is_active_subscription?: boolean;
-  ad_detection_strategy?: 'llm' | 'chapter';
+  ad_detection_strategy?: 'llm' | 'chapter' | 'chapter_insert';
   chapter_filter_strings?: string | null;
+  enable_llm_chapter_fallback_tagging?: boolean | null;
   auto_whitelist_new_episodes_override?: boolean | null;
 }
 
 export interface FeedSettingsUpdate {
-  ad_detection_strategy?: 'llm' | 'chapter';
+  ad_detection_strategy?: 'llm' | 'chapter' | 'chapter_insert';
   chapter_filter_strings?: string | null;
+  enable_llm_chapter_fallback_tagging?: boolean | null;
   auto_whitelist_new_episodes_override?: boolean | null;
 }
 
@@ -25,6 +28,7 @@ export interface Episode {
   guid: string;
   title: string;
   description: string;
+  podly_description_html?: string | null;
   release_date: string | null;
   duration: number | null;
   whitelisted: boolean;
@@ -33,7 +37,7 @@ export interface Episode {
   download_url: string;
   image_url: string | null;
   download_count: number;
-} 
+}
 
 export interface PagedResult<T> {
   items: T[];
@@ -114,28 +118,29 @@ export interface LLMConfig {
   llm_max_input_tokens_per_minute?: number | null;
   enable_boundary_refinement: boolean;
   enable_word_level_boundary_refinder?: boolean;
+  enable_llm_chapter_fallback_tagging?: boolean;
 }
 
 export type WhisperConfig =
   | { whisper_type: 'local'; model: string }
   | {
-      whisper_type: 'remote';
-      model: string;
-      api_key?: string | null;
-      api_key_preview?: string | null;
-      base_url?: string;
-      language: string;
-      timeout_sec: number;
-      chunksize_mb: number;
-    }
+    whisper_type: 'remote';
+    model: string;
+    api_key?: string | null;
+    api_key_preview?: string | null;
+    base_url?: string;
+    language: string;
+    timeout_sec: number;
+    chunksize_mb: number;
+  }
   | {
-      whisper_type: 'groq';
-      api_key?: string | null;
-      api_key_preview?: string | null;
-      model: string;
-      language: string;
-      max_retries: number;
-    }
+    whisper_type: 'groq';
+    api_key?: string | null;
+    api_key_preview?: string | null;
+    model: string;
+    language: string;
+    max_retries: number;
+  }
   | { whisper_type: 'test' };
 
 export interface ProcessingConfigUI {
@@ -158,6 +163,7 @@ export interface AppConfigUI {
   enable_public_landing_page: boolean;
   user_limit_total: number | null;
   autoprocess_on_download: boolean;
+  cost_rate_per_hour: number;
 }
 
 export interface CombinedConfig {
@@ -173,6 +179,7 @@ export interface EnvOverrideEntry {
   value?: string;
   value_preview?: string | null;
   is_secret?: boolean;
+  read_only?: boolean;
 }
 
 export type EnvOverrideMap = Record<string, EnvOverrideEntry>;
@@ -229,4 +236,62 @@ export interface LandingStatus {
   user_count: number;
   user_limit_total: number | null;
   slots_remaining: number | null;
+}
+
+export interface FeedSubscriber {
+  user_id: number;
+  username: string;
+  role: string;
+  subscription_status: string;
+  joined_at: string | null;
+}
+
+export interface FeedSubscribersResponse {
+  feed_id: number;
+  subscribers: FeedSubscriber[];
+}
+
+export interface CostUser {
+  id: number;
+  username: string;
+  role: string;
+  feed_count: number;
+  subscription_status: string;
+  stripe_subscription_id: string | null;
+  subscription_amount_cents: number | null;
+  monthly_cost: number;
+}
+
+export interface CostFeed {
+  id: number;
+  title: string;
+  subscriber_count: number;
+  episodes_this_month: number;
+  monthly_cost: number;
+}
+
+export interface CostSummary {
+  year: number;
+  month: number;
+  total_cost: number;
+  cost_rate_per_hour: number;
+  users: CostUser[];
+  feeds: CostFeed[];
+}
+
+export interface CallLogEntry {
+  id: number;
+  post_id: number;
+  model_name: string;
+  status: string;
+  timestamp: string | null;
+  retry_attempts: number;
+}
+
+export interface CallLog {
+  calls: CallLogEntry[];
+  total: number;
+  page: number;
+  per_page: number;
+  pages: number;
 }

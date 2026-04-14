@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from app.writer.client import writer_client
 
@@ -13,13 +13,13 @@ def render_prompt_and_upsert_model_call(
     ad_end: float,
     confidence: float,
     context_segments: Any,
-    post_id: Optional[int],
-    first_seq_num: Optional[int],
-    last_seq_num: Optional[int],
+    post_id: int | None,
+    first_seq_num: int | None,
+    last_seq_num: int | None,
     model_name: str,
     logger: logging.Logger,
     log_prefix: str,
-) -> tuple[str, Optional[int]]:
+) -> tuple[str, int | None]:
     prompt = template.render(
         ad_start=ad_start,
         ad_end=ad_end,
@@ -42,14 +42,14 @@ def render_prompt_and_upsert_model_call(
 
 def try_upsert_model_call(
     *,
-    post_id: Optional[int],
-    first_seq_num: Optional[int],
-    last_seq_num: Optional[int],
+    post_id: int | None,
+    first_seq_num: int | None,
+    last_seq_num: int | None,
     model_name: str,
     prompt: str,
     logger: logging.Logger,
     log_prefix: str,
-) -> Optional[int]:
+) -> int | None:
     """Best-effort ModelCall creation.
 
     Returns model_call_id if successfully created/upserted, else None.
@@ -71,18 +71,18 @@ def try_upsert_model_call(
         )
         if res and res.success:
             return (res.data or {}).get("model_call_id")
-    except Exception as exc:  # best-effort
+    except Exception as exc:  # best-effort  # noqa: BLE001
         logger.warning("%s: failed to upsert ModelCall: %s", log_prefix, exc)
 
     return None
 
 
 def try_update_model_call(
-    model_call_id: Optional[int],
+    model_call_id: int | None,
     *,
     status: str,
-    response: Optional[str],
-    error_message: Optional[str],
+    response: str | None,
+    error_message: str | None,
     logger: logging.Logger,
     log_prefix: str,
 ) -> None:
@@ -102,7 +102,7 @@ def try_update_model_call(
             },
             wait=True,
         )
-    except Exception as exc:  # best-effort
+    except Exception as exc:  # best-effort  # noqa: BLE001
         logger.warning(
             "%s: failed to update ModelCall %s: %s",
             log_prefix,
@@ -123,3 +123,47 @@ def extract_litellm_content(response: Any) -> str:
     if not content:
         content = getattr(choice, "text", "") or ""
     return str(content)
+
+
+def extract_litellm_finish_reason(response: Any) -> str | None:
+    """Extracts finish_reason from the first response choice, if present."""
+    choices = getattr(response, "choices", None) or []
+    choice = choices[0] if choices else None
+    if not choice:
+        return None
+
+    finish_reason = getattr(choice, "finish_reason", None)
+    if finish_reason is None and isinstance(choice, dict):
+        finish_reason = choice.get("finish_reason")
+    if finish_reason is None:
+        return None
+    return str(finish_reason)
+
+
+def extract_litellm_usage(response: Any) -> dict[str, int | None]:
+    """Extracts token usage fields from a litellm response object."""
+    usage = getattr(response, "usage", None)
+    if usage is None and isinstance(response, dict):
+        usage = response.get("usage")
+
+    def _maybe_int(value: Any) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _usage_field(name: str) -> int | None:
+        if usage is None:
+            return None
+        value = getattr(usage, name, None)
+        if value is None and isinstance(usage, dict):
+            value = usage.get(name)
+        return _maybe_int(value)
+
+    return {
+        "prompt_tokens": _usage_field("prompt_tokens"),
+        "completion_tokens": _usage_field("completion_tokens"),
+        "total_tokens": _usage_field("total_tokens"),
+    }

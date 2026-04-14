@@ -57,16 +57,15 @@ _TOKEN_PROTECTED_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"^/feed/[^/]+$"),
     re.compile(r"^/feed/user/[^/]+$"),
     re.compile(r"^/api/posts/[^/]+/(audio|download(?:/original)?)$"),
-    re.compile(r"^/post/[^/]+(?:\\.mp3|/original\\.mp3)$"),
+    re.compile(r"^/post/[^/]+(?:\.mp3|/original\.mp3)$"),
 )
 
 
 def init_auth_middleware(app: Any) -> None:
     """Attach the authentication guard to the Flask app."""
 
-    @app.before_request  # type: ignore[untyped-decorator]
+    @app.before_request
     def enforce_authentication() -> Response | None:
-        # pylint: disable=too-many-return-statements
         if request.method == "OPTIONS":
             return None
 

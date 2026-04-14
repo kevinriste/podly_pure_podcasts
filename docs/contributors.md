@@ -102,7 +102,7 @@ After=network.target
 User=yourusername
 Group=yourusername
 WorkingDirectory=/path/to/your/app
-ExecStart=/usr/bin/pipenv run python src/main.py
+ExecStart=/usr/bin/env uv run python src/main.py
 Restart=always
 
 [Install]
@@ -123,7 +123,7 @@ The database auto-migrates on launch.
 To add a migration after data model change:
 
 ```bash
-pipenv run flask --app ./src/main.py db migrate -m "[change description]"
+uv run flask --app ./src/main.py db migrate -m "[change description]"
 ```
 
 On next launch, the database updates automatically.
@@ -192,6 +192,17 @@ Podly can be run in Docker with support for both NVIDIA GPU and non-NVIDIA envir
 - `PUID`/`PGID`: User/group IDs for file permissions (automatically set by run script)
 - `CUDA_VISIBLE_DEVICES`: GPU device selection for CUDA acceleration
 - `CORS_ORIGINS`: Backend CORS configuration (defaults to accept requests from any origin)
+
+**Env Var Precedence for Config Settings**:
+
+Environment variables for Podly config settings (e.g. `LLM_MODEL`, `WHISPER_TYPE`, `GROQ_API_KEY`) always take precedence over values stored in the database or set through the web UI. This follows the [12-factor app](https://12factor.net/config) principle:
+
+- At runtime, env vars are overlaid on top of database values — the database is never mutated by env vars.
+- The API strips env-controlled fields from incoming config updates to prevent the UI from overwriting operator intent.
+- In the web UI, env-controlled fields appear as read-only with a visual indicator.
+- To give control back to the UI, simply remove the env var and restart the container.
+
+See `.env.local.example` for all available environment variables.
 
 ## FAQ
 
@@ -271,10 +282,10 @@ Both scripts provide the same core user experience:
 
 Before submitting a pull request, you can run the same tests that run in CI:
 
-To prep your pipenv environment to run this script, you will need to first run:
+To prep your local uv environment to run this script, you will need to first run:
 
 ```bash
-pipenv install --dev
+uv sync --extra dev
 ```
 
 Then, to run the checks,
@@ -285,10 +296,9 @@ scripts/ci.sh
 
 This will run all the necessary checks including:
 
-- Type checking with mypy
-- Code formatting checks
+- Code formatting and linting with ruff
+- Type checking with ty
 - Unit tests
-- Linting
 
 ### Pull Request Process
 
@@ -299,6 +309,6 @@ This will run all the necessary checks including:
 
 ### Code Style
 
-- We use black for code formatting
+- We use ruff for code formatting
 - Type hints are required for all new code
 - Follow existing patterns in the codebase

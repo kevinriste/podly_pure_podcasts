@@ -16,6 +16,13 @@ const DEFAULT_ENV_HINTS: Record<string, EnvOverrideEntry> = {
   'llm.llm_api_key': { env_var: 'LLM_API_KEY' },
   'llm.llm_model': { env_var: 'LLM_MODEL' },
   'llm.openai_base_url': { env_var: 'OPENAI_BASE_URL' },
+  'llm.openai_timeout': { env_var: 'OPENAI_TIMEOUT' },
+  'llm.openai_max_tokens': { env_var: 'OPENAI_MAX_TOKENS' },
+  'llm.llm_max_concurrent_calls': { env_var: 'LLM_MAX_CONCURRENT_CALLS' },
+  'llm.llm_max_retry_attempts': { env_var: 'LLM_MAX_RETRY_ATTEMPTS' },
+  'llm.llm_enable_token_rate_limiting': { env_var: 'LLM_ENABLE_TOKEN_RATE_LIMITING' },
+  'llm.llm_max_input_tokens_per_call': { env_var: 'LLM_MAX_INPUT_TOKENS_PER_CALL' },
+  'llm.llm_max_input_tokens_per_minute': { env_var: 'LLM_MAX_INPUT_TOKENS_PER_MINUTE' },
   'whisper.whisper_type': { env_var: 'WHISPER_TYPE' },
   'whisper.api_key': { env_var: 'WHISPER_REMOTE_API_KEY' },
   'whisper.base_url': { env_var: 'WHISPER_REMOTE_BASE_URL' },
@@ -83,6 +90,7 @@ export interface UseConfigStateReturn {
   // Helpers
   getEnvHint: (path: string, fallback?: EnvOverrideEntry) => EnvOverrideEntry | undefined;
   getWhisperApiKey: (w: WhisperConfig | undefined) => string;
+  isFieldReadOnly: (path: string) => boolean;
 
   // Recommended defaults
   groqRecommendedModel: string;
@@ -117,6 +125,14 @@ export function useConfigState(): UseConfigStateReturn {
   const getEnvHint = useCallback(
     (path: string, fallback?: EnvOverrideEntry) =>
       envOverrides[path] ?? fallback ?? DEFAULT_ENV_HINTS[path],
+    [envOverrides]
+  );
+
+  const isFieldReadOnly = useCallback(
+    (path: string) => {
+      const override = envOverrides[path];
+      return override?.read_only === true;
+    },
     [envOverrides]
   );
 
@@ -540,6 +556,7 @@ export function useConfigState(): UseConfigStateReturn {
     // Helpers
     getEnvHint,
     getWhisperApiKey,
+    isFieldReadOnly,
 
     // Recommended defaults
     groqRecommendedModel,

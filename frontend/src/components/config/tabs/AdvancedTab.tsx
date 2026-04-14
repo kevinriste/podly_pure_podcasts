@@ -28,8 +28,8 @@ export default function AdvancedTab() {
             onClick={() => setActiveSubtab(subtab.id)}
             className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${
               activeSubtab === subtab.id
-                ? 'bg-indigo-100 text-indigo-700'
-                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-100 dark:ring-1 dark:ring-indigo-400/40'
+                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-100'
             }`}
           >
             {subtab.label}

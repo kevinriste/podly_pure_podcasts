@@ -10,6 +10,7 @@ export default function WhisperSection() {
     pending,
     setField,
     getEnvHint,
+    isFieldReadOnly,
     handleSave,
     isSaving,
     localWhisperAvailable,
@@ -17,6 +18,14 @@ export default function WhisperSection() {
     getWhisperApiKey,
     envOverrides,
   } = useConfigContext();
+
+  const whisperTypeReadOnly = isFieldReadOnly('whisper.whisper_type');
+  const whisperApiKeyReadOnly = isFieldReadOnly('whisper.api_key');
+  const whisperModelReadOnly = isFieldReadOnly('whisper.model');
+  const whisperBaseUrlReadOnly = isFieldReadOnly('whisper.base_url');
+  const whisperTimeoutReadOnly = isFieldReadOnly('whisper.timeout_sec');
+  const whisperChunksizeReadOnly = isFieldReadOnly('whisper.chunksize_mb');
+  const whisperMaxRetriesReadOnly = isFieldReadOnly('whisper.max_retries');
 
   const whisperApiKeyPreview =
     pending?.whisper?.whisper_type === 'remote' || pending?.whisper?.whisper_type === 'groq'
@@ -35,6 +44,9 @@ export default function WhisperSection() {
     }
     return '';
   }, [whisperApiKeyPreview, pending?.whisper?.whisper_type, envOverrides]);
+
+  const inputClass = (readOnly: boolean) =>
+    readOnly ? 'input bg-gray-100 cursor-not-allowed' : 'input';
 
   if (!pending) return null;
 
@@ -64,9 +76,10 @@ export default function WhisperSection() {
       <Section title="Whisper">
         <Field label="Type" envMeta={getEnvHint('whisper.whisper_type')}>
           <select
-            className="input"
+            className={inputClass(whisperTypeReadOnly)}
             value={whisperType}
             onChange={(e) => handleWhisperTypeChange(e.target.value as 'local' | 'remote' | 'groq')}
+            disabled={whisperTypeReadOnly}
           >
             {localWhisperAvailable !== false && <option value="local">local</option>}
             <option value="remote">remote</option>
@@ -81,10 +94,11 @@ export default function WhisperSection() {
             envMeta={getEnvHint('whisper.model', { env_var: 'WHISPER_LOCAL_MODEL' })}
           >
             <input
-              className="input"
+              className={inputClass(whisperModelReadOnly)}
               type="text"
               value={(pending?.whisper as { model?: string })?.model || 'base'}
               onChange={(e) => setField(['whisper', 'model'], e.target.value)}
+              disabled={whisperModelReadOnly}
             />
           </Field>
         )}
@@ -97,11 +111,12 @@ export default function WhisperSection() {
               envMeta={getEnvHint('whisper.api_key', { env_var: 'WHISPER_REMOTE_API_KEY' })}
             >
               <input
-                className="input"
+                className={inputClass(whisperApiKeyReadOnly)}
                 type="text"
                 placeholder={whisperApiKeyPlaceholder}
                 value={getWhisperApiKey(pending?.whisper)}
                 onChange={(e) => setField(['whisper', 'api_key'], e.target.value)}
+                disabled={whisperApiKeyReadOnly}
               />
             </Field>
             <Field
@@ -109,19 +124,21 @@ export default function WhisperSection() {
               envMeta={getEnvHint('whisper.model', { env_var: 'WHISPER_REMOTE_MODEL' })}
             >
               <input
-                className="input"
+                className={inputClass(whisperModelReadOnly)}
                 type="text"
                 value={(pending?.whisper as { model?: string })?.model || 'whisper-1'}
                 onChange={(e) => setField(['whisper', 'model'], e.target.value)}
+                disabled={whisperModelReadOnly}
               />
             </Field>
             <Field label="Base URL" envMeta={getEnvHint('whisper.base_url')}>
               <input
-                className="input"
+                className={inputClass(whisperBaseUrlReadOnly)}
                 type="text"
                 placeholder="https://api.openai.com/v1"
                 value={(pending?.whisper as { base_url?: string })?.base_url || ''}
                 onChange={(e) => setField(['whisper', 'base_url'], e.target.value)}
+                disabled={whisperBaseUrlReadOnly}
               />
             </Field>
             <Field label="Language">
@@ -134,18 +151,20 @@ export default function WhisperSection() {
             </Field>
             <Field label="Timeout (sec)" envMeta={getEnvHint('whisper.timeout_sec')}>
               <input
-                className="input"
+                className={inputClass(whisperTimeoutReadOnly)}
                 type="number"
                 value={(pending?.whisper as { timeout_sec?: number })?.timeout_sec ?? 600}
                 onChange={(e) => setField(['whisper', 'timeout_sec'], Number(e.target.value))}
+                disabled={whisperTimeoutReadOnly}
               />
             </Field>
             <Field label="Chunk Size (MB)" envMeta={getEnvHint('whisper.chunksize_mb')}>
               <input
-                className="input"
+                className={inputClass(whisperChunksizeReadOnly)}
                 type="number"
                 value={(pending?.whisper as { chunksize_mb?: number })?.chunksize_mb ?? 24}
                 onChange={(e) => setField(['whisper', 'chunksize_mb'], Number(e.target.value))}
+                disabled={whisperChunksizeReadOnly}
               />
             </Field>
           </div>
@@ -159,11 +178,12 @@ export default function WhisperSection() {
               envMeta={getEnvHint('whisper.api_key', { env_var: 'GROQ_API_KEY' })}
             >
               <input
-                className="input"
+                className={inputClass(whisperApiKeyReadOnly)}
                 type="text"
                 placeholder={whisperApiKeyPlaceholder}
                 value={getWhisperApiKey(pending?.whisper)}
                 onChange={(e) => setField(['whisper', 'api_key'], e.target.value)}
+                disabled={whisperApiKeyReadOnly}
               />
             </Field>
             <Field
@@ -171,10 +191,11 @@ export default function WhisperSection() {
               envMeta={getEnvHint('whisper.model', { env_var: 'GROQ_WHISPER_MODEL' })}
             >
               <input
-                className="input"
+                className={inputClass(whisperModelReadOnly)}
                 type="text"
                 value={(pending?.whisper as { model?: string })?.model || 'whisper-large-v3-turbo'}
                 onChange={(e) => setField(['whisper', 'model'], e.target.value)}
+                disabled={whisperModelReadOnly}
               />
             </Field>
             <Field label="Language">
@@ -187,10 +208,11 @@ export default function WhisperSection() {
             </Field>
             <Field label="Max Retries" envMeta={getEnvHint('whisper.max_retries')}>
               <input
-                className="input"
+                className={inputClass(whisperMaxRetriesReadOnly)}
                 type="number"
                 value={(pending?.whisper as { max_retries?: number })?.max_retries ?? 3}
                 onChange={(e) => setField(['whisper', 'max_retries'], Number(e.target.value))}
+                disabled={whisperMaxRetriesReadOnly}
               />
             </Field>
           </div>

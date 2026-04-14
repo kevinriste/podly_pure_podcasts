@@ -8,18 +8,38 @@ interface FeedSettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   autoWhitelistGlobalDefault?: boolean;
+  llmChapterFallbackGlobalDefault?: boolean;
+  episodeDescriptionView?: 'source' | 'podly';
+  onEpisodeDescriptionViewChange?: (view: 'source' | 'podly') => void;
 }
 
 const DEFAULT_FILTER_STRINGS = 'sponsor,advertisement,ad break,promo,brought to you by';
 
-export default function FeedSettingsModal({ feed, isOpen, onClose, autoWhitelistGlobalDefault }: FeedSettingsModalProps) {
+export default function FeedSettingsModal({
+  feed,
+  isOpen,
+  onClose,
+  autoWhitelistGlobalDefault,
+  llmChapterFallbackGlobalDefault,
+  episodeDescriptionView = 'source',
+  onEpisodeDescriptionViewChange,
+}: FeedSettingsModalProps) {
   const queryClient = useQueryClient();
 
-  const [strategy, setStrategy] = useState<'llm' | 'chapter'>(
+  const [strategy, setStrategy] = useState<'llm' | 'chapter' | 'chapter_insert'>(
     feed.ad_detection_strategy || 'llm'
   );
   const [filterStrings, setFilterStrings] = useState(
     feed.chapter_filter_strings || DEFAULT_FILTER_STRINGS
+  );
+  const [chapterFallbackOverride, setChapterFallbackOverride] = useState<
+    'inherit' | 'on' | 'off'
+  >(
+    feed.enable_llm_chapter_fallback_tagging === true
+      ? 'on'
+      : feed.enable_llm_chapter_fallback_tagging === false
+        ? 'off'
+        : 'inherit'
   );
   const [autoWhitelistOverride, setAutoWhitelistOverride] = useState<'inherit' | 'on' | 'off'>(
     feed.auto_whitelist_new_episodes_override === true
@@ -32,6 +52,13 @@ export default function FeedSettingsModal({ feed, isOpen, onClose, autoWhitelist
   useEffect(() => {
     setStrategy(feed.ad_detection_strategy || 'llm');
     setFilterStrings(feed.chapter_filter_strings || DEFAULT_FILTER_STRINGS);
+    setChapterFallbackOverride(
+      feed.enable_llm_chapter_fallback_tagging === true
+        ? 'on'
+        : feed.enable_llm_chapter_fallback_tagging === false
+          ? 'off'
+          : 'inherit'
+    );
     setAutoWhitelistOverride(
       feed.auto_whitelist_new_episodes_override === true
         ? 'on'
@@ -39,7 +66,7 @@ export default function FeedSettingsModal({ feed, isOpen, onClose, autoWhitelist
           ? 'off'
           : 'inherit'
     );
-  }, [feed]);
+  }, [feed, llmChapterFallbackGlobalDefault]);
 
   const updateMutation = useMutation({
     mutationFn: (settings: FeedSettingsUpdate) =>
@@ -50,17 +77,50 @@ export default function FeedSettingsModal({ feed, isOpen, onClose, autoWhitelist
     },
   });
 
-  const handleSave = () => {
-    const settings: FeedSettingsUpdate = {
-      ad_detection_strategy: strategy,
-      auto_whitelist_new_episodes_override:
-        autoWhitelistOverride === 'inherit' ? null : autoWhitelistOverride === 'on',
-    };
+  const currentStrategy = feed.ad_detection_strategy || 'llm';
+  const currentFilterStrings = feed.chapter_filter_strings || DEFAULT_FILTER_STRINGS;
+  const currentChapterFallbackOverride =
+    feed.enable_llm_chapter_fallback_tagging === true
+      ? 'on'
+      : feed.enable_llm_chapter_fallback_tagging === false
+        ? 'off'
+        : 'inherit';
+  const currentAutoWhitelistOverride =
+    feed.auto_whitelist_new_episodes_override === true
+      ? 'on'
+      : feed.auto_whitelist_new_episodes_override === false
+        ? 'off'
+        : 'inherit';
 
-    if (strategy === 'chapter') {
+  const handleSave = () => {
+    const settings: FeedSettingsUpdate = {};
+
+    if (strategy !== currentStrategy) {
+      settings.ad_detection_strategy = strategy;
+    }
+
+    if (strategy === 'chapter' && filterStrings !== currentFilterStrings) {
       settings.chapter_filter_strings = filterStrings || null;
-    } else {
-      settings.chapter_filter_strings = null;
+    }
+
+    if (
+      strategy !== 'chapter_insert' &&
+      chapterFallbackOverride !== currentChapterFallbackOverride
+    ) {
+      settings.enable_llm_chapter_fallback_tagging =
+        chapterFallbackOverride === 'inherit'
+          ? null
+          : chapterFallbackOverride === 'on';
+    }
+
+    if (autoWhitelistOverride !== currentAutoWhitelistOverride) {
+      settings.auto_whitelist_new_episodes_override =
+        autoWhitelistOverride === 'inherit' ? null : autoWhitelistOverride === 'on';
+    }
+
+    if (Object.keys(settings).length === 0) {
+      onClose();
+      return;
     }
 
     updateMutation.mutate(settings);
@@ -72,6 +132,13 @@ export default function FeedSettingsModal({ feed, isOpen, onClose, autoWhitelist
       : autoWhitelistGlobalDefault
         ? 'On'
         : 'Off';
+  const chapterFallbackGlobalDefaultLabel =
+    llmChapterFallbackGlobalDefault === undefined
+      ? 'Unknown'
+      : llmChapterFallbackGlobalDefault
+        ? 'On'
+        : 'Off';
+  const isChapterFallbackLocked = strategy === 'chapter_insert';
 
   if (!isOpen) return null;
 
@@ -105,16 +172,23 @@ export default function FeedSettingsModal({ feed, isOpen, onClose, autoWhitelist
             </label>
             <select
               value={strategy}
-              onChange={(e) => setStrategy(e.target.value as 'llm' | 'chapter')}
+              onChange={(e) =>
+                setStrategy(e.target.value as 'llm' | 'chapter' | 'chapter_insert')
+              }
               className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
             >
               <option value="llm">LLM (AI-based)</option>
               <option value="chapter">Chapter-based</option>
+              <option value="chapter_insert">
+                Chapter insertion only (no ad removal)
+              </option>
             </select>
             <p className="text-xs text-gray-500 mt-1">
               {strategy === 'llm'
                 ? 'Uses AI transcription and classification to detect ads'
-                : 'Removes chapters matching filter strings (requires chapter metadata). Uses CBR encoding for accurate chapter seeking, instead of the default VBR.'}
+                : strategy === 'chapter'
+                  ? 'Removes chapters matching filter strings (requires chapter metadata). Uses CBR encoding for accurate chapter seeking, instead of the default VBR.'
+                  : 'Preserves audio and only inserts chapter metadata into the processed file/output description.'}
             </p>
 
             {strategy === 'chapter' && (
@@ -136,23 +210,83 @@ export default function FeedSettingsModal({ feed, isOpen, onClose, autoWhitelist
             )}
           </div>
 
-          <div className="border-t border-gray-200" />
-
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Auto-whitelist new episodes
             </label>
             <select
               value={autoWhitelistOverride}
-              onChange={(e) => setAutoWhitelistOverride(e.target.value as 'inherit' | 'on' | 'off')}
-              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+              onChange={(e) =>
+                setAutoWhitelistOverride(e.target.value as 'inherit' | 'on' | 'off')
+              }
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
             >
-              <option value="inherit">Use global setting ({autoWhitelistDefaultLabel})</option>
+              <option value="inherit">
+                Use global setting ({autoWhitelistDefaultLabel})
+              </option>
               <option value="on">On</option>
               <option value="off">Off</option>
             </select>
             <p className="text-xs text-gray-500 mt-1">
               Overrides the global setting for this feed.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              LLM-Based chapter tagging
+            </label>
+            <select
+              value={isChapterFallbackLocked ? 'on' : chapterFallbackOverride}
+              disabled={isChapterFallbackLocked}
+              onChange={(e) =>
+                setChapterFallbackOverride(
+                  e.target.value as 'inherit' | 'on' | 'off'
+                )
+              }
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
+            >
+              <option value="inherit">
+                Use global setting ({chapterFallbackGlobalDefaultLabel})
+              </option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+            <p className="text-xs text-gray-500 mt-1">
+              Preserves embedded chapters when available, otherwise falls back
+              to description or transcript-derived chapters during LLM
+              processing.
+            </p>
+            {isChapterFallbackLocked && (
+              <p className="text-xs text-blue-700 mt-2">
+                Chapter insertion mode requires chapter fallback tagging, so
+                this setting is locked on.
+              </p>
+            )}
+          </div>
+
+          <div className="border-t border-gray-200" />
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Episode description preview
+            </label>
+            <select
+              value={episodeDescriptionView}
+              onChange={(e) =>
+                onEpisodeDescriptionViewChange?.(
+                  e.target.value as 'source' | 'podly'
+                )
+              }
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+            >
+              <option value="source">Source description</option>
+              <option value="podly">Podly description preview</option>
+            </select>
+            <p className="text-xs text-gray-500 mt-1">
+              Uses the same composed description as the Podly RSS feed (source
+              description + Podly chapters). This affects only the UI preview
+              and does not change source RSS content.
             </p>
           </div>
 

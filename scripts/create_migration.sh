@@ -22,7 +22,7 @@ mkdir -p "$PODLY_INSTANCE_DIR/data/srv"
 
 echo "Running flask db migrate with message: $MIGRATION_MSG"
 export PYTHONPATH="$REPO_ROOT/src"
-pipenv run flask --app app db migrate -m "$MIGRATION_MSG"
+uv run flask --app app db migrate -m "$MIGRATION_MSG"
 
 echo "Applying migration (upgrade)"
 
@@ -30,7 +30,7 @@ read -r -p "Apply migration now? [y/N]: " response
 case "$response" in
     [yY][eE][sS]|[yY])
         echo "Applying migration..."
-        pipenv run flask --app app db upgrade
+        uv run flask --app app db upgrade
         echo "Migration applied."
         ;;
     *)

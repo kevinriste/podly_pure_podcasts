@@ -173,19 +173,24 @@ def test_process_audio(
         output_path = "path/to/output.mp3"
 
         # Set up mocks for get_ad_segments and get_audio_duration_ms
-        with patch.object(
-            processor, "get_ad_segments", return_value=[(5.0, 10.0)]
-        ), patch(
-            "podcast_processor.audio_processor.get_audio_duration_ms",
-            return_value=30000,
-        ), patch(
-            "podcast_processor.audio_processor.clip_segments_with_fade"
-        ) as mock_clip:
+        with (
+            patch.object(processor, "get_ad_segments", return_value=[(5.0, 10.0)]),
+            patch(
+                "podcast_processor.audio_processor.get_audio_duration_ms",
+                side_effect=[30000, 24000],
+            ),
+            patch(
+                "podcast_processor.audio_processor.clip_segments_with_fade"
+            ) as mock_clip,
+        ):
             # Call the method
-            processor.process_audio(post, output_path)
+            removed_segments = processor.process_audio(post, output_path)
 
             refreshed = db.session.get(Post, post.id)
             assert refreshed is not None
-            assert refreshed.duration == 30.0  # 30000ms / 1000 = 30s
+            assert refreshed.duration == 24.0  # processed output duration
             assert refreshed.processed_audio_path == output_path
+            # The default test config extends a final ad segment to the end when
+            # it is within the minimum separation threshold of the episode end.
+            assert removed_segments == [(5000, 30000)]
             mock_clip.assert_called_once()

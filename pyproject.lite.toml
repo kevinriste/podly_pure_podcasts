@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "podly-pure-podcasts-lite"
+version = "0.0.0"
+description = "Ad-block for podcasts. Create an ad-free RSS feed. Lite build."
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "speechrecognition",
+    "openai",
+    "python-dotenv",
+    "jinja2",
+    "flask",
+    "pyrss2gen",
+    "feedparser",
+    "certifi",
+    "cd",
+    "pyyaml",
+    "prompt-toolkit",
+    "pypodcastparser",
+    "werkzeug",
+    "exceptiongroup",
+    "zeroconf",
+    "waitress",
+    "validators",
+    "beartype",
+    "flask-sqlalchemy",
+    "flask-migrate",
+    "Flask-APScheduler",
+    "ffmpeg-python",
+    "litellm>=1.59.8,<1.75.0",
+    "bleach",
+    "groq",
+    "async_timeout",
+    "flask-cors",
+    "bcrypt",
+    "stripe",
+    "mutagen",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "ty",
+    "types-bleach",
+    "types-pyyaml",
+    "types-requests",
+    "types-waitress",
+    "pytest",
+    "pytest-cov",
+    "dill",
+    "types-flask-migrate",
+    "pytest-mock",
+    "watchdog",
+    "requests",
+    "types-flask-cors",
+]

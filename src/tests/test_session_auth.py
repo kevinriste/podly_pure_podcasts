@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Generator
+from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 from flask import Flask, Response, g, jsonify
+from flask.typing import ResponseReturnValue
 
 from app.auth import AuthSettings
 from app.auth.middleware import init_auth_middleware
@@ -15,7 +18,7 @@ from app.routes.feed_routes import feed_bp
 
 
 @pytest.fixture
-def auth_app() -> Flask:
+def auth_app() -> Generator[Flask, None, None]:
     app = Flask(__name__)
     app.config.update(
         SECRET_KEY="test-secret",
@@ -47,7 +50,7 @@ def auth_app() -> Flask:
     app.register_blueprint(feed_bp)
 
     @app.route("/api/protected", methods=["GET"])
-    def protected() -> Response:
+    def protected() -> ResponseReturnValue:
         current = getattr(g, "current_user", None)
         if current is None:
             return jsonify({"error": "missing user"}), 500
@@ -67,6 +70,14 @@ def auth_app() -> Flask:
         if current is None:
             return Response("missing user", status=500)
         return Response("download", mimetype="text/plain")
+
+    @app.route("/post/<string:guid>.mp3", methods=["GET"])
+    def stream(guid: str) -> Response:
+        del guid
+        current = getattr(g, "current_user", None)
+        if current is None:
+            return Response("missing user", status=500)
+        return Response("stream", mimetype="audio/mpeg")
 
     yield app
 
@@ -172,6 +183,12 @@ def test_share_link_generates_token_and_allows_query_access(auth_app: Flask) -> 
     )
     assert download_response.status_code == 200
 
+    stream_response = anon_client.get(
+        "/post/episode-1.mp3",
+        query_string={"feed_token": token_id, "feed_secret": secret},
+    )
+    assert stream_response.status_code == 200
+
 
 def test_share_link_returns_same_token_for_user_and_feed(auth_app: Flask) -> None:
     client = auth_app.test_client()
@@ -189,3 +206,83 @@ def test_share_link_returns_same_token_for_user_and_feed(auth_app: Flask) -> Non
     assert first["url"] == second["url"]
     assert first["feed_token"] == second["feed_token"]
     assert first["feed_secret"] == second["feed_secret"]
+
+
+def test_share_link_prefers_https_from_forwarded_header(auth_app: Flask) -> None:
+    client = auth_app.test_client()
+    with auth_app.app_context():
+        feed = Feed(title="Secure", rss_url="https://example.com/secure.xml")
+        db.session.add(feed)
+        db.session.commit()
+        feed_id = feed.id
+
+    client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    share = client.post(
+        f"/api/feeds/{feed_id}/share-link",
+        headers={"Forwarded": "for=203.0.113.10;proto=https"},
+    )
+
+    assert share.status_code == 201
+    payload = share.get_json()
+    assert payload is not None
+    assert payload["url"].startswith("https://")
+
+
+def test_feeds_endpoint_includes_latest_episode_release_date(auth_app: Flask) -> None:
+    client = auth_app.test_client()
+    latest_release_date = datetime(2024, 2, 1, 15, 30, tzinfo=UTC)
+
+    with auth_app.app_context():
+        dated_feed = Feed(title="Dated Feed", rss_url="https://example.com/dated.xml")
+        undated_feed = Feed(
+            title="Undated Feed",
+            rss_url="https://example.com/undated.xml",
+        )
+        db.session.add_all([dated_feed, undated_feed])
+        db.session.commit()
+
+        db.session.add_all(
+            [
+                Post(
+                    feed_id=dated_feed.id,
+                    guid="dated-episode-1",
+                    download_url="https://example.com/dated-episode-1.mp3",
+                    title="Older Episode",
+                    release_date=datetime(2024, 1, 1, 12, 0, tzinfo=UTC),
+                    whitelisted=True,
+                ),
+                Post(
+                    feed_id=dated_feed.id,
+                    guid="dated-episode-2",
+                    download_url="https://example.com/dated-episode-2.mp3",
+                    title="Newest Episode",
+                    release_date=latest_release_date,
+                    whitelisted=True,
+                ),
+                Post(
+                    feed_id=undated_feed.id,
+                    guid="undated-episode-1",
+                    download_url="https://example.com/undated-episode-1.mp3",
+                    title="Undated Episode",
+                    whitelisted=True,
+                ),
+            ]
+        )
+        db.session.commit()
+
+        dated_feed_id = dated_feed.id
+        undated_feed_id = undated_feed.id
+
+    client.post("/api/auth/login", json={"username": "admin", "password": "password"})
+    response = client.get("/feeds")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload is not None
+
+    feeds_by_id = {feed["id"]: feed for feed in payload}
+    assert (
+        feeds_by_id[dated_feed_id]["latest_episode_release_date"]
+        == latest_release_date.isoformat()
+    )
+    assert feeds_by_id[undated_feed_id]["latest_episode_release_date"] is None

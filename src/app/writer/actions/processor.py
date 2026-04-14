@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, Iterable, List
+from collections.abc import Iterable
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
@@ -10,7 +11,7 @@ from app.extensions import db
 from app.models import Identification, ModelCall, TranscriptSegment
 
 
-def upsert_model_call_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def upsert_model_call_action(params: dict[str, Any]) -> dict[str, Any]:
     post_id = params.get("post_id")
     model_name = params.get("model_name")
     first_seq = params.get("first_segment_sequence_num")
@@ -46,7 +47,7 @@ def upsert_model_call_action(params: Dict[str, Any]) -> Dict[str, Any]:
             model_name=str(model_name),
             prompt=str(prompt),
             status="pending",
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC).replace(tzinfo=None),
             retry_attempts=0,
             error_message=None,
             response=None,
@@ -72,7 +73,7 @@ def upsert_model_call_action(params: Dict[str, Any]) -> Dict[str, Any]:
     return {"model_call_id": int(model_call.id)}
 
 
-def upsert_whisper_model_call_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def upsert_whisper_model_call_action(params: dict[str, Any]) -> dict[str, Any]:
     post_id = params.get("post_id")
     model_name = params.get("model_name")
     first_seq = params.get("first_segment_sequence_num", 0)
@@ -82,7 +83,7 @@ def upsert_whisper_model_call_action(params: Dict[str, Any]) -> Dict[str, Any]:
     if post_id is None or model_name is None:
         raise ValueError("post_id and model_name are required")
 
-    reset_fields: Dict[str, Any] = params.get("reset_fields") or {
+    reset_fields: dict[str, Any] = params.get("reset_fields") or {
         "status": "pending",
         "prompt": "Whisper transcription job",
         "retry_attempts": 0,
@@ -115,7 +116,7 @@ def upsert_whisper_model_call_action(params: Dict[str, Any]) -> Dict[str, Any]:
             retry_attempts=int(reset_fields.get("retry_attempts") or 0),
             error_message=reset_fields.get("error_message"),
             response=reset_fields.get("response"),
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC).replace(tzinfo=None),
         )
         db.session.add(model_call)
         try:
@@ -135,9 +136,9 @@ def upsert_whisper_model_call_action(params: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _normalize_segments_payload(
-    segments: Iterable[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    normalized: List[Dict[str, Any]] = []
+    segments: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
     for seg in segments:
         if not isinstance(seg, dict):
             continue
@@ -153,7 +154,7 @@ def _normalize_segments_payload(
     return normalized
 
 
-def replace_transcription_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def replace_transcription_action(params: dict[str, Any]) -> dict[str, Any]:
     post_id = params.get("post_id")
     segments = params.get("segments")
     model_call_id = params.get("model_call_id")
@@ -210,7 +211,7 @@ def replace_transcription_action(params: Dict[str, Any]) -> Dict[str, Any]:
     return {"post_id": post_id_i, "segment_count": len(payload)}
 
 
-def mark_model_call_failed_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def mark_model_call_failed_action(params: dict[str, Any]) -> dict[str, Any]:
     model_call_id = params.get("model_call_id")
     error_message = params.get("error_message")
     status = params.get("status", "failed_permanent")
@@ -228,7 +229,7 @@ def mark_model_call_failed_action(params: Dict[str, Any]) -> Dict[str, Any]:
     return {"updated": True, "model_call_id": int(mc.id)}
 
 
-def insert_identifications_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def insert_identifications_action(params: dict[str, Any]) -> dict[str, Any]:
     identifications = params.get("identifications")
     if not isinstance(identifications, list):
         raise ValueError("identifications must be a list")
@@ -255,7 +256,7 @@ def insert_identifications_action(params: Dict[str, Any]) -> Dict[str, Any]:
     return {"inserted": int(getattr(result, "rowcount", 0) or 0)}
 
 
-def replace_identifications_action(params: Dict[str, Any]) -> Dict[str, Any]:
+def replace_identifications_action(params: dict[str, Any]) -> dict[str, Any]:
     delete_ids = params.get("delete_ids") or []
     new_identifications = params.get("new_identifications") or []
 

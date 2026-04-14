@@ -1,9 +1,6 @@
-import importlib
-import json
 import logging
 import os
 import secrets
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +10,7 @@ from flask_migrate import upgrade
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 
-from app import models
+from app import models as models
 from app.auth import AuthSettings, load_auth_settings
 from app.auth.bootstrap import bootstrap_admin_user
 from app.auth.discord_settings import load_discord_settings
@@ -33,12 +30,12 @@ from app.processor import (
 )
 from app.routes import register_routes
 from app.runtime_config import config, is_test
-from app.writer.client import writer_client
+from app.writer.client import writer_client as writer_client
 from shared import defaults as DEFAULTS
 from shared.processing_paths import get_in_root, get_srv_root
 
 setup_logger("global_logger", "src/instance/logs/app.log")
-logger = logging.getLogger("global_logger")
+app_logger: logging.Logger = logging.getLogger("global_logger")
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -62,7 +59,7 @@ def setup_dirs() -> None:
         os.makedirs(srv_root, exist_ok=True)
     except OSError as exc:
         # During CLI commands like migrations, the /app path may not exist
-        logger.warning(
+        app_logger.warning(
             "Could not create data directories (%s, %s): %s. "
             "This is expected during migrations on local dev.",
             in_root,
@@ -179,7 +176,7 @@ def _create_configured_app(
     app.config["AUTH_SETTINGS"] = auth_settings.without_password()
 
     if app.config["DISCORD_SETTINGS"].enabled:
-        logger.info(
+        app_logger.info(
             "Discord SSO enabled (guild restriction: %s)",
             "yes" if app.config["DISCORD_SETTINGS"].guild_ids else "no",
         )
@@ -223,11 +220,11 @@ def _clear_scheduler_jobstore() -> None:
                 cleared_any = True
 
         if cleared_any:
-            logger.info(
+            app_logger.info(
                 "Startup: cleared persisted APScheduler jobs at %s", jobstore_path
             )
     except OSError as exc:
-        logger.warning(
+        app_logger.warning(
             "Startup: failed to clear APScheduler jobs at %s: %s", jobstore_path, exc
         )
 
@@ -271,7 +268,7 @@ def _load_auth_settings() -> AuthSettings:
     try:
         return load_auth_settings()
     except RuntimeError as exc:
-        logger.critical("Authentication configuration error: %s", exc)
+        app_logger.critical("Authentication configuration error: %s", exc)
         raise
 
 
@@ -286,10 +283,10 @@ def _configure_session(app: Flask, auth_settings: AuthSettings) -> None:
     if not secret_key:
         try:
             secret_key = secrets.token_urlsafe(64)
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:
             raise RuntimeError("Failed to generate session secret key.") from exc
         if auth_settings.require_auth:
-            logger.warning(
+            app_logger.warning(
                 "Generated ephemeral session secret key because PODLY_SECRET_KEY is not set; "
                 "all sessions will be invalidated on restart."
             )
@@ -378,7 +375,7 @@ def _configure_readonly_sessions(app: Flask) -> None:
                 return
             if current_app.config.get("PODLY_APP_ROLE") != "web":
                 return
-        except Exception:  # pylint: disable=broad-except
+        except Exception:  # noqa: BLE001
             return
 
         # Set isolation level to prevent write locks
@@ -401,7 +398,7 @@ def _configure_readonly_sessions(app: Flask) -> None:
                 return
             if current_app.config.get("PODLY_APP_ROLE") != "web":
                 return
-        except Exception:  # pylint: disable=broad-except
+        except Exception:  # noqa: BLE001
             return
 
         if session.info.get("readonly"):
@@ -433,7 +430,7 @@ def _register_api_logging(app: Flask) -> None:
     def _log_api_request(response: Any) -> Any:
         try:
             path = request.path
-        except Exception:  # pragma: no cover  # pylint: disable=broad-except
+        except Exception:  # pragma: no cover  # noqa: BLE001
             return response
 
         if not path.startswith("/api/"):
@@ -445,7 +442,7 @@ def _register_api_logging(app: Flask) -> None:
         user = getattr(g, "current_user", None)
         user_id = getattr(user, "id", None)
 
-        logger.info(
+        app_logger.info(
             "[API] %s %s status=%s user_id=%s content_type=%s",
             method,
             path,
@@ -464,8 +461,8 @@ def _run_app_startup(auth_settings: AuthSettings) -> None:
         ensure_defaults_and_hydrate()
 
         ProcessorSingleton.reset_instance()
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.error(f"Failed to initialize settings: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        app_logger.error(f"Failed to initialize settings: {exc}")
 
 
 def _hydrate_web_config() -> None:
@@ -480,11 +477,11 @@ def _start_scheduler_and_jobs(app: Flask) -> None:
     setup_scheduler(app)
 
     jobs_manager = get_jobs_manager()
-    clear_result = jobs_manager.clear_all_jobs()
+    clear_result = jobs_manager.clear_active_jobs()
     if clear_result["status"] == "success":
-        logger.info(f"Startup: {clear_result['message']}")
+        app_logger.info(f"Startup: {clear_result['message']}")
     else:
-        logger.warning(f"Startup job clearing failed: {clear_result['message']}")
+        app_logger.warning(f"Startup job clearing failed: {clear_result['message']}")
 
     add_background_job(
         10

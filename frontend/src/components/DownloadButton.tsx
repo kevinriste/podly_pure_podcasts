@@ -72,6 +72,7 @@ export default function DownloadButton({
         step: 0,
         step_name: 'Starting',
         total_steps: 4,
+        progress_percentage: 0,
         message: 'Requesting processing...'
       });
 
@@ -100,10 +101,10 @@ export default function DownloadButton({
   if (isCompleted && downloadUrl) {
     return (
       <div className={`${className}`}>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={handleDownloadClick}
-            className="px-3 py-1 text-xs rounded font-medium transition-colors bg-blue-600 text-white hover:bg-blue-700"
+            className="shrink-0 px-3 py-1 text-xs rounded font-medium transition-colors bg-blue-600 text-white hover:bg-blue-700"
             title="Download processed episode"
           >
             Download

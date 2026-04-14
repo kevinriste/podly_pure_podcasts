@@ -8,6 +8,7 @@ import PlayButton from './PlayButton';
 import ProcessingStatsButton from './ProcessingStatsButton';
 import EpisodeProcessingStatus from './EpisodeProcessingStatus';
 import FeedSettingsModal from './FeedSettingsModal';
+import FeedSubscribersModal from './FeedSubscribersModal';
 import { useAuth } from '../contexts/AuthContext';
 import { copyToClipboard } from '../utils/clipboard';
 import { emitDiagnosticError } from '../utils/diagnostics';
@@ -20,6 +21,36 @@ interface FeedDetailProps {
 }
 
 type SortOption = 'newest' | 'oldest' | 'title';
+type EpisodeDescriptionView = 'source' | 'podly';
+
+const EPISODE_DESCRIPTION_VIEW_STORAGE_KEY_PREFIX = 'podly:episode-description-view:feed:';
+
+function getEpisodeDescriptionViewStorageKey(feedId: number): string {
+  return `${EPISODE_DESCRIPTION_VIEW_STORAGE_KEY_PREFIX}${feedId}`;
+}
+
+function loadEpisodeDescriptionView(feedId: number): EpisodeDescriptionView {
+  if (typeof window === 'undefined') {
+    return 'source';
+  }
+  const rawValue = window.localStorage.getItem(
+    getEpisodeDescriptionViewStorageKey(feedId)
+  );
+  return rawValue === 'podly' ? 'podly' : 'source';
+}
+
+function persistEpisodeDescriptionView(
+  feedId: number,
+  view: EpisodeDescriptionView
+): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  window.localStorage.setItem(
+    getEpisodeDescriptionViewStorageKey(feedId),
+    view
+  );
+}
 
 interface ProcessingEstimate {
   post_guid: string;
@@ -48,6 +79,13 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
   const [estimateError, setEstimateError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [episodeDescriptionView, setEpisodeDescriptionView] =
+    useState<EpisodeDescriptionView>(() => loadEpisodeDescriptionView(feed.id));
+  const handleEpisodeDescriptionViewChange = (view: EpisodeDescriptionView) => {
+    setEpisodeDescriptionView(view);
+    persistEpisodeDescriptionView(currentFeed.id, view);
+  };
+  const [showSubscribersModal, setShowSubscribersModal] = useState(false);
 
   const isAdmin = !requireAuth || user?.role === 'admin';
   const whitelistedOnly = requireAuth && !isAdmin;
@@ -355,8 +393,12 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
   }, [feed]);
 
   useEffect(() => {
+    setEpisodeDescriptionView(loadEpisodeDescriptionView(currentFeed.id));
+  }, [currentFeed.id]);
+
+  useEffect(() => {
     setExpandedDescriptions(new Set());
-  }, [feed.id]);
+  }, [feed.id, episodeDescriptionView]);
 
   useEffect(() => {
     setPage(1);
@@ -575,7 +617,7 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
   };
 
   return (
-    <div className="h-full flex flex-col bg-white relative">
+    <div className="h-full flex flex-col bg-white relative dark:bg-slate-950/40">
       {/* Mobile Header */}
       <div className="flex items-center justify-between p-4 border-b lg:hidden">
         <h2 className="text-lg font-semibold text-gray-900">Podcast Details</h2>
@@ -592,7 +634,7 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
       </div>
 
       {/* Sticky Header - appears when scrolling */}
-      <div className={`absolute top-16 lg:top-0 left-0 right-0 z-10 bg-white border-b transition-all duration-300 ${
+      <div className={`absolute top-16 lg:top-0 left-0 right-0 z-10 bg-white border-b dark:bg-slate-950/95 dark:border-slate-700 transition-all duration-300 ${
         showStickyHeader ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-full pointer-events-none'
       }`}>
         <div className="p-4">
@@ -660,6 +702,13 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
                 </div>
                 {requireAuth && isAdmin && (
                   <div className="mt-2 flex items-center gap-2 flex-wrap text-sm">
+                    <button
+                      onClick={() => setShowSubscribersModal(true)}
+                      className="px-2 py-1 rounded-full text-xs font-medium border bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 transition-colors"
+                      title="View subscribers"
+                    >
+                      {currentFeed.member_count ?? 0} subscriber{(currentFeed.member_count ?? 0) !== 1 ? 's' : ''}
+                    </button>
                     <span
                       className={`px-2 py-1 rounded-full text-xs font-medium border ${
                         isMember
@@ -680,13 +729,13 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
             </div>
 
             {/* RSS Button and Menu */}
-            <div className="flex items-center gap-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
               {/* Podly RSS Subscribe Button */}
               {showPodlyRssButton && (
                 <button
                   onClick={handleCopyRssToClipboard}
                   title="Copy Podly RSS feed URL"
-                  className={`flex items-center gap-3 px-5 py-2 bg-black hover:bg-gray-900 text-white rounded-lg font-medium transition-colors ${
+                  className={`flex w-full items-center justify-center gap-3 rounded-lg bg-black px-4 py-3 text-center font-medium text-white transition-colors hover:bg-gray-900 sm:w-auto sm:justify-start sm:px-5 sm:py-2 ${
                     !canSubscribe ? 'opacity-60 cursor-not-allowed' : ''
                   }`}
                   disabled={!canSubscribe}
@@ -694,7 +743,7 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
                   <img
                     src="/rss-round-color-icon.svg"
                     alt="Podly RSS"
-                    className="w-6 h-6"
+                    className="h-6 w-6 shrink-0"
                     aria-hidden="true"
                   />
                   <span className="text-white">
@@ -703,72 +752,80 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
                 </button>
               )}
 
-              {requireAuth && isAdmin && !isMember && (
-                <button
-                  onClick={() => joinFeedMutation.mutate()}
-                  disabled={joinFeedMutation.isPending}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
-                    joinFeedMutation.isPending
-                      ? 'bg-blue-100 text-blue-300 cursor-not-allowed'
-                      : 'bg-blue-600 text-white hover:bg-blue-700'
-                  }`}
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                  </svg>
-                  Join feed
-                </button>
-              )}
+              <div className="flex w-full items-center gap-3 sm:w-auto sm:flex-1 sm:flex-wrap">
+                {requireAuth && isAdmin && !isMember && (
+                  <button
+                    onClick={() => joinFeedMutation.mutate()}
+                    disabled={joinFeedMutation.isPending}
+                    className={`flex h-11 flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2 font-medium whitespace-nowrap transition-colors sm:h-auto sm:flex-none ${
+                      joinFeedMutation.isPending
+                        ? 'bg-blue-100 text-blue-300 cursor-not-allowed'
+                        : 'bg-blue-600 text-white hover:bg-blue-700'
+                    }`}
+                  >
+                    <svg className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                    </svg>
+                    <span>Join feed</span>
+                  </button>
+                )}
 
-              {canModifyEpisodes && (
-                <button
-                  onClick={() => refreshFeedMutation.mutate()}
-                  disabled={refreshFeedMutation.isPending}
-                  title="Refresh feed from source"
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${
-                    refreshFeedMutation.isPending
-                      ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  <img
-                    className={`w-4 h-4 ${refreshFeedMutation.isPending ? 'animate-spin' : ''}`}
-                    src="/reload-icon.svg"
-                    alt="Refresh feed"
-                    aria-hidden="true"
-                  />
-                  <span>Refresh Feed</span>
-                </button>
-              )}
+                {canModifyEpisodes && (
+                  <button
+                    onClick={() => refreshFeedMutation.mutate()}
+                    disabled={refreshFeedMutation.isPending}
+                    title="Refresh feed from source"
+                    className={`flex h-11 flex-1 items-center justify-center gap-2 rounded-lg px-4 py-2 font-medium whitespace-nowrap transition-colors sm:h-auto sm:flex-none ${
+                      refreshFeedMutation.isPending
+                        ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    <svg
+                      className={`h-4 w-4 shrink-0 ${refreshFeedMutation.isPending ? 'animate-spin' : ''}`}
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                      <path d="M21 3v6h-6" />
+                    </svg>
+                    <span>Refresh Feed</span>
+                  </button>
+                )}
 
-              {/* Settings Button (cog) */}
-              {isAdmin && (
-                <button
-                  onClick={() => setShowSettingsModal(true)}
-                  title="Feed settings"
-                  className="w-10 h-10 rounded-lg bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-600 hover:text-gray-800 transition-colors"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                </button>
-              )}
+                {/* Settings Button (cog) */}
+                {isAdmin && (
+                  <button
+                    onClick={() => setShowSettingsModal(true)}
+                    title="Feed settings"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-600 transition-colors hover:bg-gray-200 hover:text-gray-800"
+                  >
+                    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                  </button>
+                )}
 
-              {/* Ellipsis Menu */}
-              <div className="relative menu-container">
-                <button
-                  onClick={() => setShowMenu(!showMenu)}
-                  className="w-10 h-10 rounded-lg bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-600 hover:text-gray-800 transition-colors"
-                >
-                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
-                  </svg>
-                </button>
+                {/* Ellipsis Menu */}
+                <div className="relative menu-container shrink-0">
+                  <button
+                    onClick={() => setShowMenu(!showMenu)}
+                    className="flex h-11 w-11 items-center justify-center rounded-lg bg-gray-100 text-gray-600 transition-colors hover:bg-gray-200 hover:text-gray-800"
+                  >
+                    <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
+                    </svg>
+                  </button>
 
-                {/* Dropdown Menu */}
-                {showMenu && (
-                  <div className="absolute top-full right-0 mt-1 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20 max-w-[calc(100vw-2rem)]">
+                  {/* Dropdown Menu */}
+                  {showMenu && (
+                    <div className="absolute top-full right-0 mt-1 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20 max-w-[calc(100vw-2rem)]">
                       {canBulkModifyEpisodes && (
                         <>
                           <button
@@ -863,8 +920,9 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
                         </button>
                       </>
                     )}
-                  </div>
-                )}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -991,10 +1049,18 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
                     </div>
 
                     {/* Episode Description */}
-                    {episode.description && (
+                    {(
+                      episodeDescriptionView === 'podly'
+                        ? (episode.podly_description_html || episode.description)
+                        : episode.description
+                    ) && (
                       <div className="text-left">
                         {(() => {
-                          const descriptionTokens = tokenizeDescription(episode.description);
+                          const descriptionHtml =
+                            episodeDescriptionView === 'podly'
+                              ? (episode.podly_description_html || episode.description)
+                              : episode.description;
+                          const descriptionTokens = tokenizeDescription(descriptionHtml);
                           const descriptionLength = descriptionTokens.reduce((total, token) => {
                             if (token.type === 'text') {
                               return total + token.value.length;
@@ -1100,16 +1166,15 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
 
                     {/* Bottom Controls - only show if episode is whitelisted */}
                     {episode.whitelisted && (
-                      <div className="flex items-center justify-between">
-                        {/* Left side: Download buttons */}
-                        <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2">
+                        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
                           <DownloadButton
                             episodeGuid={episode.guid}
                             isWhitelisted={episode.whitelisted}
                             hasProcessedAudio={episode.has_processed_audio}
                             feedId={currentFeed.id}
                             canModifyEpisodes={canModifyEpisodes}
-                            className="min-w-[100px]"
+                            className="min-w-[100px] shrink-0"
                           />
 
                           <EpisodeProcessingStatus
@@ -1122,18 +1187,16 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
                           <ProcessingStatsButton
                             episodeGuid={episode.guid}
                             hasProcessedAudio={episode.has_processed_audio}
+                            adDetectionStrategy={currentFeed.ad_detection_strategy}
                           />
                         </div>
 
-                        {/* Right side: Play button */}
-                        <div className="flex-shrink-0 w-12 flex justify-end">
-                          {episode.has_processed_audio && (
-                            <PlayButton
-                              episode={episode}
-                              className="ml-2"
-                            />
-                          )}
-                        </div>
+                        {episode.has_processed_audio && (
+                          <PlayButton
+                            episode={episode}
+                            className="ml-auto shrink-0"
+                          />
+                        )}
                       </div>
                     )}
                   </div>
@@ -1236,7 +1299,20 @@ export default function FeedDetail({ feed, onClose, onFeedDeleted }: FeedDetailP
         isOpen={showSettingsModal}
         onClose={() => setShowSettingsModal(false)}
         autoWhitelistGlobalDefault={appAutoWhitelistDefault}
+        llmChapterFallbackGlobalDefault={
+          configResponse?.config?.llm?.enable_llm_chapter_fallback_tagging
+        }
+        episodeDescriptionView={episodeDescriptionView}
+        onEpisodeDescriptionViewChange={handleEpisodeDescriptionViewChange}
       />
+
+      {showSubscribersModal && (
+        <FeedSubscribersModal
+          feedId={currentFeed.id}
+          feedTitle={currentFeed.title}
+          onClose={() => setShowSubscribersModal(false)}
+        />
+      )}
     </div>
   );
 }

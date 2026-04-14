@@ -1,11 +1,10 @@
+import datetime
 import logging
 import secrets
 from pathlib import Path
 from threading import Thread
-from typing import Any, Optional, cast
-
-# pylint: disable=chained-comparison
-from urllib.parse import urlencode, urlparse, urlunparse
+from typing import Any, cast
+from urllib.parse import urlencode
 
 import requests
 import validators
@@ -29,6 +28,7 @@ from app.auth.guards import require_admin
 from app.auth.service import update_user_last_active
 from app.extensions import db
 from app.feeds import (
+    _get_base_url,
     add_or_refresh_feed,
     generate_aggregate_feed_xml,
     generate_feed_xml,
@@ -58,6 +58,113 @@ logger = logging.getLogger("global_logger")
 
 
 feed_bp = Blueprint("feed", __name__)
+_MISSING = object()
+
+
+def _parse_optional_feed_bool(
+    payload: dict[str, Any],
+    field_name: str,
+) -> tuple[object, ResponseReturnValue | None]:
+    if field_name not in payload:
+        return _MISSING, None
+
+    value = payload[field_name]
+    if value is not None and not isinstance(value, bool):
+        return (
+            _MISSING,
+            (
+                jsonify({"error": f"{field_name} must be a boolean or null."}),
+                400,
+            ),
+        )
+    return value, None
+
+
+def _build_feed_settings_updates(
+    feed: Feed,
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any] | None, ResponseReturnValue | None]:
+    updates: dict[str, Any] = {}
+
+    if "ad_detection_strategy" in payload:
+        strategy = payload["ad_detection_strategy"]
+        if strategy not in ("llm", "chapter", "chapter_insert"):
+            return (
+                None,
+                (
+                    jsonify(
+                        {
+                            "error": (
+                                "Invalid ad_detection_strategy. Must be "
+                                "'llm', 'chapter', or 'chapter_insert'"
+                            )
+                        }
+                    ),
+                    400,
+                ),
+            )
+        updates["ad_detection_strategy"] = strategy
+
+    if "chapter_filter_strings" in payload:
+        filter_strings = payload["chapter_filter_strings"]
+        if filter_strings is not None and not isinstance(filter_strings, str):
+            return (
+                None,
+                (
+                    jsonify(
+                        {"error": "chapter_filter_strings must be a string or null"}
+                    ),
+                    400,
+                ),
+            )
+        updates["chapter_filter_strings"] = filter_strings
+
+    chapter_fallback_enabled, error_response = _parse_optional_feed_bool(
+        payload,
+        "enable_llm_chapter_fallback_tagging",
+    )
+    if error_response is not None:
+        return None, error_response
+    if chapter_fallback_enabled is not _MISSING:
+        updates["enable_llm_chapter_fallback_tagging"] = chapter_fallback_enabled
+
+    auto_whitelist_override, error_response = _parse_optional_feed_bool(
+        payload,
+        "auto_whitelist_new_episodes_override",
+    )
+    if error_response is not None:
+        return None, error_response
+    if auto_whitelist_override is not _MISSING:
+        updates["auto_whitelist_new_episodes_override"] = auto_whitelist_override
+
+    resolved_strategy = updates.get(
+        "ad_detection_strategy",
+        getattr(feed, "ad_detection_strategy", "llm"),
+    )
+    if (
+        resolved_strategy == "chapter_insert"
+        and chapter_fallback_enabled is not _MISSING
+        and chapter_fallback_enabled is False
+    ):
+        return (
+            None,
+            (
+                jsonify(
+                    {
+                        "error": (
+                            "enable_llm_chapter_fallback_tagging cannot be false "
+                            "when ad_detection_strategy is 'chapter_insert'"
+                        )
+                    }
+                ),
+                400,
+            ),
+        )
+
+    if not updates:
+        return None, (jsonify({"error": "No settings provided."}), 400)
+
+    return updates, None
 
 
 @feed_bp.route("/feed", methods=["POST"])
@@ -104,7 +211,7 @@ def add_feed() -> ResponseReturnValue:
             name="enqueue-jobs-after-add",
         ).start()
         return redirect(url_for("main.index"))
-    except Exception as e:  # pylint: disable=broad-except
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Error adding feed: {e}")
         return make_response((f"Error adding feed: {e}", 500))
 
@@ -134,12 +241,10 @@ def create_feed_share_link(feed_id: int) -> ResponseReturnValue:
     token_id = str(result.data["token_id"])
     secret = str(result.data["secret"])
 
-    parsed = urlparse(request.host_url)
-    netloc = parsed.netloc
-    scheme = parsed.scheme
+    base_url = _get_base_url()
     path = f"/feed/{feed.id}"
     query = urlencode({"feed_token": token_id, "feed_secret": secret})
-    prefilled_url = urlunparse((scheme, netloc, path, "", query, ""))
+    prefilled_url = f"{base_url}{path}?{query}"
 
     return (
         jsonify(
@@ -256,7 +361,7 @@ def get_feed(f_id: int) -> Response:
 
 
 @feed_bp.route("/feed/<int:f_id>", methods=["DELETE"])
-def delete_feed(f_id: int) -> ResponseReturnValue:  # pylint: disable=too-many-branches
+def delete_feed(f_id: int) -> ResponseReturnValue:
     user, error = _require_user_or_error(allow_missing_auth=True)
     if error:
         return error
@@ -277,7 +382,7 @@ def delete_feed(f_id: int) -> ResponseReturnValue:  # pylint: disable=too-many-b
             try:
                 Path(post.unprocessed_audio_path).unlink()
                 logger.info(f"Deleted unprocessed audio: {post.unprocessed_audio_path}")
-            except Exception as e:  # pylint: disable=broad-except
+            except Exception as e:  # noqa: BLE001
                 logger.error(
                     f"Error deleting unprocessed audio {post.unprocessed_audio_path}: {e}"
                 )
@@ -286,7 +391,7 @@ def delete_feed(f_id: int) -> ResponseReturnValue:  # pylint: disable=too-many-b
             try:
                 Path(post.processed_audio_path).unlink()
                 logger.info(f"Deleted processed audio: {post.processed_audio_path}")
-            except Exception as e:  # pylint: disable=broad-except
+            except Exception as e:  # noqa: BLE001
                 logger.error(
                     f"Error deleting processed audio {post.processed_audio_path}: {e}"
                 )
@@ -300,7 +405,7 @@ def delete_feed(f_id: int) -> ResponseReturnValue:  # pylint: disable=too-many-b
         )
         if not result or not result.success:
             raise RuntimeError(getattr(result, "error", "Failed to delete feed"))
-    except Exception as e:  # pylint: disable=broad-except
+    except Exception as e:  # noqa: BLE001
         logger.error("Failed to delete feed %s: %s", feed.id, e)
         return make_response(("Failed to delete feed", 500))
 
@@ -346,37 +451,59 @@ def update_feed_settings_endpoint(feed_id: int) -> ResponseReturnValue:
     if error_response is not None:
         return error_response
 
+    feed = Feed.query.get_or_404(feed_id)
     payload = request.get_json(silent=True) or {}
-    if "auto_whitelist_new_episodes_override" not in payload:
+    updates, error_response = _build_feed_settings_updates(feed, payload)
+    if error_response is not None:
+        return error_response
+    if updates is None:
         return jsonify({"error": "No settings provided."}), 400
 
-    override = payload.get("auto_whitelist_new_episodes_override")
-    if override is not None and not isinstance(override, bool):
-        return (
-            jsonify(
-                {
-                    "error": "auto_whitelist_new_episodes_override must be a boolean or null."
-                }
-            ),
-            400,
-        )
-
-    result = writer_client.action(
-        "update_feed_settings",
-        {"feed_id": feed_id, "auto_whitelist_new_episodes_override": override},
-        wait=True,
-    )
+    result = writer_client.update("Feed", feed_id, updates, wait=True)
     if result is None or not result.success:
         return (
             jsonify({"error": getattr(result, "error", "Failed to update feed")}),
             500,
         )
 
+    # The writer may commit in a separate process/session; expire local state so the
+    # response reflects the newly persisted values instead of any cached identity-map
+    # object loaded earlier in this request.
+    db.session.expire_all()
     feed = db.session.get(Feed, feed_id)
     if feed is None:
         return jsonify({"error": "Feed not found"}), 404
 
     return jsonify(_serialize_feed(feed, current_user=getattr(g, "current_user", None)))
+
+
+@feed_bp.route("/api/feeds/<int:feed_id>/subscribers", methods=["GET"])
+def get_feed_subscribers(feed_id: int) -> ResponseReturnValue:
+    """Return subscriber list for a feed (admin only)."""
+    _, error_response = require_admin("view feed subscribers")
+    if error_response is not None:
+        return error_response
+
+    feed = db.session.get(Feed, feed_id)
+    if feed is None:
+        return jsonify({"error": "Feed not found"}), 404
+
+    subscribers = []
+    for uf in cast(list[UserFeed], feed.user_feeds):
+        u = uf.user
+        if u is None:
+            continue
+        subscribers.append(
+            {
+                "user_id": u.id,
+                "username": u.username,
+                "role": u.role,
+                "subscription_status": u.feed_subscription_status,
+                "joined_at": uf.created_at.isoformat() if uf.created_at else None,
+            }
+        )
+
+    return jsonify({"feed_id": feed_id, "subscribers": subscribers})
 
 
 def _refresh_feed_background(app: Flask, feed_id: int) -> None:
@@ -391,7 +518,7 @@ def _refresh_feed_background(app: Flask, feed_id: int) -> None:
             get_jobs_manager().enqueue_pending_jobs(
                 trigger="feed_refresh", context={"feed_id": feed_id}
             )
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:  # noqa: BLE001
             logger.error("Failed to refresh feed %s asynchronously: %s", feed_id, exc)
 
 
@@ -399,7 +526,7 @@ def _enqueue_pending_jobs_async(app: Flask) -> None:
     with app.app_context():
         try:
             get_jobs_manager().enqueue_pending_jobs(trigger="feed_refresh")
-        except Exception as exc:  # pylint: disable=broad-except
+        except Exception as exc:  # noqa: BLE001
             logger.error("Failed to enqueue pending jobs asynchronously: %s", exc)
 
 
@@ -427,7 +554,7 @@ def get_feed_by_alt_or_url(something_or_rss: str) -> Response:
         # Use Flask's safe helper to prevent directory traversal outside static_folder
         try:
             return send_from_directory(current_app.static_folder, something_or_rss)
-        except Exception:
+        except Exception:  # noqa: BLE001
             # Not a valid static file; fall through to RSS/DB lookup
             pass
     feed = Feed.query.filter_by(rss_url=something_or_rss).first()
@@ -620,42 +747,9 @@ def get_aggregate_feed_redirect() -> ResponseReturnValue:
 def create_aggregate_feed_link() -> ResponseReturnValue:
     """Generate a unique RSS link for the current user's aggregate feed."""
     settings = current_app.config.get("AUTH_SETTINGS")
-
-    user = None
-    if not settings or not settings.require_auth:
-        # Auth disabled: Use admin user or first available user
-        user = User.query.filter_by(role="admin").first()
-        if not user:
-            user = User.query.first()
-
-        if not user:
-            # Create a default admin user if none exists
-            default_username = "admin"
-            default_password = secrets.token_urlsafe(16)
-
-            result = writer_client.action(
-                "create_user",
-                {
-                    "username": default_username,
-                    "password": default_password,
-                    "role": "admin",
-                },
-                wait=True,
-            )
-            if result and result.success and isinstance(result.data, dict):
-                user_id = result.data.get("user_id")
-                if user_id:
-                    user = db.session.get(User, user_id)
-
-            if not user:
-                return (
-                    jsonify({"error": "No user found and failed to create one."}),
-                    500,
-                )
-    else:
-        user, error = _require_user_or_error()
-        if error:
-            return error
+    user, error = _resolve_aggregate_link_user_or_error(settings)
+    if error:
+        return error
 
     if user is None:
         return jsonify({"error": "Authentication required."}), 401
@@ -672,9 +766,7 @@ def create_aggregate_feed_link() -> ResponseReturnValue:
     token_id = str(result.data["token_id"])
     secret = str(result.data["secret"])
 
-    parsed = urlparse(request.host_url)
-    netloc = parsed.netloc
-    scheme = parsed.scheme
+    base_url = _get_base_url()
     path = f"/feed/user/{user.id}"
 
     # If auth is disabled, we don't strictly need the token params,
@@ -686,7 +778,9 @@ def create_aggregate_feed_link() -> ResponseReturnValue:
     else:
         query = ""
 
-    full_url = urlunparse((scheme, netloc, path, "", query, ""))
+    full_url = f"{base_url}{path}"
+    if query:
+        full_url = f"{full_url}?{query}"
 
     return (
         jsonify(
@@ -698,6 +792,44 @@ def create_aggregate_feed_link() -> ResponseReturnValue:
         ),
         201,
     )
+
+
+def _resolve_aggregate_link_user_or_error(
+    settings: Any,
+) -> tuple[User | None, ResponseReturnValue | None]:
+    if settings and settings.require_auth:
+        return _require_user_or_error()
+    return _get_or_create_default_aggregate_user()
+
+
+def _get_or_create_default_aggregate_user() -> tuple[
+    User | None, ResponseReturnValue | None
+]:
+    user = User.query.filter_by(role="admin").first() or User.query.first()
+    if user is not None:
+        return user, None
+
+    result = writer_client.action(
+        "create_user",
+        {
+            "username": "admin",
+            "password": secrets.token_urlsafe(16),
+            "role": "admin",
+        },
+        wait=True,
+    )
+    if result and result.success and isinstance(result.data, dict):
+        user_id = result.data.get("user_id")
+        if user_id:
+            user = db.session.get(User, user_id)
+
+    if user is None:
+        return None, (
+            jsonify({"error": "No user found and failed to create one."}),
+            500,
+        )
+
+    return user, None
 
 
 def _require_user_or_error(
@@ -720,71 +852,32 @@ def _require_user_or_error(
     return user, None
 
 
-@feed_bp.route("/api/feeds/<int:feed_id>/settings", methods=["PATCH"])
-def update_feed_settings(feed_id: int) -> ResponseReturnValue:
-    """Update feed settings (ad detection strategy, chapter filter strings)."""
-    user, error = _require_user_or_error(allow_missing_auth=True)
-    if error:
-        return error
+def _latest_episode_release_date(feed: Feed) -> str | None:
+    latest_release_date: datetime.datetime | None = None
 
-    # Only admins can change feed settings
-    if user is not None and user.role != "admin":
-        return jsonify({"error": "Only administrators can modify feed settings."}), 403
+    for post in cast(list[Any], getattr(feed, "posts", [])):
+        release_date = getattr(post, "release_date", None)
+        if release_date is None:
+            continue
 
-    feed = Feed.query.get_or_404(feed_id)
-
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "No data provided"}), 400
-
-    updates = {}
-
-    # Validate and extract ad_detection_strategy
-    if "ad_detection_strategy" in data:
-        strategy = data["ad_detection_strategy"]
-        if strategy not in ("llm", "chapter"):
-            return (
-                jsonify(
-                    {
-                        "error": "Invalid ad_detection_strategy. Must be 'llm' or 'chapter'"
-                    }
-                ),
-                400,
+        normalized_release_date = release_date
+        if normalized_release_date.tzinfo is None:
+            normalized_release_date = normalized_release_date.replace(
+                tzinfo=datetime.UTC
             )
-        updates["ad_detection_strategy"] = strategy
+        else:
+            normalized_release_date = normalized_release_date.astimezone(datetime.UTC)
 
-    # Validate and extract chapter_filter_strings
-    if "chapter_filter_strings" in data:
-        filter_strings = data["chapter_filter_strings"]
-        if filter_strings is not None and not isinstance(filter_strings, str):
-            return (
-                jsonify({"error": "chapter_filter_strings must be a string or null"}),
-                400,
-            )
-        updates["chapter_filter_strings"] = filter_strings
+        if latest_release_date is None or normalized_release_date > latest_release_date:
+            latest_release_date = normalized_release_date
 
-    if not updates:
-        return jsonify({"error": "No valid fields to update"}), 400
-
-    result = writer_client.update("Feed", feed.id, updates, wait=True)
-    if not result or not result.success:
-        return (
-            jsonify(
-                {"error": getattr(result, "error", "Failed to update feed settings")}
-            ),
-            500,
-        )
-
-    # Refresh and return updated feed
-    refreshed = Feed.query.get(feed_id)
-    current_user = getattr(g, "current_user", None)
-    return jsonify(_serialize_feed(refreshed or feed, current_user=current_user)), 200
+    return latest_release_date.isoformat() if latest_release_date else None
 
 
 def _serialize_feed(
     feed: Feed,
     *,
-    current_user: Optional[User] = None,
+    current_user: User | None = None,
 ) -> dict[str, Any]:
     auth_enabled = is_auth_enabled()
     member_ids = [membership.user_id for membership in getattr(feed, "user_feeds", [])]
@@ -815,11 +908,15 @@ def _serialize_feed(
         "auto_whitelist_new_episodes_override": getattr(
             feed, "auto_whitelist_new_episodes_override", None
         ),
-        "posts_count": len(feed.posts),
+        "posts_count": len(cast(list[Any], feed.posts)),
+        "latest_episode_release_date": _latest_episode_release_date(feed),
         "member_count": len(member_ids),
         "is_member": is_member,
         "is_active_subscription": is_active_subscription,
         "ad_detection_strategy": getattr(feed, "ad_detection_strategy", "llm"),
         "chapter_filter_strings": getattr(feed, "chapter_filter_strings", None),
+        "enable_llm_chapter_fallback_tagging": getattr(
+            feed, "enable_llm_chapter_fallback_tagging", None
+        ),
     }
     return feed_payload

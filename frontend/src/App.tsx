@@ -15,6 +15,8 @@ import AudioPlayer from './components/AudioPlayer';
 import { billingApi } from './services/api';
 import { DiagnosticsProvider, useDiagnostics } from './contexts/DiagnosticsContext';
 import DiagnosticsModal from './components/DiagnosticsModal';
+import ThemeToggle from './components/ThemeToggle';
+import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import './App.css';
 
 const queryClient = new QueryClient({
@@ -32,6 +34,7 @@ const queryClient = new QueryClient({
 function AppShell() {
   const { status, requireAuth, isAuthenticated, user, logout, landingPageEnabled } = useAuth();
   const { open: openDiagnostics } = useDiagnostics();
+  const { isDark } = useTheme();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const mobileMenuRef = useRef<HTMLDivElement>(null);
   const location = useLocation();
@@ -62,7 +65,7 @@ function AppShell() {
 
   if (status === 'loading') {
     return (
-      <div className="h-screen flex items-center justify-center bg-gray-50">
+      <div className="h-dvh flex items-center justify-center bg-gray-50">
         <div className="flex flex-col items-center gap-4">
           <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600" />
           <p className="text-sm text-gray-600">Loading authentication…</p>
@@ -95,7 +98,7 @@ function AppShell() {
   const showBillingLink = requireAuth && !isAdmin;
 
   return (
-    <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
+    <div className="h-dvh bg-gray-50 flex flex-col overflow-hidden">
       <header className="bg-white shadow-sm border-b flex-shrink-0">
         <div className="px-2 sm:px-4 lg:px-6">
           <div className="flex items-center justify-between h-12">
@@ -139,6 +142,7 @@ function AppShell() {
               >
                 Report issue
               </button>
+              <ThemeToggle />
               {requireAuth && user && (
                 <div className="flex items-center gap-3 text-sm text-gray-600 flex-shrink-0">
                   {billingSummary && !isAdmin && (
@@ -186,6 +190,8 @@ function AppShell() {
                   </Link>
                 </>
               )}
+
+              <ThemeToggle />
 
               {/* Hamburger Button */}
               <div className="relative" ref={mobileMenuRef}>
@@ -286,7 +292,23 @@ function AppShell() {
 
       <AudioPlayer />
       <DiagnosticsModal />
-      <Toaster position="top-center" toastOptions={{ duration: 3000 }} />
+      <Toaster
+        position="top-center"
+        toastOptions={{
+          duration: 3000,
+          style: isDark
+            ? {
+                background: '#0f172a',
+                color: '#e2e8f0',
+                border: '1px solid #334155',
+              }
+            : {
+                background: '#ffffff',
+                color: '#111827',
+                border: '1px solid #e5e7eb',
+              },
+        }}
+      />
     </div>
   );
 }
@@ -294,15 +316,17 @@ function AppShell() {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <AudioPlayerProvider>
-          <DiagnosticsProvider>
-            <Router>
-              <AppShell />
-            </Router>
-          </DiagnosticsProvider>
-        </AudioPlayerProvider>
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <AudioPlayerProvider>
+            <DiagnosticsProvider>
+              <Router>
+                <AppShell />
+              </Router>
+            </DiagnosticsProvider>
+          </AudioPlayerProvider>
+        </AuthProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }

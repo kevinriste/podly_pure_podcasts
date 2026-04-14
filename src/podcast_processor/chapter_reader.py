@@ -2,9 +2,8 @@
 
 import logging
 from dataclasses import dataclass
-from typing import List
 
-from mutagen.id3 import CHAP, ID3  # type: ignore[attr-defined]
+from mutagen.id3 import CHAP, ID3
 from mutagen.mp3 import MP3
 
 logger = logging.getLogger("global_logger")
@@ -20,7 +19,7 @@ class Chapter:
     end_time_ms: int
 
 
-def read_chapters(audio_path: str) -> List[Chapter]:
+def read_chapters(audio_path: str) -> list[Chapter]:
     """
     Read ID3 CHAP frames from an MP3 file.
 
@@ -31,7 +30,7 @@ def read_chapters(audio_path: str) -> List[Chapter]:
         List of Chapter objects, sorted by start time.
         Returns empty list if no chapters found or file has no ID3 tags.
     """
-    chapters: List[Chapter] = []
+    chapters: list[Chapter] = []
 
     try:
         audio = MP3(audio_path, ID3=ID3)
@@ -43,14 +42,14 @@ def read_chapters(audio_path: str) -> List[Chapter]:
             if not isinstance(frame, CHAP):
                 continue
 
-            element_id = frame.element_id  # type: ignore[attr-defined]
-            start_time_ms = frame.start_time  # type: ignore[attr-defined]
-            end_time_ms = frame.end_time  # type: ignore[attr-defined]
+            element_id = frame.element_id
+            start_time_ms = frame.start_time
+            end_time_ms = frame.end_time
 
             # Extract title from sub-frames (TIT2)
             title = ""
-            if frame.sub_frames:  # type: ignore[attr-defined]
-                for sub_frame in frame.sub_frames.values():  # type: ignore[attr-defined]
+            if frame.sub_frames:
+                for sub_frame in frame.sub_frames.values():
                     if sub_frame.FrameID == "TIT2":
                         title = str(sub_frame.text[0]) if sub_frame.text else ""
                         break
@@ -79,7 +78,7 @@ def read_chapters(audio_path: str) -> List[Chapter]:
                 chapter.end_time_ms,
             )
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning("Failed to read chapters from %s: %s", audio_path, e)
         return []
 

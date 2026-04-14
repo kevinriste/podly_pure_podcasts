@@ -56,14 +56,34 @@ def api_cancel_job(job_id: str) -> ResponseReturnValue:
         db.session.expire_all()
 
         return flask.jsonify(result), status_code
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Failed to cancel job {job_id}: {e}")
         return (
             flask.jsonify(
                 {
                     "status": "error",
                     "error_code": "CANCEL_FAILED",
-                    "message": f"Failed to cancel job: {str(e)}",
+                    "message": f"Failed to cancel job: {e!s}",
+                }
+            ),
+            500,
+        )
+
+
+@jobs_bp.route("/api/jobs/cancel-queued", methods=["POST"])
+def api_cancel_queued_jobs() -> ResponseReturnValue:
+    try:
+        result = get_jobs_manager().cancel_queued_jobs()
+        db.session.expire_all()
+        return flask.jsonify(result), 200
+    except Exception as e:  # noqa: BLE001
+        logger.error("Failed to cancel queued jobs: %s", e)
+        return (
+            flask.jsonify(
+                {
+                    "status": "error",
+                    "error_code": "CANCEL_QUEUED_FAILED",
+                    "message": f"Failed to cancel queued jobs: {e!s}",
                 }
             ),
             500,
@@ -122,7 +142,7 @@ def api_run_cleanup() -> ResponseReturnValue:
     try:
         removed = cleanup_processed_posts(retention)
         remaining, cutoff = count_cleanup_candidates(retention)
-    except Exception as exc:  # pylint: disable=broad-except
+    except Exception as exc:
         logger.error("Manual cleanup failed: %s", exc, exc_info=True)
         return (
             flask.jsonify(

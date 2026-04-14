@@ -1,7 +1,6 @@
 .worktrees/*
 railway_scripts/
 
-.mypy_cache/
 __pycache__/
 *.py[cod]
 *$py.class
@@ -65,6 +64,12 @@ CLAUDE_NOTES.md
 
 # Railway command script with credentials
 scripts/railway_command.sh
+
+# Virtual environment (uv creates .venv/ by default)
+.venv/
+
+# Linter / type checker caches
+.ruff_cache/
 
 # Claude local files
 .claude/

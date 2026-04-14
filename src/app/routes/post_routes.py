@@ -3,7 +3,7 @@ import logging
 import math
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import flask
 from flask import Blueprint, g, jsonify, request, send_file
@@ -12,7 +12,9 @@ from flask.typing import ResponseReturnValue
 from app.auth.guards import require_admin
 from app.auth.service import update_user_last_active
 from app.extensions import db
+from app.feeds import build_post_feed_description_html
 from app.jobs_manager import get_jobs_manager
+from app.model_call_utils import whisper_model_call_filter
 from app.models import (
     Feed,
     Identification,
@@ -20,7 +22,10 @@ from app.models import (
     Post,
     TranscriptSegment,
 )
-from app.posts import clear_post_processing_data
+from app.posts import (
+    clear_post_processing_data,
+    clear_post_processing_data_keep_transcript,
+)
 from app.routes.post_stats_utils import (
     count_model_calls,
     count_primary_labels,
@@ -34,14 +39,72 @@ from app.routes.post_utils import (
     increment_download_count,
     missing_processed_audio_response,
 )
+from app.runtime_config import config as runtime_config
 from app.writer.client import writer_client
 from podcast_processor.chapter_filter import parse_filter_strings
+from podcast_processor.transcription_manager import TranscriptionManager
 from shared import defaults as DEFAULTS
+from shared.processing_paths import (
+    get_in_root,
+    get_processed_audio_path_candidates,
+    get_srv_root,
+)
 
 logger = logging.getLogger("global_logger")
 
 
 post_bp = Blueprint("post", __name__)
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _build_file_debug(path_value: str | None) -> dict[str, Any]:
+    info: dict[str, Any] = {
+        "path": path_value,
+        "absolute_path": None,
+        "exists": False,
+        "is_file": False,
+        "size_bytes": None,
+    }
+    if not path_value:
+        return info
+
+    path_obj = Path(path_value)
+    try:
+        info["absolute_path"] = str(path_obj.resolve())
+        exists = path_obj.exists()
+        is_file = path_obj.is_file()
+        info["exists"] = exists
+        info["is_file"] = is_file
+        if exists and is_file:
+            info["size_bytes"] = path_obj.stat().st_size
+    except OSError as exc:
+        info["error"] = str(exc)
+    return info
+
+
+def _build_candidate_file_debug(candidates: list[Path]) -> list[dict[str, Any]]:
+    candidate_details: list[dict[str, Any]] = []
+    for candidate in candidates:
+        detail = {
+            "path": str(candidate),
+            "exists": False,
+            "size_bytes": None,
+        }
+        try:
+            exists = candidate.exists() and candidate.is_file()
+            detail["exists"] = exists
+            if exists:
+                detail["size_bytes"] = candidate.stat().st_size
+        except OSError as exc:
+            detail["error"] = str(exc)
+        candidate_details.append(detail)
+    return candidate_details
 
 
 @post_bp.route("/api/feeds/<int:feed_id>/posts", methods=["GET"])
@@ -93,6 +156,7 @@ def api_feed_posts(feed_id: int) -> flask.Response:
             "guid": post.guid,
             "title": post.title,
             "description": post.description,
+            "podly_description_html": build_post_feed_description_html(post),
             "release_date": (
                 post.release_date.isoformat() if post.release_date else None
             ),
@@ -175,9 +239,7 @@ def get_post_json(p_guid: str) -> flask.Response:
             )
 
     whisper_model_calls = []
-    for model_call in post.model_calls.filter(
-        ModelCall.model_name.like("%whisper%")
-    ).all():
+    for model_call in post.model_calls.filter(whisper_model_call_filter()).all():
         whisper_model_calls.append(
             {
                 "id": model_call.id,
@@ -270,7 +332,7 @@ def post_debug(p_guid: str) -> flask.Response:
     )
 
 
-def _get_chapter_stats(post: Post, feed: Feed) -> Dict[str, Any]:
+def _get_chapter_stats(post: Post, feed: Feed) -> dict[str, Any]:
     """Get chapter statistics for chapter-based processing."""
 
     # Try to read stored chapter data first (set during processing)
@@ -283,6 +345,12 @@ def _get_chapter_stats(post: Post, feed: Feed) -> Dict[str, Any]:
             chapters_removed = [
                 {**ch, "label": "ad"} for ch in data.get("chapters_removed", [])
             ]
+            if not chapters_kept and not chapters_removed:
+                chapters_for_output = data.get("chapters_for_output", [])
+                if isinstance(chapters_for_output, list):
+                    chapters_kept = [
+                        {**ch, "label": "content"} for ch in chapters_for_output
+                    ]
             # Sort by original start time to maintain order from the file
             all_chapters = sorted(
                 chapters_kept + chapters_removed, key=lambda c: c["start_time"]
@@ -349,8 +417,8 @@ def api_post_stats(p_guid: str) -> flask.Response:
         .all()
     )
 
-    model_call_statuses: Dict[str, int] = {}
-    model_types: Dict[str, int] = {}
+    model_call_statuses: dict[str, int] = {}
+    model_types: dict[str, int] = {}
 
     for call in model_calls:
         if call.status not in model_call_statuses:
@@ -392,8 +460,8 @@ def api_post_stats(p_guid: str) -> flask.Response:
         )
 
     transcript_segments_data = []
-    segment_mixed_by_id: Dict[int, bool] = {}
-    ad_windows_from_segments: List[Tuple[float, float]] = []
+    segment_mixed_by_id: dict[int, bool] = {}
+    ad_windows_from_segments: list[tuple[float, float]] = []
     for segment in transcript_segments:
         segment_identifications = identifications_by_segment.get(segment.id, [])
 
@@ -456,7 +524,11 @@ def api_post_stats(p_guid: str) -> flask.Response:
 
     # Build chapter data for chapter-based processing
     chapters_data = None
-    if ad_detection_strategy == "chapter" and post.processed_audio_path and feed:
+    if (
+        ad_detection_strategy in ("chapter", "chapter_insert")
+        and post.processed_audio_path
+        and feed
+    ):
         chapters_data = _get_chapter_stats(post, feed)
 
     # Calculate ad blocks and statistics for LLM-based processing
@@ -464,12 +536,18 @@ def api_post_stats(p_guid: str) -> flask.Response:
     ad_blocks = merge_time_windows(ad_windows_source, gap_seconds=1.0)
     ad_time_seconds = sum(end - start for start, end in ad_blocks if end > start)
 
-    duration_seconds = float(post.duration or 0)
-    if duration_seconds <= 0 and transcript_segments:
-        duration_seconds = max(float(seg.end_time) for seg in transcript_segments)
+    cut_duration_seconds = float(post.duration or 0)
+    if cut_duration_seconds <= 0 and transcript_segments:
+        cut_duration_seconds = max(float(seg.end_time) for seg in transcript_segments)
+
+    # post.duration is the cut (ad-removed) audio length; reconstruct original by adding
+    # back the removed ad time so the percentage uses the correct denominator.
+    original_duration_seconds = cut_duration_seconds + ad_time_seconds
 
     ad_percentage = (
-        (ad_time_seconds / duration_seconds) * 100 if duration_seconds > 0 else 0.0
+        (ad_time_seconds / original_duration_seconds) * 100
+        if original_duration_seconds > 0
+        else 0.0
     )
 
     stats_data = {
@@ -493,6 +571,7 @@ def api_post_stats(p_guid: str) -> flask.Response:
             "ad_segments_count": ad_segments,
             "ad_percentage": round(ad_percentage, 1),
             "estimated_ad_time_seconds": round(ad_time_seconds, 1),
+            "original_duration_seconds": round(original_duration_seconds, 1),
             "ad_blocks": [
                 {
                     "start_time": round(start, 1),
@@ -508,6 +587,35 @@ def api_post_stats(p_guid: str) -> flask.Response:
         "identifications": identifications_data,
         "chapters": chapters_data,
     }
+
+    if _env_bool("PODLY_STATS_DEBUG", default=False):
+        candidates = get_processed_audio_path_candidates(
+            processed_audio_path=post.processed_audio_path,
+            unprocessed_audio_path=post.unprocessed_audio_path,
+            feed_title=feed.title if feed else None,
+            post_title=post.title,
+        )
+        stats_data["debug_info"] = {
+            "post_id": post.id,
+            "feed_id": post.feed_id,
+            "guid": post.guid,
+            "download_url": post.download_url,
+            "download_count": post.download_count,
+            "has_processed_audio": post.processed_audio_path is not None,
+            "has_unprocessed_audio": post.unprocessed_audio_path is not None,
+            "processed_audio": _build_file_debug(post.processed_audio_path),
+            "unprocessed_audio": _build_file_debug(post.unprocessed_audio_path),
+            "processed_audio_path_candidates": _build_candidate_file_debug(candidates),
+            "processing_roots": {
+                "in_root": str(get_in_root()),
+                "srv_root": str(get_srv_root()),
+            },
+            "record_counts": {
+                "transcript_segments": len(transcript_segments),
+                "model_calls": len(model_calls),
+                "identifications": len(identifications),
+            },
+        }
 
     return flask.jsonify(stats_data)
 
@@ -549,7 +657,7 @@ def api_toggle_whitelist(p_guid: str) -> ResponseReturnValue:
         )
         # Refresh post object
         db.session.expire(post)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Failed to toggle whitelist: {e}")
         return (
             flask.jsonify(
@@ -560,7 +668,7 @@ def api_toggle_whitelist(p_guid: str) -> ResponseReturnValue:
             500,
         )
 
-    response_body: Dict[str, Any] = {
+    response_body: dict[str, Any] = {
         "guid": post.guid,
         "whitelisted": post.whitelisted,
         "message": "Whitelist status updated successfully",
@@ -613,7 +721,7 @@ def api_toggle_whitelist_all(feed_id: int) -> ResponseReturnValue:
         if not result or not result.success:
             raise RuntimeError(getattr(result, "error", "Unknown writer error"))
         updated = int((result.data or {}).get("updated_count") or 0)
-    except Exception:  # pylint: disable=broad-except
+    except Exception:  # noqa: BLE001
         return (
             flask.jsonify(
                 {
@@ -706,14 +814,14 @@ def api_process_post(p_guid: str) -> ResponseReturnValue:
         )
         status_code = 200 if result.get("status") in ("started", "completed") else 400
         return flask.jsonify(result), status_code
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Failed to start processing job for {p_guid}: {e}")
         return (
             flask.jsonify(
                 {
                     "status": "error",
                     "error_code": "JOB_START_FAILED",
-                    "message": f"Failed to start processing job: {str(e)}",
+                    "message": f"Failed to start processing job: {e!s}",
                 }
             ),
             500,
@@ -837,7 +945,170 @@ def api_reprocess_post(p_guid: str) -> ResponseReturnValue:
                 {
                     "status": "error",
                     "error_code": "REPROCESS_FAILED",
-                    "message": f"Failed to reprocess post: {str(e)}",
+                    "message": f"Failed to reprocess post: {e!s}",
+                }
+            ),
+            500,
+        )
+
+
+@post_bp.route(
+    "/api/posts/<string:p_guid>/reprocess/keep-transcript",
+    methods=["POST"],
+)
+def api_reprocess_post_keep_transcript(p_guid: str) -> ResponseReturnValue:
+    """Clear processing outputs but preserve transcript, then reprocess."""
+    logger.info(
+        "[API] Reprocess (keep transcript) requested for post_guid=%s",
+        p_guid,
+    )
+
+    post = Post.query.filter_by(guid=p_guid).first()
+    if not post:
+        logger.warning(
+            "[API] Reprocess (keep transcript): post not found for guid=%s", p_guid
+        )
+        return (
+            flask.jsonify(
+                {
+                    "status": "error",
+                    "error_code": "NOT_FOUND",
+                    "message": "Post not found",
+                }
+            ),
+            404,
+        )
+
+    feed = db.session.get(Feed, post.feed_id)
+    if feed is None:
+        logger.warning(
+            "[API] Reprocess (keep transcript): feed not found for guid=%s feed_id=%s",
+            p_guid,
+            getattr(post, "feed_id", None),
+        )
+        return (
+            flask.jsonify(
+                {
+                    "status": "error",
+                    "error_code": "FEED_NOT_FOUND",
+                    "message": "Feed not found",
+                }
+            ),
+            404,
+        )
+
+    user, error = require_admin("reprocess this episode (keep transcript)")
+    if error:
+        logger.warning(
+            "[API] Reprocess (keep transcript): auth error for guid=%s",
+            p_guid,
+        )
+        return error
+    if user and user.role != "admin":
+        return (
+            flask.jsonify(
+                {
+                    "status": "error",
+                    "error_code": "REPROCESS_FORBIDDEN",
+                    "message": "Only admins can reprocess episodes.",
+                }
+            ),
+            403,
+        )
+
+    if not post.whitelisted:
+        return (
+            flask.jsonify(
+                {
+                    "status": "error",
+                    "error_code": "NOT_WHITELISTED",
+                    "message": "Post not whitelisted",
+                }
+            ),
+            400,
+        )
+
+    transcription_manager = TranscriptionManager(
+        logger=logger,
+        config=runtime_config,
+        db_session=db.session,
+    )
+    reusable_transcript_segments = transcription_manager.get_reusable_transcription(
+        post
+    )
+    if reusable_transcript_segments is None:
+        transcript_count = (
+            db.session.query(TranscriptSegment.id).filter_by(post_id=post.id).count()
+        )
+        logger.warning(
+            "[API] Reprocess (keep transcript): no reusable transcript for guid=%s "
+            "post_id=%s transcript_count=%s active_whisper_model=%s",
+            p_guid,
+            post.id,
+            transcript_count,
+            transcription_manager.transcriber.model_name,
+        )
+        return (
+            flask.jsonify(
+                {
+                    "status": "error",
+                    "error_code": "NO_REUSABLE_TRANSCRIPT",
+                    "message": (
+                        "No reusable transcript found for the currently configured "
+                        "transcription model. Use full reprocess instead."
+                    ),
+                }
+            ),
+            400,
+        )
+
+    billing_user_id = getattr(user, "id", None)
+
+    try:
+        logger.info(
+            "[API] Reprocess (keep transcript): cancelling jobs and clearing outputs "
+            "guid=%s post_id=%s",
+            p_guid,
+            post.id,
+        )
+        get_jobs_manager().cancel_post_jobs(p_guid)
+        clear_post_processing_data_keep_transcript(post)
+
+        logger.info(
+            "[API] Reprocess (keep transcript): starting post processing "
+            "guid=%s post_id=%s",
+            p_guid,
+            post.id,
+        )
+        result = get_jobs_manager().start_post_processing(
+            p_guid,
+            priority="interactive",
+            requested_by_user_id=billing_user_id,
+            billing_user_id=billing_user_id,
+        )
+        status_code = 200 if result.get("status") in ("started", "completed") else 400
+        if result.get("status") == "started":
+            result["message"] = "Post reprocessing started (keeping transcript)"
+        logger.info(
+            "[API] Reprocess (keep transcript): completed guid=%s status=%s code=%s",
+            p_guid,
+            result.get("status"),
+            status_code,
+        )
+        return flask.jsonify(result), status_code
+    except Exception as e:
+        logger.error(
+            "Failed to reprocess post (keep transcript) %s: %s",
+            p_guid,
+            e,
+            exc_info=True,
+        )
+        return (
+            flask.jsonify(
+                {
+                    "status": "error",
+                    "error_code": "REPROCESS_FAILED",
+                    "message": f"Failed to reprocess post (keep transcript): {e!s}",
                 }
             ),
             500,
@@ -859,6 +1130,10 @@ def api_post_status(p_guid: str) -> ResponseReturnValue:
 @post_bp.route("/api/posts/<string:p_guid>/audio", methods=["GET"])
 def api_get_post_audio(p_guid: str) -> ResponseReturnValue:
     """API endpoint to serve processed audio files with proper CORS headers."""
+    current_user = getattr(g, "current_user", None)
+    if current_user:
+        update_user_last_active(current_user.id)
+
     logger.info(f"API request for audio file with GUID: {p_guid}")
 
     post = Post.query.filter_by(guid=p_guid).first()
@@ -868,35 +1143,23 @@ def api_get_post_audio(p_guid: str) -> ResponseReturnValue:
             jsonify({"error": "Post not found", "error_code": "NOT_FOUND"}), 404
         )
 
-    if not post.whitelisted:
-        logger.warning(f"Post: {post.title} is not whitelisted")
-        return flask.make_response(
-            jsonify({"error": "Post not whitelisted", "error_code": "NOT_WHITELISTED"}),
-            403,
-        )
+    whitelist_response = ensure_whitelisted_for_download(post, p_guid)
+    if whitelist_response:
+        return whitelist_response
 
     if not post.processed_audio_path or not Path(post.processed_audio_path).exists():
-        logger.warning(f"Processed audio not found for post: {post.id}")
-        return flask.make_response(
-            jsonify(
-                {
-                    "error": "Processed audio not available",
-                    "error_code": "AUDIO_NOT_READY",
-                    "message": "Post needs to be processed first",
-                }
-            ),
-            404,
-        )
+        return missing_processed_audio_response(post, p_guid)
 
     try:
         response = send_file(
             path_or_file=Path(post.processed_audio_path).resolve(),
             mimetype="audio/mpeg",
             as_attachment=False,
+            conditional=True,
         )
         response.headers["Accept-Ranges"] = "bytes"
         return response
-    except Exception as e:  # pylint: disable=broad-except
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Error serving audio file for {p_guid}: {e}")
         return flask.make_response(
             jsonify(
@@ -932,8 +1195,10 @@ def api_download_post(p_guid: str) -> flask.Response:
             mimetype="audio/mpeg",
             as_attachment=True,
             download_name=f"{post.title}.mp3",
+            conditional=True,
         )
-    except Exception as e:  # pylint: disable=broad-except
+        response.headers["Accept-Ranges"] = "bytes"
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Error serving file for {p_guid}: {e}")
         return flask.make_response(("Error serving file", 500))
 
@@ -968,7 +1233,7 @@ def api_download_original_post(p_guid: str) -> flask.Response:
             as_attachment=True,
             download_name=f"{post.title}_original.mp3",
         )
-    except Exception as e:  # pylint: disable=broad-except
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Error serving original file for {p_guid}: {e}")
         return flask.make_response(("Error serving file", 500))
 
@@ -978,8 +1243,8 @@ def api_download_original_post(p_guid: str) -> flask.Response:
 
 # Legacy endpoints for backward compatibility
 @post_bp.route("/post/<string:p_guid>.mp3", methods=["GET"])
-def download_post_legacy(p_guid: str) -> flask.Response:
-    return api_download_post(p_guid)
+def download_post_legacy(p_guid: str) -> ResponseReturnValue:
+    return api_get_post_audio(p_guid)
 
 
 @post_bp.route("/post/<string:p_guid>/original.mp3", methods=["GET"])

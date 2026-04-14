@@ -1,5 +1,6 @@
 import logging
-from typing import Any, Callable, Dict
+from collections.abc import Callable
+from typing import Any
 
 from flask import Flask
 
@@ -16,7 +17,7 @@ class CommandExecutor:
     def __init__(self, app: Flask):
         self.app = app
         self.models = self._discover_models()
-        self.actions: Dict[str, Any] = {}  # Registry for custom actions
+        self.actions: dict[str, Any] = {}  # Registry for custom actions
         self._register_default_actions()
 
     def _register_default_actions(self) -> None:
@@ -29,10 +30,16 @@ class CommandExecutor:
         )
         self.register_action("clear_all_jobs", writer_actions.clear_all_jobs_action)
         self.register_action(
+            "clear_active_jobs", writer_actions.clear_active_jobs_action
+        )
+        self.register_action(
             "cleanup_missing_audio_paths",
             writer_actions.cleanup_missing_audio_paths_action,
         )
         self.register_action("create_job", writer_actions.create_job_action)
+        self.register_action(
+            "create_job_if_missing", writer_actions.create_job_if_missing_action
+        )
         self.register_action(
             "cancel_existing_jobs", writer_actions.cancel_existing_jobs_action
         )
@@ -51,6 +58,10 @@ class CommandExecutor:
         self.register_action(
             "clear_post_processing_data",
             writer_actions.clear_post_processing_data_action,
+        )
+        self.register_action(
+            "clear_post_processing_data_keep_transcript",
+            writer_actions.clear_post_processing_data_keep_transcript_action,
         )
         self.register_action(
             "cleanup_processed_post", writer_actions.cleanup_processed_post_action
@@ -142,7 +153,7 @@ class CommandExecutor:
             "update_user_last_active", writer_actions.update_user_last_active_action
         )
 
-    def _discover_models(self) -> Dict[str, Any]:
+    def _discover_models(self) -> dict[str, Any]:
         """Discover all SQLAlchemy models in app.models"""
         model_map = {}
         for name, obj in vars(models).items():
@@ -150,7 +161,7 @@ class CommandExecutor:
                 model_map[name] = obj
         return model_map
 
-    def register_action(self, name: str, func: Callable[[Dict[str, Any]], Any]) -> None:
+    def register_action(self, name: str, func: Callable[[dict[str, Any]], Any]) -> None:
         self.actions[name] = func
 
     def process_command(self, cmd: WriteCommand) -> WriteResult:
@@ -174,6 +185,7 @@ class CommandExecutor:
                             "[WRITER] Rolling back TRANSACTION command id=%s", cmd.id
                         )
                         db.session.rollback()
+                    db.session.expunge_all()
                     return result
 
                 # Single operation
@@ -192,6 +204,7 @@ class CommandExecutor:
                 else:
                     logger.info("[WRITER] Rolling back single command id=%s", cmd.id)
                     db.session.rollback()
+                db.session.expunge_all()
                 return result
 
             except Exception as e:
@@ -202,6 +215,7 @@ class CommandExecutor:
                     exc_info=True,
                 )
                 db.session.rollback()
+                db.session.expunge_all()
                 return WriteResult(cmd.id, False, error=str(e))
 
     def _execute_single_command(self, cmd: WriteCommand) -> WriteResult:
@@ -266,7 +280,7 @@ class CommandExecutor:
                 },
             )
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # Let process_command handle rollback
             return WriteResult(cmd.id, False, error=str(e))
 

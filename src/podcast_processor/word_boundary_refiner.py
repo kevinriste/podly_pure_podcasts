@@ -1,23 +1,22 @@
 """LLM-based word-boundary refiner.
 
 Note: We intentionally share some call-setup patterns with BoundaryRefiner.
-Pylint may flag these as R0801 (duplicate-code); we ignore that for this module.
 """
-
-# pylint: disable=duplicate-code
 
 import json
 import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, cast
 
 import litellm
 from jinja2 import Template
 
 from podcast_processor.llm_model_call_utils import (
     extract_litellm_content,
+    extract_litellm_finish_reason,
+    extract_litellm_usage,
     render_prompt_and_upsert_model_call,
     try_update_model_call,
 )
@@ -43,7 +42,7 @@ class WordBoundaryRefiner:
     timestamps today.
     """
 
-    def __init__(self, config: Config, logger: Optional[logging.Logger] = None):
+    def __init__(self, config: Config, logger: logging.Logger | None = None):
         self.config = config
         self.logger = logger or logging.getLogger(__name__)
         self.template = self._load_template()
@@ -60,7 +59,8 @@ class WordBoundaryRefiner:
 Ad: {{ad_start}}s-{{ad_end}}s
 {% for seg in context_segments %}[seq={{seg.sequence_num}} start={{seg.start_time}} end={{seg.end_time}}] {{seg.text}}
 {% endfor %}
-    Return JSON: {"refined_start_segment_seq": 0, "refined_start_phrase": "", "refined_end_segment_seq": 0, "refined_end_phrase": "", "start_adjustment_reason": "", "end_adjustment_reason": ""}
+Return only one JSON object (no markdown/code fences, no analysis text) with:
+{"refined_start_segment_seq": 0, "refined_start_phrase": "", "refined_end_segment_seq": 0, "refined_end_phrase": "", "start_adjustment_reason": "", "end_adjustment_reason": ""}
 """
         )
 
@@ -69,11 +69,11 @@ Ad: {{ad_start}}s-{{ad_end}}s
         ad_start: float,
         ad_end: float,
         confidence: float,
-        all_segments: List[Dict[str, Any]],
+        all_segments: list[dict[str, Any]],
         *,
-        post_id: Optional[int] = None,
-        first_seq_num: Optional[int] = None,
-        last_seq_num: Optional[int] = None,
+        post_id: int | None = None,
+        first_seq_num: int | None = None,
+        last_seq_num: int | None = None,
     ) -> WordBoundaryRefinement:
         context = self._get_context(
             ad_start,
@@ -97,21 +97,35 @@ Ad: {{ad_start}}s-{{ad_end}}s
             log_prefix="Word boundary refine",
         )
 
-        raw_response: Optional[str] = None
+        raw_response: str | None = None
 
         try:
             response = litellm.completion(
                 model=self.config.llm_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=2048,
+                max_tokens=4096,
                 timeout=self.config.openai_timeout,
                 api_key=self.config.llm_api_key,
                 base_url=self.config.openai_base_url,
             )
 
             content = extract_litellm_content(response)
+            finish_reason = extract_litellm_finish_reason(response)
+            usage = extract_litellm_usage(response)
             raw_response = content
+
+            self.logger.debug(
+                "Word boundary refine finish_reason=%s",
+                finish_reason or "unknown",
+                extra={
+                    "content_preview": (content or "")[:200],
+                    "prompt_tokens": usage.get("prompt_tokens"),
+                    "completion_tokens": usage.get("completion_tokens"),
+                    "total_tokens": usage.get("total_tokens"),
+                },
+            )
+
             self._update_model_call(
                 model_call_id,
                 status="received_response",
@@ -121,15 +135,23 @@ Ad: {{ad_start}}s-{{ad_end}}s
 
             parsed = self._parse_json(content)
             if not parsed:
+                parse_failure_reason = self._parse_failure_reason(finish_reason)
                 self.logger.warning(
-                    "Word boundary refine: no parseable JSON; falling back to original start",
-                    extra={"content_preview": (content or "")[:200]},
+                    "Word boundary refine: no parseable JSON (%s); falling back to original start",
+                    parse_failure_reason,
+                    extra={
+                        "finish_reason": finish_reason,
+                        "content_preview": (content or "")[:200],
+                        "prompt_tokens": usage.get("prompt_tokens"),
+                        "completion_tokens": usage.get("completion_tokens"),
+                        "total_tokens": usage.get("total_tokens"),
+                    },
                 )
                 self._update_model_call(
                     model_call_id,
                     status="success_heuristic",
                     response=raw_response,
-                    error_message="parse_failed",
+                    error_message=f"parse_failed:{parse_failure_reason}",
                 )
                 return self._fallback(ad_start, ad_end)
 
@@ -193,7 +215,7 @@ Ad: {{ad_start}}s-{{ad_end}}s
             )
             return result
 
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             self._update_model_call(
                 model_call_id,
                 status="failed_permanent",
@@ -218,17 +240,206 @@ Ad: {{ad_start}}s-{{ad_end}}s
         # Allow slight forward extension (for late boundary) but cap it.
         return min(estimated_end, orig_end + MAX_END_EXTENSION_SECONDS)
 
-    def _parse_json(self, content: str) -> Optional[Dict[str, Any]]:
-        cleaned = re.sub(r"```json|```", "", (content or "").strip())
-        json_candidates = re.findall(r"\{.*?\}", cleaned, re.DOTALL)
-        for candidate in json_candidates:
-            try:
-                loaded = json.loads(candidate)
-                if isinstance(loaded, dict):
-                    return cast(Dict[str, Any], loaded)
-            except Exception:
-                continue
+    def _parse_json(self, content: str) -> dict[str, Any] | None:
+        for candidate in self._json_parse_candidates(content):
+            parsed = self._parse_json_candidate(candidate)
+            if parsed is not None:
+                return parsed
+        partial = self._parse_partial_json_fields(content)
+        if partial:
+            return partial
         return None
+
+    @staticmethod
+    def _parse_partial_json_fields(content: str) -> dict[str, Any]:
+        text = str(content or "")
+        parsed: dict[str, Any] = {}
+
+        def _extract_int_or_null(key: str) -> int | None | None:
+            match = re.search(
+                rf'"{re.escape(key)}"\s*:\s*(null|-?\d+)',
+                text,
+                flags=re.IGNORECASE,
+            )
+            if not match:
+                return None
+            value = match.group(1)
+            if value is None:
+                return None
+            if value.lower() == "null":
+                return None
+            try:
+                return int(value)
+            except Exception:  # noqa: BLE001
+                return None
+
+        def _extract_string(key: str) -> str | None:
+            match = re.search(
+                rf'"{re.escape(key)}"\s*:\s*"([^"]*)"',
+                text,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if not match:
+                return None
+            value = (match.group(1) or "").strip()
+            return value or None
+
+        start_seq = _extract_int_or_null("refined_start_segment_seq")
+        end_seq = _extract_int_or_null("refined_end_segment_seq")
+        start_phrase = _extract_string("refined_start_phrase")
+        end_phrase = _extract_string("refined_end_phrase")
+        start_reason = _extract_string("start_adjustment_reason")
+        end_reason = _extract_string("end_adjustment_reason")
+
+        if start_seq is not None or re.search(
+            r'"refined_start_segment_seq"\s*:\s*null', text, flags=re.IGNORECASE
+        ):
+            parsed["refined_start_segment_seq"] = start_seq
+        if end_seq is not None or re.search(
+            r'"refined_end_segment_seq"\s*:\s*null', text, flags=re.IGNORECASE
+        ):
+            parsed["refined_end_segment_seq"] = end_seq
+        if start_phrase is not None:
+            parsed["refined_start_phrase"] = start_phrase
+        if end_phrase is not None:
+            parsed["refined_end_phrase"] = end_phrase
+        if start_reason is not None:
+            parsed["start_adjustment_reason"] = start_reason
+        if end_reason is not None:
+            parsed["end_adjustment_reason"] = end_reason
+
+        return parsed
+
+    def _json_parse_candidates(self, content: str) -> list[str]:
+        text = (content or "").strip()
+        if not text:
+            return []
+
+        candidates: list[str] = [text]
+
+        for match in re.finditer(
+            r"```(?:json)?\s*(.*?)```", text, re.IGNORECASE | re.DOTALL
+        ):
+            block = str(match.group(1) or "").strip()
+            if block:
+                candidates.append(block)
+
+        unfenced = re.sub(r"```(?:json)?|```", "", text, flags=re.IGNORECASE).strip()
+        if unfenced:
+            candidates.append(unfenced)
+
+        expanded: list[str] = []
+        for candidate in candidates:
+            expanded.append(candidate)
+            expanded.extend(self._extract_json_objects(candidate))
+
+        return self._dedupe_preserve_order(expanded)
+
+    @staticmethod
+    def _dedupe_preserve_order(values: list[str]) -> list[str]:
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            normalized = value.strip()
+            if not normalized or normalized in seen:
+                continue
+            deduped.append(normalized)
+            seen.add(normalized)
+        return deduped
+
+    def _parse_json_candidate(self, candidate: str) -> dict[str, Any] | None:
+        attempts = [candidate]
+        repaired = self._repair_truncated_json(candidate)
+        if repaired and repaired != candidate:
+            attempts.append(repaired)
+
+        for attempt in attempts:
+            try:
+                loaded = json.loads(attempt)
+                if isinstance(loaded, dict):
+                    return cast(dict[str, Any], loaded)
+            except Exception:  # noqa: BLE001
+                continue
+
+        return None
+
+    @staticmethod
+    def _repair_truncated_json(candidate: str) -> str | None:
+        text = (candidate or "").strip()
+        if not text:
+            return None
+
+        start_idx = text.find("{")
+        if start_idx < 0:
+            return None
+
+        repaired = text[start_idx:]
+        repaired = re.sub(
+            r"```(?:json)?|```", "", repaired, flags=re.IGNORECASE
+        ).strip()
+        repaired = repaired.rstrip(",")
+
+        # Drop an obviously incomplete trailing key/value pair if present.
+        repaired = re.sub(r',\s*"[^"]*$', "", repaired)
+        repaired = re.sub(r',\s*"[^"]*"$', "", repaired)
+        repaired = re.sub(r',\s*"[^"]*"\s*:\s*$', "", repaired)
+        repaired = re.sub(r',\s*"[^"]*"\s*:\s*"[^"]*$', "", repaired)
+
+        open_brackets = repaired.count("[")
+        close_brackets = repaired.count("]")
+        if close_brackets < open_brackets:
+            repaired += "]" * (open_brackets - close_brackets)
+
+        open_braces = repaired.count("{")
+        close_braces = repaired.count("}")
+        if close_braces < open_braces:
+            repaired += "}" * (open_braces - close_braces)
+
+        return repaired or None
+
+    @staticmethod
+    def _extract_json_objects(text: str) -> list[str]:
+        objects: list[str] = []
+        depth = 0
+        start_idx: int | None = None
+        in_string = False
+        escaped = False
+
+        for idx, char in enumerate(text):
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+
+            if char == '"':
+                in_string = True
+                continue
+
+            if char == "{":
+                if depth == 0:
+                    start_idx = idx
+                depth += 1
+                continue
+
+            if char != "}" or depth == 0:
+                continue
+
+            depth -= 1
+            if depth == 0 and start_idx is not None:
+                objects.append(text[start_idx : idx + 1])
+                start_idx = None
+
+        return objects
+
+    @staticmethod
+    def _parse_failure_reason(finish_reason: str | None) -> str:
+        if str(finish_reason or "").lower() == "length":
+            return "length"
+        return "format"
 
     @staticmethod
     def _has_text(value: Any) -> bool:
@@ -236,10 +447,10 @@ Ad: {{ad_start}}s-{{ad_end}}s
             return False
         try:
             return bool(str(value).strip())
-        except Exception:
+        except Exception:  # noqa: BLE001
             return False
 
-    def _extract_payload(self, parsed: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_payload(self, parsed: dict[str, Any]) -> dict[str, Any]:
         occurrence = parsed.get("occurrence")
         if occurrence is None:
             occurrence = parsed.get("occurance")
@@ -264,7 +475,7 @@ Ad: {{ad_start}}s-{{ad_end}}s
 
     @staticmethod
     def _result_status(
-        start_changed: bool, end_changed: bool, partial_errors: List[str]
+        start_changed: bool, end_changed: bool, partial_errors: list[str]
     ) -> str:
         if partial_errors and not start_changed and not end_changed:
             return "success_heuristic"
@@ -274,15 +485,15 @@ Ad: {{ad_start}}s-{{ad_end}}s
         self,
         *,
         ad_start: float,
-        all_segments: List[Dict[str, Any]],
-        context_segments: List[Dict[str, Any]],
+        all_segments: list[dict[str, Any]],
+        context_segments: list[dict[str, Any]],
         start_segment_seq: Any,
         start_phrase: Any,
         start_word: Any,
         start_occurrence: Any,
         start_word_index: Any,
         start_reason: str,
-    ) -> Tuple[float, bool, str, Optional[str]]:
+    ) -> tuple[float, bool, str, str | None]:
         if self._has_text(start_phrase):
             estimated_start = self._estimate_phrase_time(
                 all_segments=all_segments,
@@ -296,6 +507,20 @@ Ad: {{ad_start}}s-{{ad_end}}s
             return (
                 self._constrain_start(float(estimated_start), ad_start),
                 True,
+                start_reason,
+                None,
+            )
+
+        segment_start = self._estimate_segment_boundary_time(
+            all_segments=all_segments,
+            segment_seq=start_segment_seq,
+            boundary="start",
+        )
+        if segment_start is not None:
+            constrained = self._constrain_start(float(segment_start), ad_start)
+            return (
+                constrained,
+                constrained != float(ad_start),
                 start_reason,
                 None,
             )
@@ -321,13 +546,26 @@ Ad: {{ad_start}}s-{{ad_end}}s
         self,
         *,
         ad_end: float,
-        all_segments: List[Dict[str, Any]],
-        context_segments: List[Dict[str, Any]],
+        all_segments: list[dict[str, Any]],
+        context_segments: list[dict[str, Any]],
         end_segment_seq: Any,
         end_phrase: Any,
         end_reason: str,
-    ) -> Tuple[float, bool, str, Optional[str]]:
+    ) -> tuple[float, bool, str, str | None]:
         if not self._has_text(end_phrase):
+            segment_end = self._estimate_segment_boundary_time(
+                all_segments=all_segments,
+                segment_seq=end_segment_seq,
+                boundary="end",
+            )
+            if segment_end is not None:
+                constrained = self._constrain_end(float(segment_end), ad_end)
+                return (
+                    constrained,
+                    constrained != float(ad_end),
+                    (end_reason or "refined"),
+                    None,
+                )
             return float(ad_end), False, (end_reason or "unchanged"), None
 
         estimated_end = self._estimate_phrase_time(
@@ -351,11 +589,11 @@ Ad: {{ad_start}}s-{{ad_end}}s
         self,
         ad_start: float,
         ad_end: float,
-        all_segments: List[Dict[str, Any]],
+        all_segments: list[dict[str, Any]],
         *,
-        first_seq_num: Optional[int],
-        last_seq_num: Optional[int],
-    ) -> List[Dict[str, Any]]:
+        first_seq_num: int | None,
+        last_seq_num: int | None,
+    ) -> list[dict[str, Any]]:
         selected = self._context_by_seq_window(
             all_segments,
             first_seq_num=first_seq_num,
@@ -368,19 +606,19 @@ Ad: {{ad_start}}s-{{ad_end}}s
 
     def _context_by_seq_window(
         self,
-        all_segments: List[Dict[str, Any]],
+        all_segments: list[dict[str, Any]],
         *,
-        first_seq_num: Optional[int],
-        last_seq_num: Optional[int],
-    ) -> List[Dict[str, Any]]:
+        first_seq_num: int | None,
+        last_seq_num: int | None,
+    ) -> list[dict[str, Any]]:
         if first_seq_num is None or last_seq_num is None or not all_segments:
             return []
 
-        seq_values: List[int] = []
+        seq_values: list[int] = []
         for segment in all_segments:
             try:
                 seq_values.append(int(segment.get("sequence_num", -1)))
-            except Exception:
+            except Exception:  # noqa: BLE001
                 continue
         if not seq_values:
             return []
@@ -390,11 +628,11 @@ Ad: {{ad_start}}s-{{ad_end}}s
         start_seq = max(min_seq, int(first_seq_num) - 2)
         end_seq = min(max_seq, int(last_seq_num) + 2)
 
-        selected: List[Dict[str, Any]] = []
+        selected: list[dict[str, Any]] = []
         for segment in all_segments:
             try:
                 seq = int(segment.get("sequence_num", -1))
-            except Exception:
+            except Exception:  # noqa: BLE001
                 continue
             if start_seq <= seq <= end_seq:
                 selected.append(segment)
@@ -405,8 +643,8 @@ Ad: {{ad_start}}s-{{ad_end}}s
         self,
         ad_start: float,
         ad_end: float,
-        all_segments: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
+        all_segments: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         ad_segs = [
             s for s in all_segments if self._segment_overlaps(s, ad_start, ad_end)
         ]
@@ -421,28 +659,28 @@ Ad: {{ad_start}}s-{{ad_end}}s
 
     @staticmethod
     def _segment_overlaps(
-        segment: Dict[str, Any], ad_start: float, ad_end: float
+        segment: dict[str, Any], ad_start: float, ad_end: float
     ) -> bool:
         try:
             seg_start = float(segment.get("start_time", 0.0))
-        except Exception:
+        except Exception:  # noqa: BLE001
             seg_start = 0.0
         try:
             seg_end = float(segment.get("end_time", seg_start))
-        except Exception:
+        except Exception:  # noqa: BLE001
             seg_end = seg_start
         return seg_start <= float(ad_end) and seg_end >= float(ad_start)
 
     def _estimate_phrase_times(
         self,
         *,
-        all_segments: List[Dict[str, Any]],
-        context_segments: List[Dict[str, Any]],
+        all_segments: list[dict[str, Any]],
+        context_segments: list[dict[str, Any]],
         start_segment_seq: Any,
         start_phrase: Any,
         end_segment_seq: Any,
         end_phrase: Any,
-    ) -> Tuple[Optional[float], Optional[float]]:
+    ) -> tuple[float | None, float | None]:
         start_time = self._estimate_phrase_time(
             all_segments=all_segments,
             context_segments=context_segments,
@@ -462,12 +700,12 @@ Ad: {{ad_start}}s-{{ad_end}}s
     def _estimate_phrase_time(
         self,
         *,
-        all_segments: List[Dict[str, Any]],
-        context_segments: List[Dict[str, Any]],
+        all_segments: list[dict[str, Any]],
+        context_segments: list[dict[str, Any]],
         preferred_segment_seq: Any,
         phrase: Any,
         direction: str,
-    ) -> Optional[float]:
+    ) -> float | None:
         phrase_tokens = self._split_words(str(phrase or ""))
         phrase_tokens = [t.lower() for t in phrase_tokens if t]
         if not phrase_tokens:
@@ -476,7 +714,7 @@ Ad: {{ad_start}}s-{{ad_end}}s
         # Search order:
         # 1) preferred segment (if provided)
         # 2) other provided context segments (ad-range ±2)
-        candidates: List[Dict[str, Any]] = []
+        candidates: list[dict[str, Any]] = []
         preferred_seg = self._find_segment(all_segments, preferred_segment_seq)
         if preferred_seg is not None:
             candidates.append(preferred_seg)
@@ -485,21 +723,21 @@ Ad: {{ad_start}}s-{{ad_end}}s
         ordered_context = list(context_segments or [])
         try:
             ordered_context.sort(key=lambda s: int(s.get("sequence_num", -1)))
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
         if direction == "end":
             ordered_context = list(reversed(ordered_context))
 
-        preferred_seq_int: Optional[int]
+        preferred_seq_int: int | None
         try:
             preferred_seq_int = int(preferred_segment_seq)
-        except Exception:
+        except Exception:  # noqa: BLE001
             preferred_seq_int = None
 
         for seg in ordered_context:
             try:
                 seq = int(seg.get("sequence_num", -1))
-            except Exception:
+            except Exception:  # noqa: BLE001
                 seq = None
             if preferred_seq_int is not None and seq == preferred_seq_int:
                 continue
@@ -537,11 +775,11 @@ Ad: {{ad_start}}s-{{ad_end}}s
     def _find_phrase_match(
         self,
         *,
-        words: List[str],
-        phrase_tokens: List[str],
+        words: list[str],
+        phrase_tokens: list[str],
         direction: str,
         max_words: int,
-    ) -> Optional[Tuple[int, int]]:
+    ) -> tuple[int, int] | None:
         if not words or not phrase_tokens:
             return None
 
@@ -564,12 +802,12 @@ Ad: {{ad_start}}s-{{ad_end}}s
         return None
 
     def _find_subsequence(
-        self, words: List[str], target: List[str], *, choose: str
-    ) -> Optional[Tuple[int, int]]:
+        self, words: list[str], target: list[str], *, choose: str
+    ) -> tuple[int, int] | None:
         if not target or len(target) > len(words):
             return None
 
-        matches: List[Tuple[int, int]] = []
+        matches: list[tuple[int, int]] = []
         k = len(target)
         for i in range(0, len(words) - k + 1):
             if words[i : i + k] == target:
@@ -584,7 +822,7 @@ Ad: {{ad_start}}s-{{ad_end}}s
     def _estimate_word_time(
         self,
         *,
-        all_segments: List[Dict[str, Any]],
+        all_segments: list[dict[str, Any]],
         segment_seq: Any,
         word: Any,
         occurrence: Any,
@@ -618,13 +856,13 @@ Ad: {{ad_start}}s-{{ad_end}}s
         return min(estimated, float(seg.get("end_time", end_time)))
 
     def _find_segment(
-        self, all_segments: List[Dict[str, Any]], segment_seq: Any
-    ) -> Optional[Dict[str, Any]]:
+        self, all_segments: list[dict[str, Any]], segment_seq: Any
+    ) -> dict[str, Any] | None:
         if segment_seq is None:
             return None
         try:
             seq_int = int(segment_seq)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None
 
         for seg in all_segments:
@@ -632,7 +870,7 @@ Ad: {{ad_start}}s-{{ad_end}}s
                 return seg
         return None
 
-    def _split_words(self, text: str) -> List[str]:
+    def _split_words(self, text: str) -> list[str]:
         # Word count/indexing heuristic: split on whitespace, then normalize away
         # leading/trailing punctuation to keep indices stable.
         raw_tokens = [t for t in re.split(r"\s+", (text or "").strip()) if t]
@@ -648,7 +886,7 @@ Ad: {{ad_start}}s-{{ad_end}}s
         return re.sub(r"(^[^A-Za-z0-9']+)|([^A-Za-z0-9']+$)", "", token)
 
     def _resolve_word_index(
-        self, words: List[str], *, word: Any, occurrence: Any, word_index: Any
+        self, words: list[str], *, word: Any, occurrence: Any, word_index: Any
     ) -> int:
         # Prefer the verbatim word match if provided.
         # `occurance` chooses which matching instance to use.
@@ -668,19 +906,43 @@ Ad: {{ad_start}}s-{{ad_end}}s
 
         try:
             idx_int = int(word_index)
-        except Exception:
+        except Exception:  # noqa: BLE001
             idx_int = 0
 
         idx_int = max(0, min(idx_int, len(words) - 1))
         return idx_int
 
+    def _estimate_segment_boundary_time(
+        self,
+        *,
+        all_segments: list[dict[str, Any]],
+        segment_seq: Any,
+        boundary: str,
+    ) -> float | None:
+        seg = self._find_segment(all_segments, segment_seq)
+        if not seg:
+            return None
+
+        try:
+            start_time = float(seg.get("start_time", 0.0))
+        except Exception:  # noqa: BLE001
+            start_time = 0.0
+        try:
+            end_time = float(seg.get("end_time", start_time))
+        except Exception:  # noqa: BLE001
+            end_time = start_time
+
+        if boundary == "end":
+            return end_time
+        return start_time
+
     def _update_model_call(
         self,
-        model_call_id: Optional[int],
+        model_call_id: int | None,
         *,
         status: str,
-        response: Optional[str],
-        error_message: Optional[str],
+        response: str | None,
+        error_message: str | None,
     ) -> None:
         try_update_model_call(
             model_call_id,

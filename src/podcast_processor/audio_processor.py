@@ -1,5 +1,5 @@
 import logging
-from typing import Any, List, Optional, Tuple
+from typing import Any
 
 from app.extensions import db
 from app.models import Identification, ModelCall, Post, TranscriptSegment
@@ -15,11 +15,11 @@ class AudioProcessor:
     def __init__(
         self,
         config: Config,
-        logger: Optional[logging.Logger] = None,
-        identification_query: Optional[Any] = None,
-        transcript_segment_query: Optional[Any] = None,
-        model_call_query: Optional[Any] = None,
-        db_session: Optional[Any] = None,
+        logger: logging.Logger | None = None,
+        identification_query: Any | None = None,
+        transcript_segment_query: Any | None = None,
+        model_call_query: Any | None = None,
+        db_session: Any | None = None,
     ):
         self.logger = logger or logging.getLogger("global_logger")
         self.config = config
@@ -32,7 +32,7 @@ class AudioProcessor:
         self.db_session = db_session or db.session
         self.ad_merger = AdMerger()
 
-    def get_ad_segments(self, post: Post) -> List[Tuple[float, float]]:
+    def get_ad_segments(self, post: Post) -> list[tuple[float, float]]:
         """
         Retrieves ad segments from the database for a given post.
 
@@ -138,20 +138,20 @@ class AudioProcessor:
                 group.start_time = new_start
                 group.end_time = new_end
 
-    def _safe_get_post_row(self, post: Post) -> Optional[Post]:
+    def _safe_get_post_row(self, post: Post) -> Post | None:
         try:
             return self.db_session.get(Post, post.id)
-        except Exception:  # pylint: disable=broad-except
+        except Exception:  # noqa: BLE001
             return None
 
     @staticmethod
     def _parse_refined_boundaries(
         refined: Any,
-    ) -> List[Tuple[float, float, float, float]]:
+    ) -> list[tuple[float, float, float, float]]:
         if not refined or not isinstance(refined, list):
             return []
 
-        parsed: List[Tuple[float, float, float, float]] = []
+        parsed: list[tuple[float, float, float, float]] = []
         for item in refined:
             if not isinstance(item, dict):
                 continue
@@ -173,7 +173,7 @@ class AudioProcessor:
                 orig_end = float(orig_end_raw)
                 refined_start = float(refined_start_raw)
                 refined_end = float(refined_end_raw)
-            except Exception:  # pylint: disable=broad-except
+            except Exception:  # noqa: BLE001
                 continue
 
             if refined_end <= refined_start:
@@ -186,9 +186,9 @@ class AudioProcessor:
     @staticmethod
     def _refined_overlap_window_for_group(
         group: Any,
-        parsed: List[Tuple[float, float, float, float]],
-    ) -> Optional[Tuple[float, float]]:
-        overlaps: List[Tuple[float, float]] = []
+        parsed: list[tuple[float, float, float, float]],
+    ) -> tuple[float, float] | None:
+        overlaps: list[tuple[float, float]] = []
         for orig_start, orig_end, refined_start, refined_end in parsed:
             overlap = max(
                 0.0,
@@ -208,10 +208,10 @@ class AudioProcessor:
         self,
         *,
         duration_ms: int,
-        ad_segments: List[Tuple[float, float]],
+        ad_segments: list[tuple[float, float]],
         min_ad_segment_length_seconds: float,
         min_ad_segment_separation_seconds: float,
-    ) -> List[Tuple[int, int]]:
+    ) -> list[tuple[int, int]]:
         """
         Merges nearby ad segments and filters out segments that are too short.
 
@@ -258,11 +258,11 @@ class AudioProcessor:
 
     def _get_last_segment_if_near_end(
         self,
-        ad_segments: List[Tuple[float, float]],
+        ad_segments: list[tuple[float, float]],
         *,
         audio_duration_seconds: float,
         min_separation: float,
-    ) -> Optional[Tuple[float, float]]:
+    ) -> tuple[float, float] | None:
         if not ad_segments:
             return None
         if (audio_duration_seconds - ad_segments[-1][1]) < min_separation:
@@ -271,10 +271,10 @@ class AudioProcessor:
 
     def _merge_close_segments(
         self,
-        ad_segments: List[Tuple[float, float]],
+        ad_segments: list[tuple[float, float]],
         *,
         min_separation: float,
-    ) -> List[Tuple[float, float]]:
+    ) -> list[tuple[float, float]]:
         merged = list(ad_segments)
         i = 0
         while i < len(merged) - 1:
@@ -287,17 +287,17 @@ class AudioProcessor:
 
     def _filter_short_segments(
         self,
-        ad_segments: List[Tuple[float, float]],
+        ad_segments: list[tuple[float, float]],
         *,
         min_length: float,
-    ) -> List[Tuple[float, float]]:
+    ) -> list[tuple[float, float]]:
         return [s for s in ad_segments if (s[1] - s[0]) >= min_length]
 
     def _restore_last_segment_if_needed(
         self,
-        ad_segments: List[Tuple[float, float]],
-        last_segment: Optional[Tuple[float, float]],
-    ) -> List[Tuple[float, float]]:
+        ad_segments: list[tuple[float, float]],
+        last_segment: tuple[float, float] | None,
+    ) -> list[tuple[float, float]]:
         if last_segment is None:
             return ad_segments
         if not ad_segments or ad_segments[-1] != last_segment:
@@ -306,24 +306,26 @@ class AudioProcessor:
 
     def _extend_last_segment_to_end_if_needed(
         self,
-        ad_segments: List[Tuple[float, float]],
+        ad_segments: list[tuple[float, float]],
         *,
         audio_duration_seconds: float,
         min_separation: float,
-    ) -> List[Tuple[float, float]]:
+    ) -> list[tuple[float, float]]:
         if not ad_segments:
             return ad_segments
         if (audio_duration_seconds - ad_segments[-1][1]) < min_separation:
             return [*ad_segments[:-1], (ad_segments[-1][0], audio_duration_seconds)]
         return ad_segments
 
-    def process_audio(self, post: Post, output_path: str) -> None:
+    def process_audio(self, post: Post, output_path: str) -> list[tuple[int, int]]:
         """
         Process the podcast audio by removing ad segments.
 
         Args:
             post: The Post object containing the podcast to process
             output_path: Path where the processed audio file should be saved
+        Returns:
+            The merged ad segments that were removed, as millisecond windows.
         """
         ad_segments = self.get_ad_segments(post)
 
@@ -332,9 +334,6 @@ class AudioProcessor:
             raise ValueError(
                 f"Could not determine duration for audio: {post.unprocessed_audio_path}"
             )
-
-        # Store duration in seconds
-        post.duration = duration_ms / 1000.0
 
         merged_ad_segments = self.merge_ad_segments(
             duration_ms=duration_ms,
@@ -356,6 +355,19 @@ class AudioProcessor:
             use_vbr=True,
         )
 
+        processed_duration_ms = get_audio_duration_ms(output_path)
+        if processed_duration_ms is None:
+            self.logger.warning(
+                "Could not determine processed audio duration for post %s at %s; "
+                "falling back to source duration",
+                post.id,
+                output_path,
+            )
+            processed_duration_ms = duration_ms
+
+        # Persist the final MP3 runtime so downstream RSS/stats reflect ad-removed
+        # audio rather than the source episode length.
+        post.duration = processed_duration_ms / 1000.0
         post.processed_audio_path = output_path
         result = writer_client.update(
             "Post",
@@ -367,9 +379,10 @@ class AudioProcessor:
             raise RuntimeError(getattr(result, "error", "Failed to update post"))
         try:
             self.db_session.expire(post)
-        except Exception:  # pylint: disable=broad-except
+        except Exception:  # noqa: BLE001
             pass
 
         self.logger.info(
             f"Audio processing complete for post {post.id}, saved to {output_path}"
         )
+        return merged_ad_segments
