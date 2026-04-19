@@ -65,7 +65,7 @@ function AppShell() {
 
   if (status === 'loading') {
     return (
-      <div className="h-screen flex items-center justify-center bg-gray-50">
+      <div className="h-dvh flex items-center justify-center bg-gray-50">
         <div className="flex flex-col items-center gap-4">
           <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600" />
           <p className="text-sm text-gray-600">Loading authentication…</p>
@@ -98,7 +98,7 @@ function AppShell() {
   const showBillingLink = requireAuth && !isAdmin;
 
   return (
-    <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
+    <div className="h-dvh bg-gray-50 flex flex-col overflow-hidden">
       <header className="bg-white shadow-sm border-b flex-shrink-0">
         <div className="px-2 sm:px-4 lg:px-6">
           <div className="flex items-center justify-between h-12">
