@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 from typing import Literal
@@ -92,6 +93,38 @@ def _attempt_json_repair(json_str: str) -> str:
     return repaired
 
 
+def _merge_duplicate_ad_segments(text: str) -> str:
+    """Merge duplicate ``"ad_segments"`` keys that some local LLMs produce.
+
+    Python's ``json.loads`` silently keeps only the *last* value for duplicate
+    keys, so ``{"ad_segments":[A], "ad_segments":[B]}`` would lose ``[A]``.
+    """
+    if text.count('"ad_segments"') <= 1:
+        return text
+
+    def _merge_pairs(pairs: list[tuple[str, object]]) -> dict:
+        result: dict = {}
+        for key, value in pairs:
+            if key == "ad_segments" and key in result:
+                if isinstance(result[key], list) and isinstance(value, list):
+                    result[key].extend(value)
+                else:
+                    result[key] = value
+            else:
+                result[key] = value
+        return result
+
+    try:
+        merged = json.loads(text, object_pairs_hook=_merge_pairs)
+        logger.warning(
+            "Merged duplicate ad_segments keys (%d occurrences)",
+            text.count('"ad_segments"'),
+        )
+        return json.dumps(merged)
+    except (json.JSONDecodeError, ValueError):
+        return text
+
+
 def clean_and_parse_model_output(model_output: str) -> AdSegmentPredictionList:
     start_marker, end_marker = "{", "}"
 
@@ -113,6 +146,8 @@ def clean_and_parse_model_output(model_output: str) -> AdSegmentPredictionList:
     model_output = model_output.replace("'", '"')
     model_output = model_output.replace("\n", "")
     model_output = model_output.strip()
+
+    model_output = _merge_duplicate_ad_segments(model_output)
 
     # First attempt: try to parse as-is
     try:
