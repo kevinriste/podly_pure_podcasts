@@ -1,11 +1,22 @@
-"""Write chapter metadata to processed MP3 files with adjusted timestamps."""
+"""Write chapter metadata to processed audio files with adjusted timestamps.
+
+Chapters are embedded with the writer appropriate to the file's real container:
+ID3 ``CHAP``/``CTOC`` frames for MP3, and (via ffmpeg's ``FFMETADATA``) QuickTime
+chapters for the MP4/``M4A`` family. The container is sniffed from the file's
+bytes rather than trusting its extension, because podcast hosts routinely serve
+MP4/AAC audio under a ``.mp3`` name.
+"""
 
 import logging
+import os
+import subprocess
+import tempfile
 from typing import cast
 
 from mutagen.id3 import CHAP, CTOC, ID3, TIT2
 from mutagen.mp3 import MP3
 
+from podcast_processor.audio_format import detect_audio_container
 from podcast_processor.chapter_reader import Chapter
 
 logger = logging.getLogger("global_logger")
@@ -123,13 +134,18 @@ def write_chapters(
     chapters: list[Chapter],
 ) -> None:
     """
-    Write chapter metadata to an MP3 file.
+    Write chapter metadata to an audio file, overwriting any existing chapters.
 
-    Overwrites any existing chapter data in the file.
+    The correct embedding is chosen from the file's real container (sniffed from
+    its bytes), so MP4/``M4A`` audio served under a ``.mp3`` name is handled
+    instead of crashing the MP3-only path.
 
     Args:
-        audio_path: Path to the MP3 file
+        audio_path: Path to the audio file
         chapters: List of Chapter objects to write
+
+    Raises:
+        ChapterWriteError: If the container is unsupported or embedding fails.
     """
     if not chapters:
         logger.info("No chapters to write to %s", audio_path)
@@ -138,6 +154,24 @@ def write_chapters(
     # Sort chapters by start time to ensure correct order
     sorted_chapters = sorted(chapters, key=lambda c: c.start_time_ms)
 
+    container = detect_audio_container(audio_path)
+    if container == "mp3":
+        _write_chapters_mp3(audio_path, sorted_chapters)
+    elif container == "mp4":
+        _write_chapters_mp4(audio_path, sorted_chapters)
+    else:
+        raise ChapterWriteError(
+            f"Cannot write chapters to {audio_path}: unsupported audio "
+            f"container '{container}'"
+        )
+
+
+class ChapterWriteError(Exception):
+    """Raised when chapter metadata cannot be embedded into an audio file."""
+
+
+def _write_chapters_mp3(audio_path: str, sorted_chapters: list[Chapter]) -> None:
+    """Embed chapters as ID3 CHAP/CTOC frames in an MP3 file."""
     try:
         audio = MP3(audio_path)
 
@@ -185,11 +219,84 @@ def write_chapters(
 
         audio.save()
 
-        logger.info("Wrote %d chapters to %s", len(chapters), audio_path)
+        logger.info("Wrote %d chapters to %s", len(sorted_chapters), audio_path)
 
     except Exception as e:
         logger.error("Failed to write chapters to %s: %s", audio_path, e)
-        raise
+        raise ChapterWriteError(str(e)) from e
+
+
+def _build_ffmetadata(sorted_chapters: list[Chapter]) -> str:
+    """Render chapters as an ffmpeg FFMETADATA document (millisecond timebase)."""
+    lines = [";FFMETADATA1"]
+    for chapter in sorted_chapters:
+        # Escape the characters ffmpeg treats as metadata syntax.
+        title = (
+            chapter.title.replace("\\", "\\\\")
+            .replace("=", "\\=")
+            .replace(";", "\\;")
+            .replace("#", "\\#")
+            .replace("\n", "\\\n")
+        )
+        lines += [
+            "[CHAPTER]",
+            "TIMEBASE=1/1000",
+            f"START={max(0, chapter.start_time_ms)}",
+            f"END={max(0, chapter.end_time_ms)}",
+            f"title={title}",
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def _write_chapters_mp4(audio_path: str, sorted_chapters: list[Chapter]) -> None:
+    """Embed chapters into an MP4/M4A file via an ffmpeg FFMETADATA remux.
+
+    ffmpeg cannot edit in place, so we remux (``-c copy``, lossless) into a
+    sibling temp file and atomically replace the original. ``-map_metadata 0``
+    preserves the existing tags/artwork while ``-map_chapters 1`` injects the
+    new chapters.
+    """
+    directory = os.path.dirname(audio_path) or "."
+    meta_fd, meta_path = tempfile.mkstemp(suffix=".ffmeta", dir=directory)
+    tmp_output = f"{audio_path}.chapters.tmp.m4a"
+    try:
+        with os.fdopen(meta_fd, "w", encoding="utf-8") as meta_file:
+            meta_file.write(_build_ffmetadata(sorted_chapters))
+
+        try:
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-loglevel", "error",
+                    "-i", audio_path,
+                    "-i", meta_path,
+                    "-map", "0",
+                    "-map_metadata", "0",
+                    "-map_chapters", "1",
+                    "-c", "copy",
+                    tmp_output,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            logger.error(
+                "ffmpeg failed to write chapters to %s: %s",
+                audio_path,
+                exc.stderr.strip() if exc.stderr else exc,
+            )
+            raise ChapterWriteError(
+                f"ffmpeg failed to embed chapters in {audio_path}"
+            ) from exc
+
+        os.replace(tmp_output, audio_path)
+        logger.info("Wrote %d chapters to %s", len(sorted_chapters), audio_path)
+    finally:
+        for leftover in (meta_path, tmp_output):
+            try:
+                os.remove(leftover)
+            except OSError:
+                pass
 
 
 def write_adjusted_chapters(

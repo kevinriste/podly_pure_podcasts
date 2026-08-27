@@ -11,6 +11,10 @@ import requests
 import validators
 from flask import abort
 
+from podcast_processor.audio_format import (
+    detect_audio_container,
+    extension_for_container,
+)
 from shared.interfaces import Post
 from shared.processing_paths import get_in_root
 
@@ -84,7 +88,42 @@ class PodcastDownloader:
                 )
                 return None
 
-        return download_path
+        return self._correct_extension(download_path)
+
+    def _correct_extension(self, download_path: str) -> str:
+        """Rename the download to match its real container when they disagree.
+
+        Podcast hosts (e.g. Patreon) commonly serve MP4/AAC audio under a
+        ``.mp3`` URL. Storing it with the true extension keeps every downstream
+        step — chapter embedding, pydub segment export, client playback — from
+        being misled by the name. The processed/served filename inherits this
+        extension, so the correction propagates through the whole pipeline.
+        """
+        container = detect_audio_container(download_path)
+        correct_ext = extension_for_container(container)
+        if correct_ext is None:
+            return download_path
+
+        current = Path(download_path)
+        if current.suffix.lower() == correct_ext:
+            return download_path
+
+        corrected = current.with_suffix(correct_ext)
+        try:
+            os.replace(download_path, corrected)
+        except OSError as exc:
+            self.logger.warning(
+                "Could not rename %s to %s: %s", download_path, corrected, exc
+            )
+            return download_path
+
+        self.logger.info(
+            "Corrected download extension: %s served as %s -> %s",
+            current.name,
+            current.suffix or "(none)",
+            corrected.name,
+        )
+        return str(corrected)
 
     def get_and_make_download_path(self, post_title: str) -> Path:
         """

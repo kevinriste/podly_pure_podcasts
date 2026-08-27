@@ -4,7 +4,8 @@ import logging
 import os
 import shutil
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,7 @@ from podcast_processor.ina_client import AudioSegmentResult, analyze_audio
 from podcast_processor.oneshot_classifier import OneShotAdClassifier
 from podcast_processor.stream_builder import build_merged_stream
 from podcast_processor.chapter_writer import (
+    ChapterWriteError,
     recalculate_chapter_times,
     write_adjusted_chapters,
 )
@@ -537,8 +539,9 @@ class PodcastProcessor:
 
         chapter_data_json: str | None = None
         if chapters_for_output:
-            write_adjusted_chapters(
-                audio_path=processed_audio_path,
+            self._write_chapters_or_discard(
+                post=post,
+                processed_audio_path=processed_audio_path,
                 chapters_to_keep=chapters_for_output,
                 removed_segments=removed_segments_sec,
             )
@@ -735,8 +738,9 @@ class PodcastProcessor:
                     len(chapters_for_output),
                     chapter_source,
                 )
-                write_adjusted_chapters(
-                    audio_path=processed_audio_path,
+                self._write_chapters_or_discard(
+                    post=post,
+                    processed_audio_path=processed_audio_path,
                     chapters_to_keep=chapters_for_output,
                     removed_segments=removed_segments_sec,
                 )
@@ -828,15 +832,17 @@ class PodcastProcessor:
         self.status_manager.update_job_status(
             job, "running", 4, "Copying audio and writing chapters", 90.0
         )
-        shutil.copyfile(unprocessed_audio_path, processed_audio_path)
+        with self._atomic_output(processed_audio_path) as staging_path:
+            shutil.copyfile(unprocessed_audio_path, staging_path)
+            if chapters_for_output:
+                write_adjusted_chapters(
+                    audio_path=staging_path,
+                    chapters_to_keep=chapters_for_output,
+                    removed_segments=[],
+                )
 
         chapter_data_json: str | None = None
         if chapters_for_output:
-            write_adjusted_chapters(
-                audio_path=processed_audio_path,
-                chapters_to_keep=chapters_for_output,
-                removed_segments=[],
-            )
             chapter_data_json = json.dumps(
                 {
                     "chapter_source": chapter_source,
@@ -1019,22 +1025,23 @@ class PodcastProcessor:
         # Convert ad segments to milliseconds for audio processing
         ad_segments_ms = [(int(s * 1000), int(e * 1000)) for s, e in ad_segments]
 
-        if ad_segments_ms:
-            clip_segments_exact(
-                ad_segments_ms=ad_segments_ms,
-                in_path=str(post.unprocessed_audio_path),
-                out_path=processed_audio_path,
-            )
-        else:
-            # No ads found, copy the original file
-            shutil.copyfile(str(post.unprocessed_audio_path), processed_audio_path)
+        with self._atomic_output(processed_audio_path) as staging_path:
+            if ad_segments_ms:
+                clip_segments_exact(
+                    ad_segments_ms=ad_segments_ms,
+                    in_path=str(post.unprocessed_audio_path),
+                    out_path=staging_path,
+                )
+            else:
+                # No ads found, copy the original file
+                shutil.copyfile(str(post.unprocessed_audio_path), staging_path)
 
-        # Write adjusted chapters to the processed file
-        write_adjusted_chapters(
-            audio_path=processed_audio_path,
-            chapters_to_keep=chapters_to_keep,
-            removed_segments=ad_segments,
-        )
+            # Write adjusted chapters to the processed file
+            write_adjusted_chapters(
+                audio_path=staging_path,
+                chapters_to_keep=chapters_to_keep,
+                removed_segments=ad_segments,
+            )
 
         # Build chapter data for stats
         adjusted_kept_chapters = recalculate_chapter_times(
@@ -1071,6 +1078,75 @@ class PodcastProcessor:
         self._finalize_processing(
             post, job, processed_audio_path, chapter_data=json.dumps(chapter_data)
         )
+
+    @contextmanager
+    def _atomic_output(self, final_path: str) -> Iterator[str]:
+        """Build the output on a sibling temp path, then atomically move it in.
+
+        The finished audio (and its embedded chapters) only appears at
+        ``final_path`` once every step has succeeded. A crash mid-build leaves
+        nothing at ``final_path``, so a retry genuinely reprocesses instead of
+        mistaking a half-written file for a completed one — the failure that let
+        a chapter-write error be silently marked "completed".
+        """
+        Path(final_path).parent.mkdir(parents=True, exist_ok=True)
+        staging_path = f"{final_path}.partial"
+        if os.path.exists(staging_path):
+            os.remove(staging_path)
+        try:
+            yield staging_path
+        except BaseException:
+            if os.path.exists(staging_path):
+                try:
+                    os.remove(staging_path)
+                except OSError:  # best-effort cleanup
+                    pass
+            raise
+        else:
+            os.replace(staging_path, final_path)
+
+    def _write_chapters_or_discard(
+        self,
+        *,
+        post: Post,
+        processed_audio_path: str,
+        chapters_to_keep: list[Any],
+        removed_segments: list[tuple[float, float]],
+    ) -> None:
+        """Embed chapters into an already-finalized output, or discard it.
+
+        The ad-removal/oneshot paths persist ``processed_audio_path`` before
+        chapters are written. If embedding fails we delete that output and clear
+        the DB reference so the job fails loudly and the next run reprocesses,
+        rather than leaving a chapter-less file that a retry would treat as done.
+        """
+        try:
+            write_adjusted_chapters(
+                audio_path=processed_audio_path,
+                chapters_to_keep=chapters_to_keep,
+                removed_segments=removed_segments,
+            )
+        except ChapterWriteError:
+            self.logger.error(
+                "Chapter embedding failed for %s; discarding output so the "
+                "episode reprocesses cleanly",
+                processed_audio_path,
+            )
+            if os.path.isfile(processed_audio_path):
+                try:
+                    os.remove(processed_audio_path)
+                except OSError as exc:  # best-effort cleanup
+                    self.logger.warning(
+                        "Failed to remove %s: %s", processed_audio_path, exc
+                    )
+            result = writer_client.update(
+                "Post", post.id, {"processed_audio_path": None}, wait=True
+            )
+            if not result or not result.success:
+                self.logger.warning(
+                    "Failed to clear processed_audio_path for post %s", post.id
+                )
+            raise
 
     def _finalize_processing(
         self,

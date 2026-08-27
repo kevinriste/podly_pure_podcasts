@@ -193,3 +193,25 @@ def test_download_episode_invalid_post_title(mock_get, test_post, downloader, ap
             # Check that None was returned
             assert result is None
             mock_get.assert_not_called()
+
+
+def test_correct_extension_renames_mislabeled_m4a(downloader, tmp_path):
+    """An M4A payload saved under a .mp3 name is renamed to .m4a."""
+    mislabeled = tmp_path / "Episode.mp3"
+    mislabeled.write_bytes(b"\x00\x00\x00\x18ftypM4A \x00\x00\x02\x00rest")
+
+    corrected = downloader._correct_extension(str(mislabeled))
+
+    assert corrected.endswith(".m4a")
+    assert not mislabeled.exists()
+    assert (tmp_path / "Episode.m4a").exists()
+
+
+def test_correct_extension_keeps_matching_mp3(downloader, tmp_path):
+    real_mp3 = tmp_path / "Episode.mp3"
+    real_mp3.write_bytes(b"ID3\x04\x00\x00\x00\x00\x00\x00audio")
+
+    corrected = downloader._correct_extension(str(real_mp3))
+
+    assert corrected == str(real_mp3)
+    assert real_mp3.exists()

@@ -1,4 +1,5 @@
 import json
+import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -425,6 +426,9 @@ def test_chapter_insert_strategy_writes_chapters_without_ad_removal() -> None:
             "podcast_processor.podcast_processor.write_adjusted_chapters"
         ) as write_mock,
     ):
+        # The output is staged on a sibling .partial path and atomically moved
+        # into place; emulate the copy so the final replace succeeds.
+        copy_mock.side_effect = lambda _src, dst: open(dst, "wb").close()
         processor._perform_chapter_insertion_only_processing(
             post, job, "/tmp/output.mp3"
         )
@@ -439,12 +443,17 @@ def test_chapter_insert_strategy_writes_chapters_without_ad_removal() -> None:
         openai_timeout_sec=config.openai_timeout,
         logger_override=processor.logger,
     )
-    copy_mock.assert_called_once_with("/tmp/input.mp3", "/tmp/output.mp3")
+    staging_path = "/tmp/output.mp3.partial"
+    copy_mock.assert_called_once_with("/tmp/input.mp3", staging_path)
     write_mock.assert_called_once_with(
-        audio_path="/tmp/output.mp3",
+        audio_path=staging_path,
         chapters_to_keep=topic_chapters,
         removed_segments=[],
     )
+    # Staged output was moved into place and the temp file cleaned up.
+    assert os.path.exists("/tmp/output.mp3")
+    assert not os.path.exists(staging_path)
+    os.remove("/tmp/output.mp3")
 
     chapter_data = json.loads(
         processor._finalize_processing.call_args.kwargs["chapter_data"]

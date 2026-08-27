@@ -1,10 +1,19 @@
-"""Read chapter metadata from MP3 files using ID3 CHAP frames."""
+"""Read chapter metadata from audio files.
 
+MP3 chapters are read from ID3 ``CHAP`` frames; MP4/``M4A`` chapters are read via
+ffprobe. The container is sniffed from the file's bytes rather than trusting the
+extension, since podcast hosts often serve MP4/AAC audio under a ``.mp3`` name.
+"""
+
+import json
 import logging
+import subprocess
 from dataclasses import dataclass
 
 from mutagen.id3 import CHAP, ID3
 from mutagen.mp3 import MP3
+
+from podcast_processor.audio_format import detect_audio_container
 
 logger = logging.getLogger("global_logger")
 
@@ -21,15 +30,64 @@ class Chapter:
 
 def read_chapters(audio_path: str) -> list[Chapter]:
     """
-    Read ID3 CHAP frames from an MP3 file.
+    Read chapters from an audio file, choosing the reader by real container.
 
     Args:
-        audio_path: Path to the MP3 file
+        audio_path: Path to the audio file
 
     Returns:
         List of Chapter objects, sorted by start time.
-        Returns empty list if no chapters found or file has no ID3 tags.
+        Returns empty list if no chapters are found or the file cannot be read.
     """
+    container = detect_audio_container(audio_path)
+    if container == "mp4":
+        return _read_chapters_mp4(audio_path)
+    return _read_chapters_mp3(audio_path)
+
+
+def _read_chapters_mp4(audio_path: str) -> list[Chapter]:
+    """Read chapters from an MP4/M4A file using ffprobe."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error",
+                "-print_format", "json",
+                "-show_chapters",
+                audio_path,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        raw_chapters = json.loads(result.stdout).get("chapters", [])
+    except (subprocess.CalledProcessError, ValueError) as exc:
+        logger.warning("Failed to read chapters from %s: %s", audio_path, exc)
+        return []
+
+    chapters: list[Chapter] = []
+    for index, entry in enumerate(raw_chapters):
+        try:
+            start_ms = round(float(entry["start_time"]) * 1000)
+            end_ms = round(float(entry["end_time"]) * 1000)
+        except (KeyError, ValueError):
+            continue
+        title = str((entry.get("tags") or {}).get("title") or f"chp{index}")
+        chapters.append(
+            Chapter(
+                element_id=f"chp{index}",
+                title=title,
+                start_time_ms=start_ms,
+                end_time_ms=end_ms,
+            )
+        )
+
+    chapters.sort(key=lambda c: c.start_time_ms)
+    logger.info("Found %d chapters in %s", len(chapters), audio_path)
+    return chapters
+
+
+def _read_chapters_mp3(audio_path: str) -> list[Chapter]:
+    """Read ID3 CHAP frames from an MP3 file."""
     chapters: list[Chapter] = []
 
     try:
