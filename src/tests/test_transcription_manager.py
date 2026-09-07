@@ -16,7 +16,11 @@ from shared.test_utils import create_standard_test_config
 class MockTranscriber(Transcriber):
     """Mock transcriber for testing TranscriptionManager."""
 
-    def __init__(self, mock_response: list[Segment] | Exception | None = None, raw_response_body: str | None = None):
+    def __init__(
+        self,
+        mock_response: list[Segment] | Exception | None = None,
+        raw_response_body: str | None = None,
+    ):
         self.mock_response: list[Segment] | Exception = mock_response or []
         self._model_name = "mock_transcriber"
         self.last_raw_response_body = raw_response_body
@@ -133,9 +137,7 @@ def test_check_existing_transcription_success(
 
     with app.app_context():
         # Configure the existing mocks in the manager
-        test_manager.model_call_query.filter_by().order_by().first.return_value = (
-            model_call
-        )
+        test_manager.model_call_query.filter_by().filter().order_by().first.return_value = model_call
         test_manager.segment_query.filter_by().order_by().all.return_value = segments
 
         result = test_manager._check_existing_transcription(post)
@@ -155,7 +157,7 @@ def test_check_existing_transcription_no_model_call(
 
     with app.app_context():
         # Set return value for the existing mock in the manager
-        test_manager.model_call_query.filter_by().order_by().first.return_value = None
+        test_manager.model_call_query.filter_by().filter().order_by().first.return_value = None
 
         result = test_manager._check_existing_transcription(post)
         assert result is None
@@ -340,3 +342,117 @@ def test_transcribe_persists_raw_whisper_response_body(
         )
         assert call is not None
         assert call.response == raw_response
+
+
+def test_transcribe_reuses_existing_model_call_with_different_last_segment(
+    test_config: Config,
+    test_logger: logging.Logger,
+    app: Flask,
+) -> None:
+    """Ensure we reuse existing ModelCall rows even when last_segment_sequence_num != -1."""
+    with app.app_context():
+        feed = Feed(title="Test Feed 2", rss_url="http://example.com/rss2.xml")
+        post = Post(
+            feed=feed,
+            guid="guid-reuse-non-minus-one",
+            download_url="http://example.com/audio-reuse.mp3",
+            title="Test Post Reuse",
+            unprocessed_audio_path="/tmp/audio-reuse.mp3",
+        )
+        db.session.add_all([feed, post])
+        db.session.commit()
+
+        # Existing row from a previous run where last_segment was set to 1, but status is failed_permanent
+        existing_call = ModelCall(
+            post_id=post.id,
+            model_name="mock_transcriber",
+            first_segment_sequence_num=0,
+            last_segment_sequence_num=1,
+            prompt="Whisper transcription job",
+            status="failed_permanent",
+            error_message="Writer service did not respond",
+        )
+        db.session.add(existing_call)
+        db.session.commit()
+
+        manager = TranscriptionManager(
+            test_logger,
+            test_config,
+            db_session=db.session,
+            transcriber=MockTranscriber(
+                [
+                    Segment(start=0.0, end=5.0, text="Segment 1"),
+                    Segment(start=5.0, end=10.0, text="Segment 2"),
+                ]
+            ),
+        )
+
+        segments = manager.transcribe(post)
+
+        assert len(segments) == 2
+        assert ModelCall.query.filter_by(post_id=post.id).count() == 1
+        refreshed_call = ModelCall.query.filter_by(post_id=post.id).first()
+        assert refreshed_call.id == existing_call.id
+        assert refreshed_call.status == "success"
+        assert refreshed_call.last_segment_sequence_num == 1
+        assert refreshed_call.error_message is None
+
+
+def test_transcribe_cleans_up_conflicting_duplicate_model_call(
+    test_config: Config,
+    test_logger: logging.Logger,
+    app: Flask,
+) -> None:
+    """Ensure duplicate/conflicting ModelCall rows are cleaned up without IntegrityError."""
+    with app.app_context():
+        feed = Feed(title="Test Feed 3", rss_url="http://example.com/rss3.xml")
+        post = Post(
+            feed=feed,
+            guid="guid-dup-cleanup",
+            download_url="http://example.com/audio-dup.mp3",
+            title="Test Post Duplicate",
+            unprocessed_audio_path="/tmp/audio-dup.mp3",
+        )
+        db.session.add_all([feed, post])
+        db.session.commit()
+
+        # Simulate two rows already in DB (one placeholder, one with last_seq=1)
+        call1 = ModelCall(
+            post_id=post.id,
+            model_name="mock_transcriber",
+            first_segment_sequence_num=0,
+            last_segment_sequence_num=1,
+            prompt="Whisper transcription job",
+            status="failed_permanent",
+        )
+        call2 = ModelCall(
+            post_id=post.id,
+            model_name="mock_transcriber",
+            first_segment_sequence_num=0,
+            last_segment_sequence_num=-1,
+            prompt="Whisper transcription job",
+            status="pending",
+        )
+        db.session.add_all([call1, call2])
+        db.session.commit()
+
+        manager = TranscriptionManager(
+            test_logger,
+            test_config,
+            db_session=db.session,
+            transcriber=MockTranscriber(
+                [
+                    Segment(start=0.0, end=5.0, text="Segment 1"),
+                    Segment(start=5.0, end=10.0, text="Segment 2"),
+                ]
+            ),
+        )
+
+        segments = manager.transcribe(post)
+
+        assert len(segments) == 2
+        # Must not raise IntegrityError and should leave exactly one success row
+        assert ModelCall.query.filter_by(post_id=post.id).count() == 1
+        refreshed_call = ModelCall.query.filter_by(post_id=post.id).first()
+        assert refreshed_call.status == "success"
+        assert refreshed_call.last_segment_sequence_num == 1

@@ -158,6 +158,8 @@ def update_job_status_action(params: dict[str, Any]) -> dict[str, Any]:
 
     if error_message:
         job.error_message = error_message
+    elif status in ["failed", "cancelled"] and step_name:
+        job.error_message = step_name
 
     if status == "running" and not job.started_at:
         job.started_at = datetime.now(UTC).replace(tzinfo=None)

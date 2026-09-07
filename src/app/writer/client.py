@@ -127,7 +127,7 @@ class WriterClient:
         )
 
     def submit(
-        self, cmd: WriteCommand, wait: bool = False, timeout: int = 10
+        self, cmd: WriteCommand, wait: bool = False, timeout: int = 30
     ) -> WriteResult | None:
         reply_q: Queue[Any] | None = None
         if not self.queue:
@@ -159,33 +159,61 @@ class WriterClient:
         return None
 
     def create(
-        self, model: str, data: dict[str, Any], wait: bool = True
+        self,
+        model: str,
+        data: dict[str, Any],
+        wait: bool = True,
+        timeout: int | None = None,
     ) -> WriteResult | None:
         cmd = WriteCommand(
             id=str(uuid.uuid4()), type=WriteCommandType.CREATE, model=model, data=data
         )
-        return self.submit(cmd, wait=wait)
+        kwargs: dict[str, Any] = {"wait": wait}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        return self.submit(cmd, **kwargs)
 
     def update(
-        self, model: str, pk: Any, data: dict[str, Any], wait: bool = True
+        self,
+        model: str,
+        pk: Any,
+        data: dict[str, Any],
+        wait: bool = True,
+        timeout: int | None = None,
     ) -> WriteResult | None:
         data["id"] = pk
         cmd = WriteCommand(
             id=str(uuid.uuid4()), type=WriteCommandType.UPDATE, model=model, data=data
         )
-        return self.submit(cmd, wait=wait)
+        kwargs: dict[str, Any] = {"wait": wait}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        return self.submit(cmd, **kwargs)
 
-    def delete(self, model: str, pk: Any, wait: bool = True) -> WriteResult | None:
+    def delete(
+        self,
+        model: str,
+        pk: Any,
+        wait: bool = True,
+        timeout: int | None = None,
+    ) -> WriteResult | None:
         cmd = WriteCommand(
             id=str(uuid.uuid4()),
             type=WriteCommandType.DELETE,
             model=model,
             data={"id": pk},
         )
-        return self.submit(cmd, wait=wait)
+        kwargs: dict[str, Any] = {"wait": wait}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        return self.submit(cmd, **kwargs)
 
     def action(
-        self, action_name: str, params: dict[str, Any], wait: bool = True
+        self,
+        action_name: str,
+        params: dict[str, Any],
+        wait: bool = True,
+        timeout: int | None = None,
     ) -> WriteResult | None:
         cmd = WriteCommand(
             id=str(uuid.uuid4()),
@@ -193,7 +221,10 @@ class WriterClient:
             model=None,
             data={"action": action_name, "params": params},
         )
-        return self.submit(cmd, wait=wait)
+        kwargs: dict[str, Any] = {"wait": wait}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        return self.submit(cmd, **kwargs)
 
 
 # Singleton instance

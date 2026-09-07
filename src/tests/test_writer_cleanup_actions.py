@@ -15,6 +15,8 @@ from app.writer.actions.cleanup import (
     clear_post_processing_data_action,
     clear_post_processing_data_keep_transcript_action,
 )
+from app.writer.actions.jobs import update_job_status_action
+from app.writer.actions.processor import upsert_whisper_model_call_action
 
 
 def test_clear_post_processing_data_action_clears_chapter_data(app) -> None:
@@ -380,3 +382,96 @@ def test_cleanup_missing_audio_paths_requeues_failed_jobs(app):
         assert job.error_message is None
         assert job.started_at is None
         assert job.completed_at is None
+
+
+def test_update_job_status_action_sets_error_message_from_step_name_on_failure(app):
+    with app.app_context():
+        feed = Feed(
+            title="Status Test Feed", rss_url="https://example.com/status-feed.xml"
+        )
+        db.session.add(feed)
+        db.session.commit()
+
+        post = Post(
+            feed_id=feed.id,
+            guid="status-test-guid",
+            download_url="https://example.com/status.mp3",
+            title="Status Episode",
+        )
+        db.session.add(post)
+        job = ProcessingJob(
+            id="status-test-job",
+            post_guid=post.guid,
+            status="running",
+            current_step=1,
+            total_steps=4,
+            progress_percentage=25.0,
+            step_name="Transcribing",
+        )
+        db.session.add(job)
+        db.session.commit()
+
+        # When status='failed' and error_message is None, error_message should fallback to step_name
+        update_job_status_action(
+            {
+                "job_id": job.id,
+                "status": "failed",
+                "step": 0,
+                "step_name": "Unexpected error: Something broke",
+                "progress": 0.0,
+            }
+        )
+        db.session.flush()
+        db.session.refresh(job)
+
+        assert job.status == "failed"
+        assert job.step_name == "Unexpected error: Something broke"
+        assert job.error_message == "Unexpected error: Something broke"
+
+
+def test_upsert_whisper_model_call_action_reuses_existing_call_when_last_seq_minus_one(
+    app,
+):
+    with app.app_context():
+        feed = Feed(title="Upsert Feed", rss_url="https://example.com/upsert-feed.xml")
+        db.session.add(feed)
+        db.session.commit()
+
+        post = Post(
+            feed_id=feed.id,
+            guid="upsert-guid-1",
+            download_url="https://example.com/upsert1.mp3",
+            title="Upsert Episode 1",
+        )
+        db.session.add(post)
+        db.session.commit()
+
+        # Existing row with last_seq=100 from an earlier run
+        existing_call = ModelCall(
+            post_id=post.id,
+            first_segment_sequence_num=0,
+            last_segment_sequence_num=100,
+            model_name="whisper-test-model",
+            prompt="Whisper transcription job",
+            status="failed_permanent",
+            error_message="timeout",
+        )
+        db.session.add(existing_call)
+        db.session.commit()
+
+        result = upsert_whisper_model_call_action(
+            {
+                "post_id": post.id,
+                "model_name": "whisper-test-model",
+                "first_segment_sequence_num": 0,
+                "last_segment_sequence_num": -1,
+            }
+        )
+        db.session.flush()
+
+        assert result["model_call_id"] == existing_call.id
+        db.session.refresh(existing_call)
+        assert existing_call.last_segment_sequence_num == -1
+        assert existing_call.status == "pending"
+        assert existing_call.error_message is None
+        assert ModelCall.query.filter_by(post_id=post.id).count() == 1

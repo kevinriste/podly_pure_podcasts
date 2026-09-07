@@ -70,6 +70,7 @@ class ProcessingStatusManager:
         step: int,
         step_name: str,
         progress: float | None = None,
+        error_message: str | None = None,
     ) -> None:
         """Update job status in database."""
         # Cache job attributes before any operations that might expire the object
@@ -89,15 +90,21 @@ class ProcessingStatusManager:
         if progress is None:
             progress = (step / total_steps) * 100.0
 
+        payload: dict[str, Any] = {
+            "job_id": job_id,
+            "status": status,
+            "step": step,
+            "step_name": step_name,
+            "progress": progress,
+        }
+        if error_message is not None:
+            payload["error_message"] = error_message
+        elif status in {"failed", "cancelled"}:
+            payload["error_message"] = step_name
+
         writer_client.action(
             "update_job_status",
-            {
-                "job_id": job_id,
-                "status": status,
-                "step": step,
-                "step_name": step_name,
-                "progress": progress,
-            },
+            payload,
             wait=True,
         )
 

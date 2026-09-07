@@ -92,7 +92,8 @@ def upsert_whisper_model_call_action(params: dict[str, Any]) -> dict[str, Any]:
     }
 
     def _query() -> ModelCall | None:
-        return (
+        # First try exact match on (post_id, model_name, first_seq, last_seq)
+        exact = (
             db.session.query(ModelCall)
             .filter_by(
                 post_id=int(post_id),
@@ -103,6 +104,23 @@ def upsert_whisper_model_call_action(params: dict[str, Any]) -> dict[str, Any]:
             .order_by(ModelCall.timestamp.desc())
             .first()
         )
+        if exact is not None:
+            return exact
+
+        # When creating/reusing a whole-call placeholder (last_seq == -1), match ANY
+        # existing ModelCall for this post and model with the same start sequence.
+        if int(last_seq) == -1:
+            return (
+                db.session.query(ModelCall)
+                .filter_by(
+                    post_id=int(post_id),
+                    model_name=str(model_name),
+                    first_segment_sequence_num=int(first_seq),
+                )
+                .order_by(ModelCall.timestamp.desc())
+                .first()
+            )
+        return None
 
     model_call = _query()
     if model_call is None:
@@ -126,10 +144,24 @@ def upsert_whisper_model_call_action(params: dict[str, Any]) -> dict[str, Any]:
             model_call = _query()
             if model_call is None:
                 raise
+    else:
+        # Ensure sequence numbers match requested parameters (e.g. reset placeholder to -1)
+        model_call.first_segment_sequence_num = int(first_seq)
+        model_call.last_segment_sequence_num = int(last_seq)
 
     for k, v in reset_fields.items():
         if hasattr(model_call, k):
             setattr(model_call, k, v)
+
+    # If reusing/creating a placeholder (last_seq == -1), clean up any other extraneous
+    # duplicate rows for this (post_id, model_name, first_seq) to avoid uniqueness conflicts
+    if int(last_seq) == -1 and model_call.id is not None:
+        db.session.query(ModelCall).filter(
+            ModelCall.post_id == int(post_id),
+            ModelCall.model_name == str(model_name),
+            ModelCall.first_segment_sequence_num == int(first_seq),
+            ModelCall.id != model_call.id,
+        ).delete(synchronize_session=False)
 
     db.session.flush()
     return {"model_call_id": int(model_call.id)}
@@ -202,8 +234,21 @@ def replace_transcription_action(params: dict[str, Any]) -> dict[str, Any]:
     if model_call_id is not None:
         mc = db.session.get(ModelCall, int(model_call_id))
         if mc is not None:
-            mc.first_segment_sequence_num = 0
-            mc.last_segment_sequence_num = len(payload) - 1
+            target_first = 0
+            target_last = len(payload) - 1
+
+            # Prevent UNIQUE constraint violations: delete any other ModelCall rows
+            # for the same post, model, and target sequence range before updating.
+            db.session.query(ModelCall).filter(
+                ModelCall.post_id == post_id_i,
+                ModelCall.model_name == mc.model_name,
+                ModelCall.first_segment_sequence_num == target_first,
+                ModelCall.last_segment_sequence_num == target_last,
+                ModelCall.id != mc.id,
+            ).delete(synchronize_session=False)
+
+            mc.first_segment_sequence_num = target_first
+            mc.last_segment_sequence_num = target_last
             if isinstance(model_call_response, str) and model_call_response.strip():
                 mc.response = model_call_response
             else:
@@ -294,9 +339,9 @@ def replace_audio_segments_action(params: dict[str, Any]) -> dict[str, Any]:
     post_id_i = int(post_id)
 
     # Delete existing audio segments for this post
-    db.session.query(AudioSegment).filter(
-        AudioSegment.post_id == post_id_i
-    ).delete(synchronize_session=False)
+    db.session.query(AudioSegment).filter(AudioSegment.post_id == post_id_i).delete(
+        synchronize_session=False
+    )
 
     payload = []
     for seg in segments:

@@ -109,7 +109,9 @@ class TranscriptionManager:
         )
 
         if existing_whisper_call:
-            model_match = existing_whisper_call.model_name == self.transcriber.model_name
+            model_match = (
+                existing_whisper_call.model_name == self.transcriber.model_name
+            )
             self.logger.info(
                 f"Found existing successful Whisper ModelCall {existing_whisper_call.id} for post {post.id} "
                 f"(model={existing_whisper_call.model_name}, current={self.transcriber.model_name}, "
@@ -239,6 +241,7 @@ class TranscriptionManager:
                     "model_call_response": raw_response_body,
                 },
                 wait=True,
+                timeout=300,
             )
             if not write_res or not write_res.success:
                 raise RuntimeError(
