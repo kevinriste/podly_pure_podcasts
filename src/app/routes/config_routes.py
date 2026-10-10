@@ -8,6 +8,7 @@ from flask import Blueprint, jsonify, request
 from groq import Groq
 from openai import OpenAI
 
+from shared.llm_completion import llm_completion
 from app.auth.guards import require_admin
 from app.config_store import read_combined, to_pydantic_config
 from app.processor import ProcessorSingleton
@@ -729,6 +730,7 @@ def _run_llm_probe(
             "model": model,
             "messages": messages,
             "timeout": timeout,
+            "api_key": api_key,
         }
 
         # Keep probe lightweight but high enough to avoid false failures on
@@ -739,7 +741,7 @@ def _run_llm_probe(
         else:
             completion_kwargs["max_tokens"] = probe_max_tokens
 
-        _ = litellm.completion(**completion_kwargs)
+        _ = llm_completion(**completion_kwargs)
 
         return flask.jsonify(
             {

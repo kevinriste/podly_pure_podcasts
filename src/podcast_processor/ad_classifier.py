@@ -4,13 +4,13 @@ import time
 from datetime import UTC, datetime
 from typing import Any
 
-import litellm
 from jinja2 import Template
 from litellm.exceptions import InternalServerError
 from litellm.types.utils import Choices
 from pydantic import ValidationError
 from sqlalchemy import and_
 
+from shared.llm_completion import llm_completion
 from app.extensions import db
 from app.models import Identification, ModelCall, Post, TranscriptSegment
 from app.writer.client import writer_client
@@ -1034,9 +1034,9 @@ class AdClassifier:
                 # Use concurrency limiter if available
                 if self.concurrency_limiter:
                     with ConcurrencyContext(self.concurrency_limiter, timeout=30.0):
-                        response = litellm.completion(**completion_args)
+                        response = llm_completion(**completion_args)
                 else:
-                    response = litellm.completion(**completion_args)
+                    response = llm_completion(**completion_args)
 
                 response_first_choice = response.choices[0]
                 assert isinstance(response_first_choice, Choices)

@@ -221,7 +221,7 @@ def test_call_llm_uses_oneshot_api_key_and_structured_output_switch() -> None:
             return_value=SimpleNamespace(success=True, data={}),
         ) as mock_update,
         patch(
-            "podcast_processor.oneshot_classifier.litellm.completion",
+            "podcast_processor.oneshot_classifier.llm_completion",
             return_value=response,
         ) as mock_completion,
     ):

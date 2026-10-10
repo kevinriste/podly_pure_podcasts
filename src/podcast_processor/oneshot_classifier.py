@@ -17,9 +17,9 @@ import time
 from io import StringIO
 from typing import Any, Dict, List, Optional
 
-import litellm
 from pydantic import ValidationError
 
+from shared.llm_completion import llm_completion
 from app.models import ModelCall, Post, TranscriptSegment
 from app.writer.client import writer_client
 from podcast_processor.oneshot_output import OneShotAdSegment, OneShotResponse
@@ -446,7 +446,7 @@ class OneShotAdClassifier:
             model_call.retry_attempts = retry_attempts_value
 
             try:
-                response = litellm.completion(**completion_args)
+                response = llm_completion(**completion_args)
                 content = response.choices[0].message.content
                 if content is None:
                     raise OneShotClassifyException("LLM returned empty response")

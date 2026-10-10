@@ -81,7 +81,7 @@ class TestAdClassifierRateLimiting:
             for error in non_retryable_errors:
                 assert classifier._is_retryable_error(error) is False
 
-    @patch("podcast_processor.ad_classifier.litellm")
+    @patch("podcast_processor.ad_classifier.llm_completion")
     @patch("podcast_processor.ad_classifier.isinstance")
     def test_call_model_with_rate_limiter(self, mock_isinstance, mock_litellm):
         """Test that _call_model uses rate limiter when available."""
@@ -109,7 +109,7 @@ class TestAdClassifierRateLimiting:
             mock_choice = Mock()
             mock_choice.message.content = "test response"
             mock_response.choices = [mock_choice]
-            mock_litellm.completion.return_value = mock_response
+            mock_litellm.return_value = mock_response
 
             # Create a test ModelCall using actual ModelCall class
             from app.models import ModelCall
@@ -129,8 +129,8 @@ class TestAdClassifierRateLimiting:
             classifier.rate_limiter.get_usage_stats.assert_called_once()
 
             # Verify API was called with correct parameters
-            mock_litellm.completion.assert_called_once()
-            call_args = mock_litellm.completion.call_args
+            mock_litellm.assert_called_once()
+            call_args = mock_litellm.call_args
             assert call_args[1]["model"] == "anthropic/claude-3-5-sonnet-20240620"
             assert len(call_args[1]["messages"]) == 2
             assert call_args[1]["messages"][0]["role"] == "system"

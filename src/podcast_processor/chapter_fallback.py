@@ -11,6 +11,7 @@ from typing import Any
 
 import litellm
 
+from shared.llm_completion import llm_completion
 from podcast_processor.chapter_reader import Chapter, read_chapters
 from podcast_processor.description_chapter_parser import parse_chapters_from_description
 from podcast_processor.llm_model_call_utils import (
@@ -453,7 +454,7 @@ def refine_generated_chapter_titles_with_llm(
         completion_args["max_tokens"] = 300
 
     try:
-        response = litellm.completion(**completion_args)
+        response = llm_completion(**completion_args)
         content = extract_litellm_content(response)
         refined_titles = _parse_refined_titles_response(content)
         if not refined_titles:
@@ -920,7 +921,7 @@ def _request_topic_chapter_plan(
     else:
         completion_args["max_tokens"] = TOPIC_CHAPTER_LLM_MAX_OUTPUT_TOKENS
 
-    response = litellm.completion(**completion_args)
+    response = llm_completion(**completion_args)
     finish_reason = extract_litellm_finish_reason(response)
     usage = extract_litellm_usage(response)
     log.info(

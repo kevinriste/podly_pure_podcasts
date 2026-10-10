@@ -13,6 +13,7 @@ from typing import Any, cast
 import litellm
 from jinja2 import Template
 
+from shared.llm_completion import llm_completion
 from podcast_processor.llm_model_call_utils import (
     extract_litellm_content,
     extract_litellm_finish_reason,
@@ -100,7 +101,7 @@ Return only one JSON object (no markdown/code fences, no analysis text) with:
         raw_response: str | None = None
 
         try:
-            response = litellm.completion(
+            response = llm_completion(
                 model=self.config.llm_model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
